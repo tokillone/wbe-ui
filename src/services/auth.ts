@@ -30,11 +30,7 @@ interface ApiResponse<T = unknown> {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
-type AuthRequestBody =
-  | LoginPayload
-  | RegisterPayload
-  | ResetPasswordPayload
-  | { email: string }
+type AuthRequestBody = LoginPayload | RegisterPayload | ResetPasswordPayload | { email: string }
 
 async function requestAuth(endpoint: string, body: AuthRequestBody): Promise<ApiResult> {
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
@@ -59,7 +55,8 @@ async function requestAuth(endpoint: string, body: AuthRequestBody): Promise<Api
 }
 
 export function sendVerificationCode(email: string, scene: 'register' | 'reset-password') {
-  const endpoint = scene === 'register' ? '/auth/register/send-code' : '/auth/password/forgot/send-code'
+  const endpoint =
+    scene === 'register' ? '/auth/register/send-code' : '/auth/password/forgot/send-code'
   return requestAuth(endpoint, { email })
 }
 

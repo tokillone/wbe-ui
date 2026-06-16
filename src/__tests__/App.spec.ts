@@ -6,6 +6,6 @@ import App from '../App.vue'
 describe('App', () => {
   it('mounts renders properly', () => {
     const wrapper = mount(App)
-    expect(wrapper.text()).toContain('污水信息物质信息库')
+    expect(wrapper.text()).toContain('污水信息因子数据库')
   })
 })
