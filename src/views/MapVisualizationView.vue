@@ -221,6 +221,7 @@ const UI_TEXT = {
     filterSummaryEmpty: '等待后端筛选项',
     targetClass: '目标类别',
     allTargetClasses: '全部目标类别',
+    allCategories: '全部目标物质类别',
     category: '目标物质类别',
     subcategory: '目标物质子类',
     biomarker: 'biomarker',
@@ -303,6 +304,7 @@ const UI_TEXT = {
     filterSummaryEmpty: 'Waiting for backend filters',
     targetClass: '目标类别',
     allTargetClasses: 'All target groups',
+    allCategories: 'All substance categories',
     category: '目标物质类别',
     subcategory: '目标物质子类',
     biomarker: 'biomarker',
@@ -3063,6 +3065,7 @@ function displayOptionLabel(value?: string | null) {
   const normalized = value.trim()
   if (locale.value === 'en') {
     if (normalized === 'ALL') return ui.value.allTargetClasses
+    if (normalized === '全部目标物质类别') return ui.value.allCategories
     if (normalized === '全部小类') return ui.value.allSubcategories
     if (normalized === '全部年份') return ui.value.allYears
     if (normalized === '全部 biomarker' || normalized === '全部生物标记物') {
@@ -3072,6 +3075,7 @@ function displayOptionLabel(value?: string | null) {
     return normalized
   }
   if (normalized === '全部 biomarker') return ui.value.allBiomarkers
+  if (normalized === '全部目标物质类别') return ui.value.allCategories
   if (normalized === 'ALL') return ui.value.allTargetClasses
   return normalized
 }
