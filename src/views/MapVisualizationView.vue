@@ -25,10 +25,13 @@ import type {
 
 type MapMode = 'globe' | 'flat'
 type BasemapMode = 'vector' | 'geojson'
+type RegionSourceMode = 'vector' | 'geojson'
 type BoundaryName = 'countries' | 'admin1' | 'chinaProvinces' | 'chinaCities'
 type ViewLayerKey = 'labels' | 'boundaries' | 'pndl' | 'ambience'
+type Locale = 'zh' | 'en'
 type GeoJsonFeature = {
   type: 'Feature'
+  id?: string | number
   properties: Record<string, unknown>
   geometry: unknown
 }
@@ -58,10 +61,11 @@ type MapStatus = {
   mode: 'center' | 'cursor'
 }
 type BasemapConfig =
-  | { mode: 'geojson' }
+  | { mode: 'geojson'; regionSourceUrl?: string }
   | {
       mode: 'vector'
       styleSourceUrl: string
+      regionSourceUrl?: string
       layers: unknown[]
       glyphs: string
       sprite: string
@@ -70,9 +74,13 @@ type BasemapConfig =
 const EMPTY_COLLECTION: FeatureCollection = { type: 'FeatureCollection', features: [] }
 const BASEMAP_PM_TILES_URL =
   import.meta.env.VITE_BASEMAP_PM_TILES_URL || '/tiles/wbe-basemap.pmtiles'
+const REGION_PM_TILES_URL =
+  import.meta.env.VITE_REGION_PM_TILES_URL || '/tiles/wbe-regions.pmtiles'
 const BASEMAP_GLYPHS_URL =
   import.meta.env.VITE_BASEMAP_GLYPHS_URL || '/tiles/fonts/{fontstack}/{range}.pbf'
 const BASEMAP_SPRITE_URL = import.meta.env.VITE_BASEMAP_SPRITE_URL || '/tiles/sprites/light'
+const REGION_VECTOR_SOURCE_ID = 'wbe-regions'
+const REGION_VECTOR_SOURCE_LAYER = 'wbe_regions'
 const BOUNDARY_URLS: Record<BoundaryName, string> = {
   countries: '/geo/world-countries.geojson',
   admin1: '/geo/world-admin1.geojson',
@@ -80,30 +88,43 @@ const BOUNDARY_URLS: Record<BoundaryName, string> = {
   chinaCities: '/geo/china-cities.geojson',
 }
 const DEFAULT_SELECTION: MapFilterSelection = {
+  targetClass: 'ALL',
   category: '',
   subcategory: '全部小类',
   biomarkerKey: 'ALL',
   year: '全部年份',
 }
 const REGION_INTERACTIVE_LAYERS = [
-  'country-land',
-  'admin1-land',
-  'china-province-land',
-  'china-city-land',
+  'country-hit',
+  'admin1-hit',
+  'china-province-hit',
+  'china-city-hit',
+  'region-selected-fill',
+  'region-data-fill',
+] as const
+const REGION_HOVER_PRIORITY_LAYERS = [
+  'region-selected-fill',
+  'region-data-fill',
+  'region-selected-line',
+  'region-data-line',
 ] as const
 const POINT_INTERACTIVE_LAYERS = ['pndl-clusters', 'pndl-bubbles'] as const
 const ALL_INTERACTIVE_LAYERS = [...REGION_INTERACTIVE_LAYERS, ...POINT_INTERACTIVE_LAYERS] as const
 const FLAT_CENTER: [number, number] = [18, 24]
-const CHINA_CENTER: [number, number] = [104, 35]
-const CHINA_VIEW_ZOOM = 3.65
 const FLAT_INITIAL_ZOOM = 1.75
 const FLAT_MIN_ZOOM = 1.25
-const GLOBE_MIN_ZOOM = 2.42
-const GLOBE_INITIAL_ZOOM = 2.44
+const MAP_MAX_ZOOM = 8.6
+const GLOBE_MIN_ZOOM = 2.64
+const GLOBE_INITIAL_ZOOM = 2.66
+const FLAT_BACKGROUND_COLOR = '#dcecf5'
+const GLOBE_BACKGROUND_COLOR = '#385564'
+const VECTOR_REGION_FADE_START_ZOOM = 4.65
+const VECTOR_REGION_FADE_END_ZOOM = 5.25
 const PMTILES_MAGIC = 'PMTiles'
 const DENSE_POINT_RADIUS_DEGREES = 38
 const COUNTRY_STATUS_UPDATE_DELAY = 280
 const LABEL_LAYER_IDS = [
+  'continent-label',
   'country-label',
   'admin1-label',
   'china-province-label',
@@ -113,9 +134,229 @@ const BOUNDARY_LAYER_IDS = [
   'country-line',
   'admin1-line',
   'china-province-line',
-  'china-city-line',
 ] as const
-const PNDL_LAYER_IDS = ['pndl-clusters', 'pndl-cluster-count', 'pndl-bubbles'] as const
+const REGION_HIGHLIGHT_LAYER_IDS = [
+  'region-data-fill',
+  'region-data-line',
+  'region-selected-fill',
+  'region-selected-halo',
+  'region-selected-line',
+  'region-hover-fill',
+  'region-hover-line',
+] as const
+const REGION_FILL_LAYER_IDS = [
+  'region-data-fill',
+  'region-selected-fill',
+  'region-hover-fill',
+] as const
+const REGION_LINE_LAYER_IDS = [
+  'region-data-line',
+  'region-selected-halo',
+  'region-selected-line',
+  'region-hover-line',
+] as const
+const PNDL_LAYER_IDS = [
+  'pndl-clusters',
+  'pndl-cluster-count',
+  'pndl-selected-ring',
+  'pndl-bubbles',
+  'pndl-point-labels',
+] as const
+const MAP_LOCALE_STORAGE_KEY = 'wbe.map.locale'
+const BOUNDARY_NOISE_AREA_THRESHOLDS: Record<BoundaryName, number> = {
+  countries: 0.08,
+  admin1: 0.018,
+  chinaProvinces: 0.01,
+  chinaCities: 0.08,
+}
+const MAP_HIGHLIGHT_STYLE = {
+  dataFill: '#7b6ff0',
+  dataLine: '#8d8aa8',
+  hoverFill: '#6478ff',
+  hoverLine: '#3f50d3',
+  selectedFill: '#4f46e5',
+  selectedLine: '#312e81',
+  selectedHalo: '#c7d2fe',
+  bubble: '#7868f1',
+  bubbleHover: '#6478ff',
+  bubbleSelected: '#4f46e5',
+  bubbleSelectedOuter: '#1e1b4b',
+} as const
+const CONTINENT_LABELS = [
+  { key: 'asia', zh: '亚洲', en: 'Asia', coordinates: [90, 45] },
+  { key: 'europe', zh: '欧洲', en: 'Europe', coordinates: [15, 54] },
+  { key: 'africa', zh: '非洲', en: 'Africa', coordinates: [20, 2] },
+  { key: 'north-america', zh: '北美洲', en: 'North America', coordinates: [-102, 50] },
+  { key: 'south-america', zh: '南美洲', en: 'South America', coordinates: [-60, -16] },
+  { key: 'oceania', zh: '大洋洲', en: 'Oceania', coordinates: [135, -25] },
+  { key: 'antarctica', zh: '南极洲', en: 'Antarctica', coordinates: [20, -82] },
+] as const
+const UI_TEXT = {
+  zh: {
+    brandHome: '污水信息因子数据库首页',
+    brandTitle: '污水信息因子数据库',
+    brandSubtitle: '污水生物标记物证据库',
+    pageTitle: '地图可视化',
+    searchPlaceholder: '搜索国家、省州、城市',
+    searchLabel: '搜索地图地点',
+    clearSearch: '清空搜索',
+    noSearchResults: '未找到匹配地点',
+    backHome: '返回首页',
+    resetView: '复位',
+    resetTitle: '复位到当前数据总览',
+    switchToFlat: '切换到平面地图',
+    switchToGlobe: '切换到球形地图',
+    mapLayers: '地图图层显示',
+    language: '语言',
+    languageMenu: '切换界面语言',
+    chinese: '中文',
+    english: 'English',
+    layerPanelTitle: '显示图层',
+    labelsLayer: '地区名称',
+    boundariesLayer: '边界线',
+    pndlLayer: 'PNDL 气泡',
+    ambienceLayer: '背景动效',
+    coverageNote: '覆盖说明：世界底图含国家和部分省州，中国含城市边界；PNDL 只显示后端数据库中可映射的位置。',
+    filterTitle: '筛选条件',
+    filterSummaryEmpty: '等待后端筛选项',
+    targetClass: '目标类别',
+    allTargetClasses: '全部目标类别',
+    category: '目标物质类别',
+    subcategory: '目标物质子类',
+    biomarker: 'biomarker',
+    year: '年份',
+    refresh: '刷新',
+    refreshing: '刷新中',
+    collapseFilters: '收起筛选条件',
+    expandFilters: '展开筛选条件',
+    loadingFilters: '正在加载筛选项',
+    loadingStats: '正在更新地图数据',
+    mapInitFailed: '地图初始化失败',
+    filterLoadFailed: '筛选项加载失败',
+    statsLoadFailed: '地图统计加载失败',
+    detailLoadFailed: '详情加载失败',
+    boundaryLoadFailed: '部分地图边界加载失败，已保留可用图层',
+    boundaryLoading: '正在加载地图细节',
+    noFilterData: '地图筛选项为空，请确认聚合表已刷新并包含可映射 PNDL 数据。',
+    noStatsData: '当前筛选暂无可映射 PNDL 数据，请调整条件或检查地点匹配结果。',
+    emptyBackendDetail: '后端未返回该位置的详情记录',
+    cursor: '鼠标',
+    center: '中心',
+    latitude: '纬度',
+    longitude: '经度',
+    country: '国家',
+    unknownCountry: '未识别',
+    detail: '详情',
+    closeDetail: '关闭详情',
+    locationPrecision: '位置精度',
+    pndlGeomean: 'PNDL几何均值',
+    pndlMean: 'PNDL均值',
+    range: '范围',
+    recordsAndDoi: '记录/文献',
+    source: '来源',
+    noData: '无数据',
+    sourceRecords: '来源记录',
+    noSourceRecords: '暂无来源记录',
+    sourcePending: '来源待补充',
+    loadingDetail: '正在加载详情',
+    allBiomarkers: '全部生物标记物',
+    allSubcategories: '全部小类',
+    allYears: '全部年份',
+    unspecifiedYear: '未标注年份',
+    cityPrecision: '城市级位置',
+    adminPrecision: '省州级位置',
+    countryPrecision: '国家级位置',
+    unnamedRegion: '未命名区域',
+    clusterTitle: 'PNDL 位置聚合',
+    clusterCount: '合并位置',
+    clusterHint: '双击放大查看',
+    noPndlForSelection: '当前筛选无 PNDL 数据',
+    records: '记录数',
+    literature: '文献数',
+  },
+  en: {
+    brandHome: 'Wastewater Biomarker Evidence home',
+    brandTitle: 'Wastewater Biomarker Evidence',
+    brandSubtitle: 'Wastewater Biomarker Evidence',
+    pageTitle: 'Map Visualization',
+    searchPlaceholder: 'Search countries, states, cities',
+    searchLabel: 'Search map locations',
+    clearSearch: 'Clear search',
+    noSearchResults: 'No matching locations',
+    backHome: 'Home',
+    resetView: 'Reset',
+    resetTitle: 'Reset to current data overview',
+    switchToFlat: 'Switch to flat map',
+    switchToGlobe: 'Switch to globe map',
+    mapLayers: 'Map layer display',
+    language: 'Language',
+    languageMenu: 'Change interface language',
+    chinese: '中文',
+    english: 'English',
+    layerPanelTitle: 'Visible layers',
+    labelsLayer: 'Place labels',
+    boundariesLayer: 'Boundaries',
+    pndlLayer: 'PNDL bubbles',
+    ambienceLayer: 'Background motion',
+    coverageNote: 'Coverage: the world basemap includes countries and selected admin-1 areas; China includes city boundaries. PNDL points only show mappable backend records.',
+    filterTitle: 'Filters',
+    filterSummaryEmpty: 'Waiting for backend filters',
+    targetClass: '目标类别',
+    allTargetClasses: 'All target groups',
+    category: '目标物质类别',
+    subcategory: '目标物质子类',
+    biomarker: 'biomarker',
+    year: 'Year',
+    refresh: 'Refresh',
+    refreshing: 'Refreshing',
+    collapseFilters: 'Collapse filters',
+    expandFilters: 'Expand filters',
+    loadingFilters: 'Loading filters',
+    loadingStats: 'Updating map data',
+    mapInitFailed: 'Map initialization failed',
+    filterLoadFailed: 'Failed to load filters',
+    statsLoadFailed: 'Failed to load map statistics',
+    detailLoadFailed: 'Failed to load detail',
+    boundaryLoadFailed: 'Some boundaries failed to load; available layers remain visible',
+    boundaryLoading: 'Loading map detail',
+    noFilterData: 'Map filters are empty. Please refresh map_pndl_stats and confirm it contains mappable PNDL data.',
+    noStatsData: 'No mappable PNDL data for the current filters. Adjust filters or check location matching.',
+    emptyBackendDetail: 'The backend returned no detail for this location',
+    cursor: 'Cursor',
+    center: 'Center',
+    latitude: 'Lat',
+    longitude: 'Lng',
+    country: 'Country',
+    unknownCountry: 'Unknown',
+    detail: 'Detail',
+    closeDetail: 'Close detail',
+    locationPrecision: 'Location precision',
+    pndlGeomean: 'PNDL geometric mean',
+    pndlMean: 'PNDL mean',
+    range: 'Range',
+    recordsAndDoi: 'Records / DOI',
+    source: 'Source',
+    noData: 'No data',
+    sourceRecords: 'Source records',
+    noSourceRecords: 'No source records',
+    sourcePending: 'Source pending',
+    loadingDetail: 'Loading detail',
+    allBiomarkers: 'All biomarkers',
+    allSubcategories: 'All subcategories',
+    allYears: 'All years',
+    unspecifiedYear: 'Unspecified year',
+    cityPrecision: 'City-level location',
+    adminPrecision: 'Admin-1 location',
+    countryPrecision: 'Country-level location',
+    unnamedRegion: 'Unnamed region',
+    clusterTitle: 'PNDL location cluster',
+    clusterCount: 'Merged locations',
+    clusterHint: 'Double-click to zoom in',
+    noPndlForSelection: 'No PNDL data for the current filters',
+    records: 'Records',
+    literature: 'Literature',
+  },
+} as const
 
 const mapContainer = ref<HTMLElement | null>(null)
 const filters = ref<MapFilterResponse | null>(null)
@@ -134,12 +375,18 @@ const globeAvailable = ref(false)
 const isDetailOpen = ref(false)
 const isFilterOpen = ref(true)
 const isLayerPanelOpen = ref(false)
+const isLanguageMenuOpen = ref(false)
+const isMapStyleSwitching = ref(false)
 const searchQuery = ref('')
 const isSearchFocused = ref(false)
+const locale = ref<Locale>(readInitialLocale())
+const loadingBoundaryNames = ref<BoundaryName[]>([])
+const selectedRegionFeature = ref<GeoJsonFeature | null>(null)
+const selectedPointKey = ref('')
 const mapStatus = ref<MapStatus>({
   latitude: FLAT_CENTER[1],
   longitude: FLAT_CENTER[0],
-  country: '未识别',
+  country: UI_TEXT.zh.unknownCountry,
   mode: 'center',
 })
 const selection = reactive<MapFilterSelection>({ ...DEFAULT_SELECTION })
@@ -153,6 +400,8 @@ const viewLayers = reactive<Record<ViewLayerKey, boolean>>({
 let maplibregl: MapLibreModule | null = null
 let map: MapLibreMap | null = null
 let basemapMode: BasemapMode = 'geojson'
+let regionSourceMode: RegionSourceMode = 'geojson'
+let activeBasemapConfig: BasemapConfig = { mode: 'geojson' }
 let hoverPopup: Popup | null = null
 let statsController: AbortController | null = null
 let detailController: AbortController | null = null
@@ -166,11 +415,26 @@ let countryStatusTimer: number | undefined
 let pendingCursorPoint: [number, number] | null = null
 let pendingCursorPixel: [number, number] | null = null
 let removePmtilesProtocol: (() => void) | null = null
+let pmtilesProtocolReady = false
+let hoveredPointId: string | number | null = null
+let selectedPointId: string | number | null = null
+let hoveredRegionFeature: GeoJsonFeature | null = null
 let pointLayerEventsBound = false
 let regionLayerEventsBound = false
 let isBasemapFallbackInProgress = false
+let projectionSwitchInProgress = false
 const boundaryCache = new Map<BoundaryName, FeatureCollection>()
+const cleanedBoundaryCache = new Map<BoundaryName, FeatureCollection>()
 
+const ui = computed(() => UI_TEXT[locale.value])
+const currentTargetClasses = computed(() => filters.value?.targetClasses ?? [])
+const currentCategories = computed(() => {
+  if (!filters.value) return []
+  if (selection.targetClass && selection.targetClass !== 'ALL') {
+    return filters.value.categoriesByTargetClass?.[selection.targetClass] ?? []
+  }
+  return filters.value.categories
+})
 const currentSubcategories = computed(() =>
   filters.value?.subcategoriesByCategory[selection.category] ?? [],
 )
@@ -188,10 +452,58 @@ const currentYears = computed(
 )
 const selectedBiomarkerLabel = computed(
   () =>
-    currentBiomarkers.value.find((item) => item.key === selection.biomarkerKey)?.label ??
-    '全部 biomarker',
+    displayOptionLabel(
+      currentBiomarkers.value.find((item) => item.key === selection.biomarkerKey)?.label,
+    ) ?? ui.value.allBiomarkers,
 )
+const filterSummary = computed(() => {
+  const parts = [
+    displayOptionLabel(selection.targetClass),
+    displayOptionLabel(selection.category),
+    displayOptionLabel(selection.subcategory),
+    selectedBiomarkerLabel.value,
+    displayOptionLabel(selection.year),
+  ].filter(Boolean)
+  return parts.length ? parts.join(' / ') : ui.value.filterSummaryEmpty
+})
 const detailRegion = computed(() => selectedDetail.value?.region ?? null)
+const hasEmptyFilterData = computed(
+  () =>
+    Boolean(filters.value) &&
+    !isLoadingFilters.value &&
+    !filterError.value &&
+    (filters.value?.categories.length ?? 0) === 0,
+)
+const hasNoStatsData = computed(
+  () =>
+    Boolean(stats.value) &&
+    !isLoadingStats.value &&
+    !filterError.value &&
+    Boolean(selection.category) &&
+    (stats.value?.regions.length ?? 0) === 0 &&
+    (stats.value?.points.length ?? 0) === 0,
+)
+const activeMapMessage = computed(() => {
+  if (mapError.value || filterError.value) {
+    return { type: 'error', text: mapError.value || filterError.value }
+  }
+  if (isLoadingFilters.value || isLoadingStats.value) {
+    return {
+      type: 'loading',
+      text: isLoadingFilters.value ? ui.value.loadingFilters : ui.value.loadingStats,
+    }
+  }
+  if (hasEmptyFilterData.value) {
+    return { type: 'notice', text: filters.value?.diagnostics?.message || ui.value.noFilterData }
+  }
+  if (hasNoStatsData.value) {
+    return { type: 'notice', text: stats.value?.diagnostics?.message || ui.value.noStatsData }
+  }
+  return null
+})
+const boundaryLoadingMessage = computed(() =>
+  loadingBoundaryNames.value.length ? ui.value.boundaryLoading : '',
+)
 const searchResults = computed(() => {
   boundaryVersion.value
   const query = normalizeSearch(searchQuery.value)
@@ -203,10 +515,34 @@ const searchResults = computed(() => {
 const formattedMapStatus = computed(() => ({
   latitude: formatCoordinate(mapStatus.value.latitude, 'latitude'),
   longitude: formatCoordinate(mapStatus.value.longitude, 'longitude'),
-  country: mapStatus.value.country,
-  label: mapStatus.value.mode === 'cursor' ? '鼠标' : '中心',
+  country:
+    mapStatus.value.country === UI_TEXT.zh.unknownCountry ||
+    mapStatus.value.country === UI_TEXT.en.unknownCountry
+      ? ui.value.unknownCountry
+      : mapStatus.value.country,
+  label: mapStatus.value.mode === 'cursor' ? ui.value.cursor : ui.value.center,
 }))
 
+watch(locale, (value) => {
+  window.localStorage.setItem(MAP_LOCALE_STORAGE_KEY, value)
+  updateContinentLabels()
+  if (
+    mapStatus.value.country === UI_TEXT.zh.unknownCountry ||
+    mapStatus.value.country === UI_TEXT.en.unknownCountry
+  ) {
+    mapStatus.value = { ...mapStatus.value, country: ui.value.unknownCountry }
+  }
+})
+
+watch(
+  () => selection.targetClass,
+  () => {
+    const categories = currentCategories.value
+    const nextCategory =
+      categories.includes(selection.category) ? selection.category : (categories[0] ?? '')
+    if (selection.category !== nextCategory) selection.category = nextCategory
+  },
+)
 watch(
   () => selection.category,
   () => {
@@ -238,6 +574,8 @@ watch(
   () => {
     closeDetail()
     selectedDetail.value = null
+    clearSelectedPoint()
+    setSelectedRegion(null)
     if (selection.category) scheduleStatsFetch()
   },
   { deep: true },
@@ -278,10 +616,12 @@ onBeforeUnmount(() => {
   statsController?.abort()
   detailController?.abort()
   hoverPopup?.remove()
+  unbindLayerEvents()
   map?.remove()
   map = null
   removePmtilesProtocol?.()
   removePmtilesProtocol = null
+  pmtilesProtocolReady = false
 })
 
 async function loadFilters() {
@@ -291,9 +631,13 @@ async function loadFilters() {
   try {
     const result = await fetchMapFilters(controller.signal)
     filters.value = result
-    Object.assign(selection, result.defaultSelection ?? DEFAULT_SELECTION)
+    Object.assign(selection, {
+      ...DEFAULT_SELECTION,
+      ...(result.defaultSelection ?? {}),
+      targetClass: result.defaultSelection?.targetClass ?? 'ALL',
+    })
   } catch (error) {
-    filterError.value = error instanceof Error ? error.message : '筛选项加载失败'
+    filterError.value = error instanceof Error ? error.message : ui.value.filterLoadFailed
   } finally {
     isLoadingFilters.value = false
   }
@@ -308,15 +652,18 @@ async function initMap() {
     mapMode.value = 'flat'
     const basemapConfig = await resolveBasemapConfig(maplibregl)
     basemapMode = basemapConfig.mode
+    regionSourceMode = basemapConfig.regionSourceUrl ? 'vector' : 'geojson'
+    activeBasemapConfig = basemapConfig
     map = new maplibregl.Map({
       container: mapContainer.value,
       style: buildMapStyle(mapMode.value, basemapConfig) as never,
       center: FLAT_CENTER as LngLatLike,
       zoom: FLAT_INITIAL_ZOOM,
       minZoom: FLAT_MIN_ZOOM,
-      maxZoom: 10.5,
+      maxZoom: MAP_MAX_ZOOM,
       attributionControl: false,
     })
+    configureMapGestureSmoothness()
     map.doubleClickZoom.disable()
     map.on('error', (event) => handleMapRuntimeError(event))
     hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 14 })
@@ -328,20 +675,14 @@ async function initMap() {
       mapReady.value = true
       addMapSourcesAndLayers()
       bindLayerEvents()
-      if (basemapMode === 'geojson') {
-        ensureBoundary('countries')
-        ensureBoundary('chinaProvinces')
-      }
+      void ensureBoundary('countries')
       updateMapData()
       enforceGlobeSafeZoom(false)
       updateMapStatus()
     })
     map.on('zoomend', () => {
       updateMapStatus()
-      if (basemapMode !== 'geojson') return
-      const zoom = map?.getZoom() ?? 0
-      if (zoom >= 3.2) ensureBoundary('admin1')
-      if (zoom >= 5.4) ensureBoundary('chinaCities')
+      ensureStagedBoundariesForCurrentZoom()
     })
     map.on('move', scheduleLiveMapStatusUpdate)
     map.on('moveend', updateMapStatus)
@@ -350,7 +691,7 @@ async function initMap() {
     map.on('click', hideTooltipOnEmptyClick)
     updateMapCoordinates()
   } catch (error) {
-    mapError.value = error instanceof Error ? error.message : '地图初始化失败'
+    mapError.value = error instanceof Error ? error.message : ui.value.mapInitFailed
     mapMode.value = 'flat'
   }
 }
@@ -360,39 +701,72 @@ function canUseGlobe(_module: MapLibreModule) {
   return Boolean(canvas.getContext('webgl2') || canvas.getContext('webgl'))
 }
 
+function configureMapGestureSmoothness() {
+  const gestureMap = map as unknown as {
+    scrollZoom?: {
+      setZoomRate?: (value: number) => void
+      setWheelZoomRate?: (value: number) => void
+    }
+    touchZoomRotate?: {
+      setZoomRate?: (value: number) => void
+      setZoomThreshold?: (value: number) => void
+    }
+  }
+  gestureMap.scrollZoom?.setZoomRate?.(1 / 180)
+  gestureMap.scrollZoom?.setWheelZoomRate?.(1 / 650)
+  gestureMap.touchZoomRotate?.setZoomRate?.(0.72)
+  gestureMap.touchZoomRotate?.setZoomThreshold?.(0.18)
+}
+
 async function resolveBasemapConfig(module: MapLibreModule): Promise<BasemapConfig> {
+  const regionSourceUrl = await resolveRegionSourceUrl(module)
   const pmtilesUrl = BASEMAP_PM_TILES_URL.trim()
   if (!pmtilesUrl || !(await canLoadVectorBasemapAssets(pmtilesUrl))) {
-    return { mode: 'geojson' }
+    return { mode: 'geojson', regionSourceUrl }
   }
 
   try {
-    const [{ Protocol }, basemaps] = await Promise.all([
-      import('pmtiles'),
-      import('@protomaps/basemaps'),
-    ])
-    const protocol = new Protocol()
-    ;(module as unknown as { addProtocol?: (scheme: string, loader: unknown) => void }).addProtocol?.(
-      'pmtiles',
-      protocol.tile,
-    )
-    removePmtilesProtocol = () => {
-      ;(module as unknown as { removeProtocol?: (scheme: string) => void }).removeProtocol?.(
-        'pmtiles',
-      )
-    }
+    await registerPmtilesProtocol(module)
+    const basemaps = await import('@protomaps/basemaps')
 
     return {
       mode: 'vector',
       styleSourceUrl: `pmtiles://${new URL(pmtilesUrl, window.location.origin).toString()}`,
+      regionSourceUrl,
       layers: basemaps.layers('protomaps', basemaps.namedFlavor('light'), { lang: 'en' }),
       glyphs: BASEMAP_GLYPHS_URL,
       sprite: BASEMAP_SPRITE_URL,
     }
   } catch {
-    removePmtilesProtocol?.()
-    removePmtilesProtocol = null
-    return { mode: 'geojson' }
+    return { mode: 'geojson', regionSourceUrl }
+  }
+}
+
+async function resolveRegionSourceUrl(module: MapLibreModule) {
+  const regionTilesUrl = REGION_PM_TILES_URL.trim()
+  if (!regionTilesUrl || !(await canLoadPmtilesArchive(regionTilesUrl))) return undefined
+  try {
+    await registerPmtilesProtocol(module)
+    return `pmtiles://${new URL(regionTilesUrl, window.location.origin).toString()}`
+  } catch {
+    return undefined
+  }
+}
+
+async function registerPmtilesProtocol(module: MapLibreModule) {
+  if (pmtilesProtocolReady) return
+  const { Protocol } = await import('pmtiles')
+  const protocol = new Protocol()
+  ;(module as unknown as { addProtocol?: (scheme: string, loader: unknown) => void }).addProtocol?.(
+    'pmtiles',
+    protocol.tile,
+  )
+  pmtilesProtocolReady = true
+  removePmtilesProtocol = () => {
+    ;(module as unknown as { removeProtocol?: (scheme: string) => void }).removeProtocol?.(
+      'pmtiles',
+    )
+    pmtilesProtocolReady = false
   }
 }
 
@@ -480,7 +854,6 @@ async function canLoadStaticAsset(url: string) {
 }
 
 function handleMapRuntimeError(event: unknown) {
-  if (basemapMode !== 'vector' || isBasemapFallbackInProgress) return
   const payload = event as {
     error?: { message?: string }
     sourceId?: string
@@ -488,18 +861,52 @@ function handleMapRuntimeError(event: unknown) {
   }
   const sourceId = String(payload.sourceId ?? '')
   const message = String(payload.error?.message ?? '')
+  if (sourceId === REGION_VECTOR_SOURCE_ID || /wbe[-_]regions/i.test(message)) {
+    fallbackRegionSourceToGeoJson()
+    return
+  }
+  if (basemapMode !== 'vector' || isBasemapFallbackInProgress) return
   if (sourceId && sourceId !== 'protomaps') return
   if (message && /map-points|pndl/i.test(message)) return
   if (!message && !sourceId && !payload.tile) return
   fallbackToGeoJsonBasemap()
 }
 
+function fallbackRegionSourceToGeoJson() {
+  if (!map || regionSourceMode !== 'vector' || isBasemapFallbackInProgress) return
+  isBasemapFallbackInProgress = true
+  regionSourceMode = 'geojson'
+  activeBasemapConfig =
+    activeBasemapConfig.mode === 'vector'
+      ? { ...activeBasemapConfig, regionSourceUrl: undefined }
+      : { mode: 'geojson' }
+  mapReady.value = false
+  map.stop()
+  clearHoveredPoint()
+  setHoveredRegion(null)
+  unbindLayerEvents()
+  map.setStyle(buildMapStyle(mapMode.value, activeBasemapConfig) as never)
+  const restore = () => {
+    if (!isBasemapFallbackInProgress) return
+    restoreGeoJsonBasemapLayers()
+  }
+  map.once('idle', restore)
+  window.setTimeout(restore, 700)
+}
+
 function fallbackToGeoJsonBasemap() {
   if (!map || basemapMode === 'geojson' || isBasemapFallbackInProgress) return
   isBasemapFallbackInProgress = true
+  const regionSourceUrl = activeBasemapConfig.regionSourceUrl
   basemapMode = 'geojson'
+  regionSourceMode = regionSourceUrl ? 'vector' : 'geojson'
+  activeBasemapConfig = { mode: 'geojson', regionSourceUrl }
+  mapReady.value = false
   map.stop()
-  map.setStyle(buildMapStyle(mapMode.value, { mode: 'geojson' }) as never)
+  clearHoveredPoint()
+  setHoveredRegion(null)
+  unbindLayerEvents()
+  map.setStyle(buildMapStyle(mapMode.value, activeBasemapConfig) as never)
   const restore = () => {
     if (!isBasemapFallbackInProgress) return
     restoreGeoJsonBasemapLayers()
@@ -519,7 +926,6 @@ function restoreGeoJsonBasemapLayers() {
   addMapSourcesAndLayers()
   bindLayerEvents()
   void ensureBoundary('countries')
-  void ensureBoundary('chinaProvinces')
   ensureFallbackBoundaries()
   updateMapData()
   enforceGlobeSafeZoom(false)
@@ -527,101 +933,230 @@ function restoreGeoJsonBasemapLayers() {
 
 function buildMapStyle(mode: MapMode, basemapConfig: BasemapConfig) {
   if (basemapConfig.mode === 'vector') {
+    const sources: Record<string, unknown> = {
+      protomaps: {
+        type: 'vector',
+        attribution:
+          '<a href="https://github.com/protomaps/basemaps">Protomaps</a> © <a href="https://osm.org/copyright">OpenStreetMap</a>',
+        url: basemapConfig.styleSourceUrl,
+      },
+    }
+    if (basemapConfig.regionSourceUrl) {
+      sources[REGION_VECTOR_SOURCE_ID] = {
+        type: 'vector',
+        attribution: 'WBE regions',
+        url: basemapConfig.regionSourceUrl,
+      }
+    }
     return {
       version: 8,
       projection: { type: mode === 'globe' ? 'globe' : 'mercator' },
       glyphs: basemapConfig.glyphs,
       sprite: basemapConfig.sprite,
-      sources: {
-        protomaps: {
-          type: 'vector',
-          attribution:
-            '<a href="https://github.com/protomaps/basemaps">Protomaps</a> © <a href="https://osm.org/copyright">OpenStreetMap</a>',
-          url: basemapConfig.styleSourceUrl,
-        },
-      },
+      sources,
       layers: vectorBasemapLayers(basemapConfig.layers, mode),
-      ...(mode === 'globe' ? globeAtmosphereStyle() : {}),
     }
   }
 
+  const sources: Record<string, unknown> = {}
+  if (basemapConfig.regionSourceUrl) {
+    sources[REGION_VECTOR_SOURCE_ID] = {
+      type: 'vector',
+      attribution: 'WBE regions',
+      url: basemapConfig.regionSourceUrl,
+    }
+  }
   return {
     version: 8,
     projection: { type: mode === 'globe' ? 'globe' : 'mercator' },
-    sources: {},
+    sources,
     layers: [
       {
         id: 'background',
         type: 'background',
         paint: {
-          'background-color': mode === 'globe' ? '#83a4b8' : '#e7edf1',
+          'background-color': mode === 'globe' ? GLOBE_BACKGROUND_COLOR : FLAT_BACKGROUND_COLOR,
         },
       },
     ],
-    ...(mode === 'globe' ? globeAtmosphereStyle() : {}),
-  }
-}
-
-function globeAtmosphereStyle() {
-  return {
-    sky: {
-      'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 0.88, 5, 0.82, 7, 0],
-    },
-    light: {
-      anchor: 'map',
-      position: [1.45, 90, 74],
-      color: '#ffffff',
-      intensity: 0.38,
-    },
   }
 }
 
 function vectorBasemapLayers(layers: unknown[], mode: MapMode) {
   return layers.map((layer) => {
-    if (!isStyleLayer(layer) || layer.id !== 'background') return layer
-    return {
-      ...layer,
-      paint: {
-        ...(layer.paint ?? {}),
-        'background-color': mode === 'globe' ? '#83a4b8' : '#e7edf1',
-      },
+    if (!isStyleLayer(layer)) return layer
+    if (layer.id === 'background') {
+      return {
+        ...layer,
+        paint: {
+          ...(layer.paint ?? {}),
+          'background-color': mode === 'globe' ? GLOBE_BACKGROUND_COLOR : FLAT_BACKGROUND_COLOR,
+        },
+      }
     }
+    if (layer.type === 'symbol' && layer.layout?.['text-field']) {
+      return {
+        ...layer,
+        paint: {
+          ...(layer.paint ?? {}),
+          'text-color': vectorTextColor(layer.id),
+          'text-halo-color': 'rgba(255,255,255,0.94)',
+          'text-halo-width': vectorTextHaloWidth(layer.id),
+          'text-opacity': 0.98,
+        },
+      }
+    }
+    if (layer.type === 'fill' || layer.type === 'line') {
+      return styleVectorBasemapLayer(layer)
+    }
+    return layer
   })
 }
 
-function isStyleLayer(layer: unknown): layer is { id: string; paint?: Record<string, unknown> } {
+function styleVectorBasemapLayer(layer: {
+  id: string
+  type?: string
+  layout?: Record<string, unknown>
+  paint?: Record<string, unknown>
+}) {
+  const paint = { ...(layer.paint ?? {}) }
+  if (layer.id === 'boundaries_country') {
+    paint['line-color'] = '#9fb0ba'
+    paint['line-width'] = ['interpolate', ['linear'], ['zoom'], 0, 0.32, 5, 0.42, 8, 0.5]
+    paint['line-opacity'] = ['interpolate', ['linear'], ['zoom'], 0, 0.18, 4, 0.26, 8, 0.3]
+    paint['line-blur'] = 0.16
+  } else if (layer.id === 'boundaries') {
+    paint['line-color'] = '#b8c6cd'
+    paint['line-width'] = 0.2
+    paint['line-opacity'] = 0
+    paint['line-blur'] = 0.2
+  } else if (layer.id === 'water') {
+    paint['fill-color'] = '#cfe3eb'
+  } else if (/^water_/.test(layer.id)) {
+    paint['line-color'] = '#8db5c7'
+    paint['line-opacity'] = 0.86
+  } else if (/roads_.*casing/.test(layer.id)) {
+    paint['line-color'] = '#d2dbe0'
+    paint['line-opacity'] = 0.84
+  } else if (/roads_(highway|major|bridges_major|bridges_highway)/.test(layer.id)) {
+    paint['line-color'] = '#ffffff'
+    paint['line-opacity'] = 0.96
+  } else if (/roads_(minor|other|link|bridges_minor|bridges_other|bridges_link)/.test(layer.id)) {
+    paint['line-color'] = '#f3f7f9'
+    paint['line-opacity'] = 0.9
+  } else if (layer.id === 'buildings') {
+    paint['fill-color'] = '#d7dde1'
+    paint['fill-opacity'] = 0.42
+  }
+  return { ...layer, paint }
+}
+
+function vectorTextColor(layerId: string) {
+  if (/place|locality|city|town|village/i.test(layerId)) return '#303946'
+  if (/road|street|highway|shield/i.test(layerId)) return '#535d68'
+  if (/water|ocean|marine/i.test(layerId)) return '#536f7d'
+  return '#46525f'
+}
+
+function vectorTextHaloWidth(layerId: string) {
+  if (/place|locality|city|town|village/i.test(layerId)) return 1.8
+  if (/road|street|highway|shield/i.test(layerId)) return 1.45
+  return 1.55
+}
+
+function isStyleLayer(layer: unknown): layer is {
+  id: string
+  type?: string
+  layout?: Record<string, unknown>
+  paint?: Record<string, unknown>
+} {
   return typeof layer === 'object' && layer !== null && 'id' in layer
+}
+
+function mapLabelLayerBeforeId() {
+  const layers = map?.getStyle().layers ?? []
+  return layers.find((layer) => layer.type === 'symbol')?.id
+}
+
+function addRegionLayer(layer: unknown) {
+  addMapLayer(layer, basemapMode === 'vector' ? mapLabelLayerBeforeId() : undefined)
+}
+
+function addPndlLabelLayer() {
+  addMapLayer({
+    id: 'pndl-point-labels',
+    type: 'symbol',
+    source: 'map-point-labels',
+    minzoom: 5.35,
+    layout: {
+      'text-field': ['get', 'displayName'],
+      'text-font': ['Noto Sans Medium'],
+      'text-size': ['interpolate', ['linear'], ['zoom'], 5.35, 11, 8.6, 13.5],
+      'text-offset': [0, 1.35],
+      'text-anchor': 'top',
+      'text-allow-overlap': true,
+      'text-ignore-placement': true,
+      'text-padding': 8,
+      'text-optional': false,
+    },
+    paint: {
+      'text-color': '#273444',
+      'text-halo-color': 'rgba(255,255,255,0.96)',
+      'text-halo-width': 1.8,
+      'text-opacity': ['interpolate', ['linear'], ['zoom'], 5.35, 0, 5.75, 0.96],
+    },
+  })
 }
 
 function addMapSourcesAndLayers() {
   if (!map) return
+  addGeoSource('country-boundaries')
+  addGeoSource('admin1-boundaries')
+  addGeoSource('china-province-boundaries')
+  addGeoSource('china-city-boundaries')
+  if (regionSourceMode === 'geojson') {
+    addGeoSource('region-data')
+    addGeoSource('region-hover')
+    addGeoSource('region-selected')
+  }
+
   if (basemapMode === 'geojson') {
-    addGeoSource('country-boundaries')
-    addGeoSource('admin1-boundaries')
-    addGeoSource('china-province-boundaries')
-    addGeoSource('china-city-boundaries')
+    addGeoSource('continent-label-points')
     addGeoSource('country-label-points')
     addGeoSource('admin1-label-points')
     addGeoSource('china-province-label-points')
     addGeoSource('china-city-label-points')
   }
   addPointSource()
+  addPointLabelSource()
 
   if (basemapMode === 'geojson') {
     addBaseFillLayer('country-land', 'country-boundaries')
     addBaseFillLayer('admin1-land', 'admin1-boundaries', 3.2, 0)
     addBaseFillLayer('china-province-land', 'china-province-boundaries', 3.2, 0)
-    addBaseFillLayer('china-city-land', 'china-city-boundaries', 5.6, 0)
-    addLineLayer('country-line', 'country-boundaries', '#9aa7ae', 0.72)
-    addLineLayer('admin1-line', 'admin1-boundaries', '#a4adb4', 0.42, 3.2)
-    addLineLayer('china-province-line', 'china-province-boundaries', '#8c99a2', 0.68, 3.2)
-    addLineLayer('china-city-line', 'china-city-boundaries', '#b1bac0', 0.42, 5.6)
+    addBaseFillLayer('china-city-land', 'china-city-boundaries', 7.1, 0)
+    addLineLayer('country-line', 'country-boundaries', '#8ea1ac', 0.58, 0, 0.62)
+    addLineLayer(
+      'admin1-line',
+      'admin1-boundaries',
+      '#9dacb5',
+      0.28,
+      3.4,
+      0.34,
+      ['!=', ['get', 'country_key'], 'china'],
+    )
+    addLineLayer('china-province-line', 'china-province-boundaries', '#8397a2', 0.4, 3.5, 0.46)
 
-    addLabelLayer('country-label', 'country-label-points', 1.7, 4.1, 12)
-    addLabelLayer('admin1-label', 'admin1-label-points', 3.8, 6.3, 10, false)
-    addLabelLayer('china-province-label', 'china-province-label-points', 3.8, 6.3, 10)
+    addLabelLayer('continent-label', 'continent-label-points', 0, 2.28, 16)
+    addLabelLayer('country-label', 'country-label-points', 2.18, 4.15, 12)
+    addLabelLayer('admin1-label', 'admin1-label-points', 4.0, 6.45, 10, false)
+    addLabelLayer('china-province-label', 'china-province-label-points', 4.0, 6.45, 10)
     addLabelLayer('china-city-label', 'china-city-label-points', 6.2, undefined, 10)
+    updateContinentLabels()
   }
+  addRegionHitLayers()
+  addRegionDataLayers()
+  addRegionHighlightLayers()
 
   addMapLayer({
     id: 'pndl-clusters',
@@ -630,17 +1165,26 @@ function addMapSourcesAndLayers() {
     filter: ['has', 'point_count'],
     paint: {
       'circle-color': [
-        'step',
-        ['get', 'point_count'],
-        '#6c5ce7',
-        5,
-        '#4f46c8',
-        12,
-        '#332a91',
+        'case',
+        ['boolean', ['feature-state', 'hover'], false],
+        MAP_HIGHLIGHT_STYLE.bubbleHover,
+        [
+          'step',
+          ['get', 'point_count'],
+          '#6c5ce7',
+          5,
+          '#4f46c8',
+          12,
+          '#332a91',
+        ],
       ],
-      'circle-radius': ['step', ['get', 'point_count'], 15, 5, 21, 12, 29],
+      'circle-radius': [
+        '+',
+        ['step', ['get', 'point_count'], 15, 5, 21, 12, 29],
+        ['case', ['boolean', ['feature-state', 'hover'], false], 3, 0],
+      ],
       'circle-stroke-color': '#ffffff',
-      'circle-stroke-width': 2,
+      'circle-stroke-width': ['case', ['boolean', ['feature-state', 'hover'], false], 3, 2],
       'circle-opacity': 0.9,
     },
   })
@@ -662,18 +1206,74 @@ function addMapSourcesAndLayers() {
     },
   })
   addMapLayer({
+    id: 'pndl-selected-ring',
+    type: 'circle',
+    source: 'map-points',
+    filter: ['!', ['has', 'point_count']],
+    paint: {
+      'circle-radius': [
+        '+',
+        ['interpolate', ['linear'], ['get', 'pndlRank'], 0, 7, 1, 22],
+        ['case', ['boolean', ['feature-state', 'selected'], false], 2.5, 0],
+      ],
+      'circle-color': 'rgba(255,255,255,0)',
+      'circle-stroke-color': MAP_HIGHLIGHT_STYLE.bubbleSelectedOuter,
+      'circle-stroke-width': ['case', ['boolean', ['feature-state', 'selected'], false], 2.2, 0],
+      'circle-opacity': ['case', ['boolean', ['feature-state', 'selected'], false], 0.92, 0],
+    },
+  })
+  addMapLayer({
     id: 'pndl-bubbles',
     type: 'circle',
     source: 'map-points',
     filter: ['!', ['has', 'point_count']],
     paint: {
-      'circle-radius': ['interpolate', ['linear'], ['get', 'pndlRank'], 0, 5, 1, 20],
-      'circle-color': ['case', ['==', ['get', 'level'], 'city'], '#7868f1', '#ffffff'],
+      'circle-radius': [
+        '+',
+        ['interpolate', ['linear'], ['get', 'pndlRank'], 0, 5, 1, 20],
+        [
+          'case',
+          ['boolean', ['feature-state', 'selected'], false],
+          3,
+          ['boolean', ['feature-state', 'hover'], false],
+          2,
+          0,
+        ],
+      ],
+      'circle-color': [
+        'case',
+        ['boolean', ['feature-state', 'hover'], false],
+        MAP_HIGHLIGHT_STYLE.bubbleHover,
+        ['boolean', ['feature-state', 'selected'], false],
+        MAP_HIGHLIGHT_STYLE.bubbleSelected,
+        ['==', ['get', 'level'], 'city'],
+        MAP_HIGHLIGHT_STYLE.bubble,
+        '#ffffff',
+      ],
       'circle-opacity': ['case', ['==', ['get', 'level'], 'city'], 0.9, 0.78],
-      'circle-stroke-color': ['case', ['==', ['get', 'level'], 'city'], '#4f46c8', '#7868f1'],
-      'circle-stroke-width': ['case', ['==', ['get', 'level'], 'city'], 1.4, 2.4],
+      'circle-stroke-color': [
+        'case',
+        ['boolean', ['feature-state', 'selected'], false],
+        '#ffffff',
+        ['boolean', ['feature-state', 'hover'], false],
+        MAP_HIGHLIGHT_STYLE.hoverLine,
+        ['==', ['get', 'level'], 'city'],
+        '#4f46c8',
+        MAP_HIGHLIGHT_STYLE.bubble,
+      ],
+      'circle-stroke-width': [
+        'case',
+        ['boolean', ['feature-state', 'selected'], false],
+        3,
+        ['boolean', ['feature-state', 'hover'], false],
+        2.4,
+        ['==', ['get', 'level'], 'city'],
+        1.4,
+        2.4,
+      ],
     },
   })
+  addPndlLabelLayer()
   applyViewLayerVisibility()
 }
 
@@ -683,10 +1283,10 @@ function addGeoSource(id: string) {
   }
 }
 
-function addMapLayer(layer: unknown) {
+function addMapLayer(layer: unknown, beforeId?: string) {
   const id = (layer as { id?: string }).id
   if (!map || !id || map.getLayer(id)) return
-  map.addLayer(layer as never)
+  map.addLayer(layer as never, beforeId && map.getLayer(beforeId) ? beforeId : undefined)
 }
 
 function addPointSource() {
@@ -694,10 +1294,20 @@ function addPointSource() {
     map?.addSource('map-points', {
       type: 'geojson',
       data: EMPTY_COLLECTION as never,
+      promoteId: 'featureId',
       cluster: true,
-      clusterMaxZoom: 8,
+      clusterMaxZoom: Math.min(8, MAP_MAX_ZOOM - 0.2),
       clusterRadius: 62,
-    })
+    } as never)
+  }
+}
+
+function addPointLabelSource() {
+  if (!map?.getSource('map-point-labels')) {
+    map?.addSource('map-point-labels', {
+      type: 'geojson',
+      data: EMPTY_COLLECTION as never,
+    } as never)
   }
 }
 
@@ -708,24 +1318,214 @@ function addBaseFillLayer(id: string, source: string, minzoom = 0, opacity = 0.9
     source,
     minzoom,
     paint: {
-      'fill-color': '#f6f7f4',
+      'fill-color': '#fbfbf8',
       'fill-opacity': opacity,
     },
   })
 }
 
-function addLineLayer(id: string, source: string, color: string, width: number, minzoom = 0) {
+function addLineLayer(
+  id: string,
+  source: string,
+  color: string,
+  width: number,
+  minzoom = 0,
+  opacity = 0.62,
+  filter?: unknown,
+) {
   addMapLayer({
     id,
     type: 'line',
     source,
     minzoom,
+    ...(filter ? { filter } : {}),
+    layout: {
+      'line-cap': 'round',
+      'line-join': 'round',
+    },
     paint: {
       'line-color': color,
-      'line-width': ['interpolate', ['linear'], ['zoom'], minzoom, width, 8, width * 1.9],
-      'line-opacity': 0.86,
+      'line-width': ['interpolate', ['linear'], ['zoom'], minzoom, width, 8, width * 1.45],
+      'line-opacity': ['interpolate', ['linear'], ['zoom'], minzoom, 0.08, minzoom + 0.8, opacity],
+      'line-blur': ['interpolate', ['linear'], ['zoom'], minzoom, 0.08, 8, 0.28],
     },
   })
+}
+
+function addRegionHitLayers() {
+  addRegionHitLayer('country-hit', 'country-boundaries')
+  addRegionHitLayer('admin1-hit', 'admin1-boundaries', 3.2)
+  addRegionHitLayer('china-province-hit', 'china-province-boundaries', 3.2)
+  addRegionHitLayer('china-city-hit', 'china-city-boundaries', 7.1)
+}
+
+function addRegionHitLayer(id: string, source: string, minzoom = 0) {
+  addMapLayer({
+    id,
+    type: 'fill',
+    source,
+    minzoom,
+    paint: {
+      'fill-color': '#ffffff',
+      'fill-opacity': 0.01,
+    },
+  })
+}
+
+function addRegionDataLayers() {
+  addRegionOverlayLayers('region-data', MAP_HIGHLIGHT_STYLE.dataFill, MAP_HIGHLIGHT_STYLE.dataLine, {
+    fillOpacity: regionDataFillOpacityExpression(),
+    lineOpacity: 0,
+    lineWidth: 0,
+    filter: regionVectorFilter(dataRegionIdsExcludingSelected()),
+  })
+}
+
+function addRegionHighlightLayers() {
+  addRegionOverlayLayers('region-selected', MAP_HIGHLIGHT_STYLE.selectedFill, MAP_HIGHLIGHT_STYLE.selectedLine, {
+    fillOpacity: regionSourceMode === 'vector' ? 0.42 : regionOverlayOpacityExpression(0.4),
+    lineOpacity: regionSourceMode === 'vector' ? 0.82 : regionOverlayOpacityExpression(0.82),
+    lineWidth: ['interpolate', ['linear'], ['zoom'], 0, 0.9, 8, 1.22],
+    filter: regionVectorFilter(selectedRegionId() ? [selectedRegionId() as string] : []),
+    halo: {
+      color: MAP_HIGHLIGHT_STYLE.selectedHalo,
+      opacity: regionSourceMode === 'vector' ? 0.22 : regionOverlayOpacityExpression(0.22),
+      width: ['interpolate', ['linear'], ['zoom'], 0, 1.4, 8, 1.9],
+    },
+  })
+  addRegionOverlayLayers('region-hover', MAP_HIGHLIGHT_STYLE.hoverFill, MAP_HIGHLIGHT_STYLE.hoverLine, {
+    fillOpacity: regionOverlayOpacityExpression(0.36),
+    lineOpacity: regionOverlayOpacityExpression(0.68),
+    lineWidth: ['interpolate', ['linear'], ['zoom'], 0, 0.62, 8, 1.02],
+    filter: regionVectorFilter(activeHoveredRegionId() ? [activeHoveredRegionId() as string] : []),
+  })
+}
+
+function addRegionOverlayLayers(
+  sourceId: 'region-data' | 'region-selected' | 'region-hover',
+  fillColor: string,
+  lineColor: string,
+  options: {
+    fillOpacity: unknown
+    lineOpacity: unknown
+    lineWidth: unknown
+    filter: unknown
+    halo?: {
+      color: string
+      opacity: unknown
+      width: unknown
+    }
+  },
+) {
+  const fillLayer = {
+    id: `${sourceId}-fill`,
+    type: 'fill',
+    source: regionSourceMode === 'vector' ? REGION_VECTOR_SOURCE_ID : sourceId,
+    ...(regionSourceMode === 'vector'
+      ? { 'source-layer': REGION_VECTOR_SOURCE_LAYER, filter: options.filter }
+      : {}),
+    paint: {
+      'fill-color': fillColor,
+      'fill-opacity': options.fillOpacity,
+      'fill-antialias': true,
+    },
+  }
+  const haloLayer = options.halo
+    ? {
+        id: `${sourceId}-halo`,
+        type: 'line',
+        source: regionSourceMode === 'vector' ? REGION_VECTOR_SOURCE_ID : sourceId,
+        ...(regionSourceMode === 'vector'
+          ? { 'source-layer': REGION_VECTOR_SOURCE_LAYER, filter: options.filter }
+          : {}),
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+        },
+        paint: {
+          'line-color': options.halo.color,
+          'line-width': options.halo.width,
+          'line-opacity': options.halo.opacity,
+        },
+      }
+    : null
+  const lineLayer = {
+    id: `${sourceId}-line`,
+    type: 'line',
+    source: regionSourceMode === 'vector' ? REGION_VECTOR_SOURCE_ID : sourceId,
+    ...(regionSourceMode === 'vector'
+      ? { 'source-layer': REGION_VECTOR_SOURCE_LAYER, filter: options.filter }
+      : {}),
+    layout: {
+      'line-cap': 'round',
+      'line-join': 'round',
+    },
+    paint: {
+      'line-color': lineColor,
+      'line-width': options.lineWidth,
+      'line-opacity': options.lineOpacity,
+    },
+  }
+  addRegionLayer(fillLayer)
+  if (haloLayer) addRegionLayer(haloLayer)
+  addRegionLayer(lineLayer)
+}
+
+function regionDataFillOpacityExpression() {
+  if (basemapMode === 'vector') {
+    return [
+      'case',
+      regionLevelEqualsExpression('city'),
+      0.3,
+      regionLevelEqualsExpression('admin1'),
+      0.24,
+      0.18,
+    ]
+  }
+  return [
+    'case',
+    ['==', ['get', 'boundaryLevel'], 'city'],
+    0.28,
+    ['==', ['get', 'boundaryLevel'], 'admin1'],
+    0.22,
+    0.16,
+  ]
+}
+
+function regionOverlayOpacityExpression(opacity: number) {
+  if (basemapMode === 'vector') {
+    return [
+      'case',
+      ['==', ['get', 'selected'], true],
+      opacity,
+      regionLevelEqualsExpression('city'),
+      Math.min(opacity, 0.32),
+      Math.min(opacity, 0.42),
+    ]
+  }
+  return opacity
+}
+
+function regionLevelEqualsExpression(level: string) {
+  return [
+    'any',
+    ['==', ['get', 'boundaryLevel'], level],
+    ['==', ['get', 'level'], level],
+  ]
+}
+
+function regionVectorFadeExpression(opacity: number | unknown[]) {
+  return [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    0,
+    opacity,
+    VECTOR_REGION_FADE_START_ZOOM,
+    opacity,
+    VECTOR_REGION_FADE_END_ZOOM,
+    0,
+  ]
 }
 
 function addLabelLayer(
@@ -742,38 +1542,42 @@ function addLabelLayer(
     source,
     minzoom,
     ...(maxzoom ? { maxzoom } : {}),
-    ...(includeChina ? {} : { filter: ['!=', ['get', 'country_key'], 'china'] }),
+    filter: labelLayerFilter(includeChina),
     layout: {
       'text-field': ['get', 'display_name'],
+      'text-font': ['Noto Sans Regular'],
       'text-size': ['interpolate', ['linear'], ['zoom'], minzoom, textSize, 8, textSize + 2],
       'text-allow-overlap': false,
       'text-ignore-placement': false,
-      'text-padding': 8,
+      'text-padding': id === 'continent-label' ? 22 : 10,
     },
     paint: {
-      'text-color': '#59636f',
-      'text-halo-color': 'rgba(255,255,255,0.86)',
-      'text-halo-width': 1.6,
-      'text-opacity': ['interpolate', ['linear'], ['zoom'], minzoom, 0.08, minzoom + 0.8, 0.88],
+      'text-color': id === 'continent-label' ? '#6d7f8a' : '#53616c',
+      'text-halo-color': 'rgba(255,255,255,0.94)',
+      'text-halo-width': id === 'continent-label' ? 2.2 : 1.8,
+      'text-opacity': id === 'continent-label' ? 0.74 : 0.92,
     },
   })
+}
+
+function labelLayerFilter(includeChina: boolean) {
+  const filters: unknown[] = [['!=', ['get', 'hasPndlRegion'], true]]
+  if (!includeChina) filters.push(['!=', ['get', 'country_key'], 'china'])
+  return filters.length === 1 ? filters[0] : ['all', ...filters]
 }
 
 function bindLayerEvents() {
   if (!pointLayerEventsBound) {
     POINT_INTERACTIVE_LAYERS.forEach((layerId) => {
-      map?.on('mousemove', layerId, showTooltip)
-      map?.on('mouseleave', layerId, hideTooltip)
+      map?.on('mousemove', layerId, handlePointMouseMove)
+      map?.on('mouseleave', layerId, handlePointMouseLeave)
       map?.on('click', layerId, handlePointClick)
       map?.on('dblclick', layerId, handleFeatureDoubleClick)
     })
     pointLayerEventsBound = true
   }
-  if (basemapMode !== 'geojson') return
   if (!regionLayerEventsBound) {
     REGION_INTERACTIVE_LAYERS.forEach((layerId) => {
-      map?.on('mousemove', layerId, showTooltip)
-      map?.on('mouseleave', layerId, hideTooltip)
       map?.on('click', layerId, handleRegionClick)
       map?.on('dblclick', layerId, handleFeatureDoubleClick)
     })
@@ -781,33 +1585,93 @@ function bindLayerEvents() {
   }
 }
 
+function unbindLayerEvents() {
+  if (!map) return
+  POINT_INTERACTIVE_LAYERS.forEach((layerId) => {
+    offLayerEvent('mousemove', layerId, handlePointMouseMove)
+    offLayerEvent('mouseleave', layerId, handlePointMouseLeave)
+    offLayerEvent('click', layerId, handlePointClick)
+    offLayerEvent('dblclick', layerId, handleFeatureDoubleClick)
+  })
+  REGION_INTERACTIVE_LAYERS.forEach((layerId) => {
+    offLayerEvent('click', layerId, handleRegionClick)
+    offLayerEvent('dblclick', layerId, handleFeatureDoubleClick)
+  })
+  pointLayerEventsBound = false
+  regionLayerEventsBound = false
+}
+
+function offLayerEvent(
+  type: 'mousemove' | 'mouseleave' | 'click' | 'dblclick',
+  layerId: string,
+  listener: (...args: any[]) => void,
+) {
+  if (!map?.getLayer(layerId)) return
+  ;(
+    map as unknown as {
+      off: (eventType: string, layer: string, handler: (...args: any[]) => void) => void
+    }
+  ).off(type, layerId, listener)
+}
+
 async function ensureBoundary(name: BoundaryName) {
-  if (basemapMode !== 'geojson' || !mapReady.value || boundaryCache.has(name)) return
+  if (!mapReady.value) return
+  if (boundaryCache.has(name)) {
+    updateBoundarySource(name)
+    updateRegionDataSource()
+    return
+  }
+  pushBoundaryLoading(name)
   try {
     const response = await fetch(BOUNDARY_URLS[name])
     if (!response.ok) throw new Error(`${name} boundary failed`)
     boundaryCache.set(name, (await response.json()) as FeatureCollection)
+    cleanedBoundaryCache.delete(name)
     boundaryVersion.value += 1
     updateBoundarySource(name)
     updatePointSource()
+    updateRegionDataSource()
     if (name === 'countries') updateMapStatus()
   } catch {
-    mapError.value = '部分地图边界加载失败'
+    mapError.value = ui.value.boundaryLoadFailed
+  } finally {
+    popBoundaryLoading(name)
   }
+}
+
+function ensureStagedBoundariesForCurrentZoom() {
+  if (!mapReady.value) return
+  const zoom = map?.getZoom() ?? 0
+  void ensureBoundary('countries')
+  if (zoom >= 3.2) {
+    void ensureBoundary('admin1')
+    void ensureBoundary('chinaProvinces')
+  }
+  if (zoom >= 7.1) void ensureBoundary('chinaCities')
+}
+
+function pushBoundaryLoading(name: BoundaryName) {
+  if (loadingBoundaryNames.value.includes(name)) return
+  loadingBoundaryNames.value = [...loadingBoundaryNames.value, name]
+}
+
+function popBoundaryLoading(name: BoundaryName) {
+  loadingBoundaryNames.value = loadingBoundaryNames.value.filter((item) => item !== name)
 }
 
 function updateMapData() {
   if (!mapReady.value) return
-  if (basemapMode === 'geojson') {
-    ;(['countries', 'admin1', 'chinaProvinces', 'chinaCities'] as BoundaryName[]).forEach(
-      updateBoundarySource,
-    )
-  }
+  if (basemapMode === 'geojson') updateContinentLabels()
+  ;(['countries', 'admin1', 'chinaProvinces', 'chinaCities'] as BoundaryName[]).forEach(
+    updateBoundarySource,
+  )
   updatePointSource()
+  updateRegionDataSource()
+  updateRegionHighlightSources()
 }
 
 function updateBoundarySource(name: BoundaryName) {
-  const collection = boundaryCache.get(name)
+  const collection = getCleanBoundaryCollection(name)
   if (!collection) return
   const sourceId = boundarySourceId(name)
   const source = map?.getSource(sourceId) as GeoJSONSource | undefined
@@ -820,9 +1684,211 @@ function updateLabelSource(name: BoundaryName, collection: FeatureCollection) {
   source?.setData(buildLabelPointCollection(collection, boundaryLevel(name)) as never)
 }
 
+function getCleanBoundaryCollection(name: BoundaryName) {
+  const cached = cleanedBoundaryCache.get(name)
+  if (cached) return cached
+  const collection = boundaryCache.get(name)
+  if (!collection) return null
+  const cleaned = cleanBoundaryCollection(collection, name)
+  cleanedBoundaryCache.set(name, cleaned)
+  return cleaned
+}
+
+function updateContinentLabels() {
+  const source = map?.getSource('continent-label-points') as GeoJSONSource | undefined
+  source?.setData(buildContinentLabelCollection() as never)
+}
+
+function buildContinentLabelCollection() {
+  return {
+    type: 'FeatureCollection',
+    features: CONTINENT_LABELS.map((continent) => ({
+      type: 'Feature',
+      properties: {
+        display_name: locale.value === 'zh' ? continent.zh : continent.en,
+        key: continent.key,
+      },
+      geometry: {
+        type: 'Point',
+        coordinates: continent.coordinates,
+      },
+    })),
+  }
+}
+
 function updatePointSource() {
+  clearHoveredPoint()
+  const collection = buildPointCollection()
   const source = map?.getSource('map-points') as GeoJSONSource | undefined
-  source?.setData(buildPointCollection() as never)
+  const labelSource = map?.getSource('map-point-labels') as GeoJSONSource | undefined
+  source?.setData(collection as never)
+  labelSource?.setData(collection as never)
+}
+
+function updateRegionDataSource() {
+  if (regionSourceMode === 'vector') {
+    updateRegionVectorFilters()
+    return
+  }
+  setGeoJsonSourceData('region-data', null, buildRegionDataCollection())
+}
+
+function updateRegionHighlightSources() {
+  if (regionSourceMode === 'vector') {
+    updateRegionVectorFilters()
+    return
+  }
+  setGeoJsonSourceData('region-hover', activeHoveredRegionFeature())
+  setGeoJsonSourceData('region-selected', selectedRegionFeature.value)
+}
+
+function updateRegionVectorFilters() {
+  setRegionLayerFilter(
+    ['region-data-fill', 'region-data-line'],
+    regionVectorFilter(dataRegionIdsExcludingSelected()),
+  )
+  setRegionLayerFilter(
+    ['region-selected-fill', 'region-selected-halo', 'region-selected-line'],
+    regionVectorFilter(selectedRegionId() ? [selectedRegionId() as string] : []),
+  )
+  setRegionLayerFilter(
+    ['region-hover-fill', 'region-hover-line'],
+    regionVectorFilter(activeHoveredRegionId() ? [activeHoveredRegionId() as string] : []),
+  )
+}
+
+function setRegionLayerFilter(layerIds: string[], filter: unknown) {
+  if (regionSourceMode !== 'vector') return
+  layerIds.forEach((layerId) => {
+    if (!map?.getLayer(layerId)) return
+    map.setFilter(layerId, filter as never)
+  })
+}
+
+function regionVectorFilter(regionIds: string[]) {
+  return regionIds.length
+    ? ['in', ['get', 'region_id'], ['literal', regionIds]]
+    : ['==', ['get', 'region_id'], '__none__']
+}
+
+function dataRegionIds() {
+  return [...dataRegionIdSet()]
+}
+
+function dataRegionIdsExcludingSelected() {
+  const ids = dataRegionIdSet()
+  const selectedId = selectedRegionId()
+  if (selectedId) ids.delete(selectedId)
+  return [...ids]
+}
+
+function dataRegionIdSet() {
+  return new Set(displayPointRows().map(regionIdForStat).filter(Boolean))
+}
+
+function setGeoJsonSourceData(
+  sourceId: string,
+  feature: GeoJsonFeature | null,
+  collection?: FeatureCollection,
+) {
+  const source = map?.getSource(sourceId) as GeoJSONSource | undefined
+  source?.setData(
+    (collection ?? (feature ? featureCollectionFromFeature(feature) : EMPTY_COLLECTION)) as never,
+  )
+}
+
+function featureCollectionFromFeature(feature: GeoJsonFeature): FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: [cloneHighlightFeature(feature)],
+  }
+}
+
+function cloneHighlightFeature(feature: GeoJsonFeature): GeoJsonFeature {
+  return {
+    type: 'Feature',
+    id: feature.id,
+    properties: { ...feature.properties },
+    geometry: feature.geometry,
+  }
+}
+
+function buildRegionDataCollection(): FeatureCollection {
+  const seen = new Set<string>()
+  const selectedId = selectedRegionId()
+  const features = displayPointRows().flatMap((row) => {
+    const feature = boundaryFeatureForStat(row)
+    const key = regionFeatureKey(feature)
+    if (!feature || !key || key === selectedId || seen.has(key)) return []
+    seen.add(key)
+    return [cloneHighlightFeature(feature)]
+  })
+  return { type: 'FeatureCollection', features }
+}
+
+function regionIdForStat(stat: MapRegionStat) {
+  return `${stat.level}|${stat.geoKey}`
+}
+
+function regionIdFromProperties(props: Record<string, unknown>) {
+  const explicitId = String(props.region_id ?? '')
+  if (explicitId) return explicitId
+  const level = String(props.boundaryLevel ?? props.level ?? props.sourceLevel ?? '')
+  const geoKey = String(props.geoKey ?? props.geo_key ?? props.sourceGeoKey ?? '')
+  return level && geoKey ? `${level}|${geoKey}` : ''
+}
+
+function selectedRegionId() {
+  return selectedRegionFeature.value ? regionIdFromProperties(selectedRegionFeature.value.properties) : ''
+}
+
+function hoveredRegionId() {
+  return hoveredRegionFeature ? regionIdFromProperties(hoveredRegionFeature.properties) : ''
+}
+
+function activeHoveredRegionId() {
+  const hoverId = hoveredRegionId()
+  return hoverId && hoverId !== selectedRegionId() ? hoverId : ''
+}
+
+function activeHoveredRegionFeature() {
+  return activeHoveredRegionId() ? hoveredRegionFeature : null
+}
+
+function dataRegionStatById(regionId: string) {
+  return displayPointRows().find((row) => regionIdForStat(row) === regionId)
+}
+
+function cleanBoundaryCollection(collection: FeatureCollection, name: BoundaryName): FeatureCollection {
+  const threshold = BOUNDARY_NOISE_AREA_THRESHOLDS[name]
+  if (!threshold) return collection
+  return {
+    type: 'FeatureCollection',
+    features: collection.features.flatMap((feature) => {
+      const geometry = filterSmallGeometryParts(feature.geometry, threshold)
+      if (!geometry) return []
+      return [{ ...feature, geometry }]
+    }),
+  }
+}
+
+function filterSmallGeometryParts(geometry: unknown, minArea: number) {
+  const typedGeometry = geometry as { type?: string; coordinates?: unknown }
+  if (typedGeometry.type === 'Polygon' && Array.isArray(typedGeometry.coordinates)) {
+    return typedGeometry
+  }
+  if (typedGeometry.type !== 'MultiPolygon' || !Array.isArray(typedGeometry.coordinates)) {
+    return geometry
+  }
+
+  const polygons = typedGeometry.coordinates.filter((polygon) => Array.isArray(polygon))
+  if (!polygons.length) return null
+  const kept = polygons.filter((polygon) => polygonArea(polygon) >= minArea)
+  if (kept.length) {
+    return { type: 'MultiPolygon', coordinates: kept }
+  }
+  const largest = polygons.sort((a, b) => polygonArea(b) - polygonArea(a))[0]
+  return largest ? { type: 'MultiPolygon', coordinates: [largest] } : null
 }
 
 function enrichBoundaryCollection(collection: FeatureCollection, level: MapRegionStat['level']) {
@@ -847,9 +1913,11 @@ function enrichBoundaryCollection(collection: FeatureCollection, level: MapRegio
 
 function buildLabelPointCollection(collection: FeatureCollection, level: MapRegionStat['level']) {
   const seen = new Set<string>()
+  const activeRegionIds = dataRegionIdSet()
   const features = collection.features.flatMap((feature) => {
     const geoKey = featureGeoKey(feature, level)
     if (!geoKey || seen.has(geoKey)) return []
+    const regionId = `${level}|${geoKey}`
     const coordinates = labelPointForGeometry(feature.geometry)
     if (!coordinates) return []
     seen.add(geoKey)
@@ -860,6 +1928,8 @@ function buildLabelPointCollection(collection: FeatureCollection, level: MapRegi
           ...feature.properties,
           boundaryLevel: level,
           geoKey,
+          region_id: regionId,
+          hasPndlRegion: activeRegionIds.has(regionId),
         },
         geometry: {
           type: 'Point',
@@ -877,9 +1947,11 @@ function buildPointCollection() {
     features: displayPointRows().flatMap((row) => {
       const coordinates = representativeCoordinates(row)
       if (!coordinates) return []
+      const featureId = pointFeatureId(row)
       return [
         {
           type: 'Feature',
+          id: featureId,
           properties: statProperties(row),
           geometry: {
             type: 'Point',
@@ -917,7 +1989,6 @@ function representativeCoordinates(row: MapRegionStat): [number, number] | null 
 }
 
 function representativeBoundaryCenter(row: MapRegionStat): [number, number] | null {
-  if (basemapMode !== 'geojson') return null
   const feature = findBoundaryFeature(row)
   const bbox = feature ? featureBbox(feature.geometry) : null
   if (!bbox) return null
@@ -932,7 +2003,7 @@ function findBoundaryFeature(row: MapRegionStat) {
         ? ['chinaProvinces', 'admin1']
         : ['admin1']
   for (const name of names) {
-    const collection = boundaryCache.get(name)
+    const collection = getCleanBoundaryCollection(name)
     if (!collection) continue
     const level = boundaryLevel(name)
     const feature = collection.features.find((item) => featureGeoKey(item, level) === row.geoKey)
@@ -942,9 +2013,15 @@ function findBoundaryFeature(row: MapRegionStat) {
 }
 
 function statProperties(stat: MapRegionStat) {
+  const featureId = pointFeatureId(stat)
   return {
+    featureId,
     level: stat.level,
     geoKey: stat.geoKey,
+    parentGeoKey: stat.parentGeoKey ?? '',
+    country: stat.country ?? '',
+    province: stat.province ?? '',
+    city: stat.city ?? '',
     countryKey: countryGroupKey(stat),
     displayName: stat.displayName,
     biomarkerLabel: stat.biomarkerLabel,
@@ -962,6 +2039,16 @@ function statProperties(stat: MapRegionStat) {
   }
 }
 
+function pointFeatureId(stat: MapRegionStat) {
+  return [
+    'pndl',
+    stat.level,
+    stat.geoKey,
+    stat.biomarkerKey || selection.biomarkerKey,
+    stat.yearLabel || selection.year,
+  ].join('|')
+}
+
 function countryGroupKey(row: MapRegionStat) {
   if (row.level === 'country') return row.geoKey
   if (row.parentGeoKey) return row.parentGeoKey
@@ -969,9 +2056,9 @@ function countryGroupKey(row: MapRegionStat) {
 }
 
 function locationPrecisionLabel(level: MapRegionStat['level'] | string) {
-  if (level === 'city') return '城市级位置'
-  if (level === 'admin1') return '省州级位置'
-  return '国家级位置'
+  if (level === 'city') return ui.value.cityPrecision
+  if (level === 'admin1') return ui.value.adminPrecision
+  return ui.value.countryPrecision
 }
 
 function buildStatIndex() {
@@ -1002,7 +2089,7 @@ function buildSearchCandidates() {
 
 function boundarySearchCandidates(candidates: Map<string, MapSearchResult>) {
   ;(['countries', 'admin1', 'chinaProvinces', 'chinaCities'] as BoundaryName[]).forEach((name) => {
-    const collection = boundaryCache.get(name)
+    const collection = getCleanBoundaryCollection(name)
     if (!collection) return
     const level = boundaryLevel(name)
     collection.features.forEach((feature) => {
@@ -1037,10 +2124,9 @@ function normalizeSearch(value: string) {
 function openSearch() {
   if (searchBlurTimer) window.clearTimeout(searchBlurTimer)
   isSearchFocused.value = true
-  if (basemapMode === 'geojson') {
-    void ensureBoundary('admin1')
-    void ensureBoundary('chinaCities')
-  }
+  void ensureBoundary('admin1')
+  void ensureBoundary('chinaProvinces')
+  void ensureBoundary('chinaCities')
 }
 
 function closeSearchSoon() {
@@ -1100,7 +2186,7 @@ function focusSearchResult(result: MapSearchResult) {
 }
 
 function searchZoomForLevel(level: MapRegionStat['level']) {
-  if (level === 'city') return 7.4
+  if (level === 'city') return Math.min(7.4, MAP_MAX_ZOOM)
   if (level === 'admin1') return 5.3
   return 3.2
 }
@@ -1158,7 +2244,7 @@ async function fetchStats() {
     focusGlobeOnDensePoints()
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return
-    filterError.value = error instanceof Error ? error.message : '地图统计加载失败'
+    filterError.value = error instanceof Error ? error.message : ui.value.statsLoadFailed
   } finally {
     isLoadingStats.value = false
   }
@@ -1244,13 +2330,7 @@ function normalizeLng(lng: number) {
 }
 
 function ensureFallbackBoundaries() {
-  if (basemapMode !== 'geojson') return
-  const rows = displayPointRows()
-  if (rows.some((row) => row.level === 'country')) void ensureBoundary('countries')
-  if (rows.some((row) => row.level === 'admin1')) void ensureBoundary('admin1')
-  if (rows.some((row) => row.level === 'admin1' && row.geoKey.startsWith('china|'))) {
-    void ensureBoundary('chinaProvinces')
-  }
+  ensureStagedBoundariesForCurrentZoom()
 }
 
 function handlePointClick(event: MapLayerMouseEvent) {
@@ -1261,14 +2341,19 @@ function handlePointClick(event: MapLayerMouseEvent) {
     void focusCluster(feature)
     return
   }
+  setSelectedPoint(feature)
+  selectMatchingBoundaryForPoint(feature)
   focusFeature(feature, event)
   scheduleDetailOpen(feature)
 }
 
 function handleRegionClick(event: MapLayerMouseEvent) {
   closeSearch()
-  const feature = event.features?.[0]
+  if (pointFeaturesAtPoint(event.point).length) return
+  const feature = bestRegionFeatureAtPoint(event.point)
   if (!feature?.properties || !map || !hoverPopup) return
+  setSelectedRegion(feature)
+  focusFeature(feature, event)
   if (regionTooltipTimer) window.clearTimeout(regionTooltipTimer)
   hoverPopup.setLngLat(event.lngLat).setHTML(buildTooltipHtml(feature.properties)).addTo(map)
   regionTooltipTimer = window.setTimeout(() => {
@@ -1300,7 +2385,7 @@ async function openFeatureDetail(feature: GeoJsonFeature) {
     selectedDetail.value = await fetchMapDetail(level, geoKey, { ...selection }, detailController.signal)
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return
-    detailError.value = error instanceof Error ? error.message : '详情加载失败'
+    detailError.value = error instanceof Error ? error.message : ui.value.detailLoadFailed
   } finally {
     isLoadingDetail.value = false
   }
@@ -1309,7 +2394,9 @@ async function openFeatureDetail(feature: GeoJsonFeature) {
 function handleFeatureDoubleClick(event: MapLayerMouseEvent) {
   event.preventDefault()
   if (clickTimer) window.clearTimeout(clickTimer)
-  const feature = event.features?.[0]
+  const firstFeature = event.features?.[0] as GeoJsonFeature | undefined
+  if (isRegionFeature(firstFeature) && pointFeaturesAtPoint(event.point).length) return
+  const feature = isRegionFeature(firstFeature) ? bestRegionFeatureAtPoint(event.point) : firstFeature
   if (!feature?.properties) return
   if (isClusterFeature(feature.properties)) {
     void focusCluster(feature)
@@ -1328,7 +2415,7 @@ async function focusCluster(feature: GeoJsonFeature) {
   const expansionZoom = (await source?.getClusterExpansionZoom?.(clusterId)) ?? map.getZoom() + 1.5
   map.easeTo({
     center,
-    zoom: Math.min(expansionZoom + 0.25, 10),
+    zoom: Math.min(expansionZoom + 0.25, MAP_MAX_ZOOM),
     duration: 650,
     essential: true,
   })
@@ -1351,7 +2438,7 @@ function focusFeature(feature: GeoJsonFeature, event: MapLayerMouseEvent) {
     })
     return
   }
-  const bbox = featureBbox(feature.geometry)
+  const bbox = bboxFromFeatureProperties(feature.properties) ?? featureBbox(feature.geometry)
   if (bbox) {
     map.fitBounds(
       [
@@ -1366,7 +2453,7 @@ function focusFeature(feature: GeoJsonFeature, event: MapLayerMouseEvent) {
           left: 44,
         },
         duration: 720,
-        maxZoom: 7.5,
+        maxZoom: Math.min(7.5, MAP_MAX_ZOOM),
       },
     )
     return
@@ -1379,20 +2466,48 @@ function focusFeature(feature: GeoJsonFeature, event: MapLayerMouseEvent) {
   })
 }
 
+function bboxFromFeatureProperties(props: Record<string, unknown>) {
+  const bbox = [
+    Number(props.bbox_w ?? props.bboxW),
+    Number(props.bbox_s ?? props.bboxS),
+    Number(props.bbox_e ?? props.bboxE),
+    Number(props.bbox_n ?? props.bboxN),
+  ] as [number, number, number, number]
+  return bbox.every(Number.isFinite) && bbox[0] < bbox[2] && bbox[1] < bbox[3] ? bbox : null
+}
+
+function handlePointMouseMove(event: MapLayerMouseEvent) {
+  setHoveredRegion(null)
+  const feature = event.features?.[0]
+  if (!feature?.properties) return
+  setHoveredPoint(feature)
+  showFeatureTooltip(feature, event.lngLat)
+}
+
+function handlePointMouseLeave() {
+  clearHoveredPoint()
+  hideTooltip()
+}
+
 function hideTooltipOnEmptyClick(event: MapMouseEvent) {
   closeSearch()
   isLayerPanelOpen.value = false
+  isLanguageMenuOpen.value = false
   const layers = ALL_INTERACTIVE_LAYERS.filter((layerId) => map?.getLayer(layerId))
   const features = layers.length ? map?.queryRenderedFeatures(event.point, { layers }) : []
   if (!features?.length) hideTooltip()
 }
 
 function showTooltip(event: MapLayerMouseEvent) {
+  const feature = event.features?.[0]
+  if (!feature?.properties) return
+  showFeatureTooltip(feature, event.lngLat)
+}
+
+function showFeatureTooltip(feature: GeoJsonFeature, lngLat: MapLayerMouseEvent['lngLat']) {
   if (!map || !hoverPopup) return
   map.getCanvas().style.cursor = 'pointer'
-  const props = event.features?.[0]?.properties as Record<string, unknown> | undefined
-  if (!props) return
-  hoverPopup.setLngLat(event.lngLat).setHTML(buildTooltipHtml(props)).addTo(map)
+  hoverPopup.setLngLat(lngLat).setHTML(buildTooltipHtml(feature.properties)).addTo(map)
 }
 
 function hideTooltip() {
@@ -1404,15 +2519,242 @@ function hideTooltip() {
   hoverPopup?.remove()
 }
 
+function updateRegionHoverFromPoint(event: MapMouseEvent) {
+  if (!map || !viewLayers.boundaries) return
+  if (pointFeaturesAtPoint(event.point).length) {
+    setHoveredRegion(null)
+    return
+  }
+
+  const regionFeature = bestRegionFeatureAtPoint(event.point)
+  setHoveredRegion(regionFeature)
+  if (regionFeature) {
+    showFeatureTooltip(regionFeature, event.lngLat)
+  } else if (!hoveredPointId) {
+    hideTooltip()
+  }
+}
+
+function pointFeaturesAtPoint(point: MapMouseEvent['point']) {
+  if (!map) return []
+  const pointLayers = POINT_INTERACTIVE_LAYERS.filter((layerId) => map?.getLayer(layerId))
+  return pointLayers.length
+    ? map.queryRenderedFeatures(point, { layers: pointLayers as unknown as string[] })
+    : []
+}
+
+function bestRegionFeatureAtPoint(point: MapMouseEvent['point']) {
+  if (!map) return null
+  for (const layerId of REGION_HOVER_PRIORITY_LAYERS) {
+    if (!map.getLayer(layerId)) continue
+    const [feature] = map.queryRenderedFeatures(point, { layers: [layerId] })
+    if (feature?.properties) return enrichRenderedRegionFeature(feature as GeoJsonFeature)
+  }
+  return null
+}
+
+function enrichRenderedRegionFeature(feature: GeoJsonFeature) {
+  const props = feature.properties
+  const regionId = regionIdFromProperties(props)
+  const stat = regionId ? dataRegionStatById(regionId) : undefined
+  const level = String(props.level ?? stat?.level ?? props.boundaryLevel ?? '')
+  const geoKey = String(props.geoKey ?? props.geo_key ?? stat?.geoKey ?? '')
+  return {
+    ...feature,
+    properties: {
+      ...props,
+      ...(stat ? statProperties(stat) : {}),
+      region_id: regionId || (level && geoKey ? `${level}|${geoKey}` : ''),
+      boundaryLevel: level,
+      level,
+      geoKey,
+      geo_key: geoKey,
+      displayName: stat?.displayName ?? props.displayName ?? props.display_name ?? geoKey,
+    },
+  }
+}
+
+function setHoveredPoint(feature: GeoJsonFeature | null) {
+  const nextId = feature ? pointFeatureStateId(feature) : null
+  if (hoveredPointId === nextId) return
+  clearHoveredPoint()
+  hoveredPointId = nextId
+  if (nextId != null) {
+    map?.setFeatureState({ source: 'map-points', id: nextId }, { hover: true })
+  }
+}
+
+function clearHoveredPoint() {
+  if (hoveredPointId != null) {
+    map?.setFeatureState({ source: 'map-points', id: hoveredPointId }, { hover: false })
+  }
+  hoveredPointId = null
+}
+
+function setSelectedPoint(feature: GeoJsonFeature | null) {
+  const nextId = feature ? pointFeatureStateId(feature) : null
+  if (selectedPointId != null && selectedPointId !== nextId) {
+    map?.setFeatureState({ source: 'map-points', id: selectedPointId }, { selected: false })
+  }
+  selectedPointId = nextId
+  selectedPointKey.value = feature ? regionFeatureKey(feature) : ''
+  if (nextId != null) {
+    map?.setFeatureState({ source: 'map-points', id: nextId }, { selected: true })
+  }
+}
+
+function clearSelectedPoint() {
+  setSelectedPoint(null)
+}
+
+function pointFeatureStateId(feature: GeoJsonFeature) {
+  const id = feature.id ?? feature.properties.featureId
+  if (typeof id === 'string' || typeof id === 'number') return id
+  return null
+}
+
+function setHoveredRegion(feature: GeoJsonFeature | null) {
+  if (regionFeatureKey(hoveredRegionFeature) === regionFeatureKey(feature)) return
+  hoveredRegionFeature = feature
+    ? {
+        ...cloneHighlightFeature(feature),
+        properties: { ...feature.properties, hovered: true },
+      }
+    : null
+  updateRegionHighlightSources()
+}
+
+function setSelectedRegion(feature: GeoJsonFeature | null) {
+  if (regionFeatureKey(selectedRegionFeature.value) === regionFeatureKey(feature)) return
+  selectedRegionFeature.value = feature
+    ? {
+        ...cloneHighlightFeature(feature),
+        properties: { ...feature.properties, selected: true },
+      }
+    : null
+  if (regionSourceMode === 'geojson') updateRegionDataSource()
+  updateRegionHighlightSources()
+}
+
+function selectMatchingBoundaryForPoint(feature: GeoJsonFeature) {
+  const props = feature.properties
+  if (regionSourceMode === 'vector') {
+    setSelectedRegion(regionReferenceFeatureFromProperties(props))
+    return
+  }
+  const boundaryFeature = boundaryFeatureForProperties(props)
+  setSelectedRegion(boundaryFeature)
+}
+
+function boundaryFeatureForStat(stat: MapRegionStat) {
+  return boundaryFeatureForLevelGeoKey(stat.level, stat.geoKey, stat)
+}
+
+function boundaryFeatureForProperties(props: Record<string, unknown>) {
+  const level = String(props.level ?? props.sourceLevel ?? '')
+  const geoKey = String(props.geoKey ?? props.sourceGeoKey ?? '')
+  if (!level || !geoKey) return null
+  return boundaryFeatureForLevelGeoKey(level, geoKey, statLikeFromProperties(props, level, geoKey))
+}
+
+function statLikeFromProperties(
+  props: Record<string, unknown>,
+  level: string,
+  geoKey: string,
+): MapRegionStat | undefined {
+  const stat = buildStatIndex().get(`${level}|${geoKey}`)
+  if (stat) return stat
+  if (level !== 'country' && props.parentGeoKey) {
+    return buildStatIndex().get(`${level}|${String(props.parentGeoKey)}`)
+  }
+  return undefined
+}
+
+function regionReferenceFeatureFromProperties(props: Record<string, unknown>) {
+  const level = String(props.level ?? props.sourceLevel ?? props.boundaryLevel ?? '')
+  const geoKey = String(props.geoKey ?? props.sourceGeoKey ?? props.geo_key ?? '')
+  if (!level || !geoKey) return null
+  const regionId = `${level}|${geoKey}`
+  const stat = statLikeFromProperties(props, level, geoKey) ?? dataRegionStatById(regionId)
+  return {
+    type: 'Feature',
+    properties: {
+      ...(stat ? statProperties(stat) : {}),
+      region_id: regionId,
+      boundaryLevel: level,
+      level,
+      geoKey,
+      geo_key: geoKey,
+      displayName: stat?.displayName ?? props.displayName ?? props.display_name ?? geoKey,
+      selected: true,
+    },
+    geometry: null,
+  } as GeoJsonFeature
+}
+
+function boundaryFeatureForLevelGeoKey(level: string, geoKey: string, stat?: MapRegionStat) {
+  if (!level || !geoKey) return null
+  const names =
+    level === 'country'
+      ? (['countries'] as BoundaryName[])
+      : level === 'city'
+        ? (['chinaCities'] as BoundaryName[])
+        : geoKey.startsWith('china|')
+          ? (['chinaProvinces', 'admin1'] as BoundaryName[])
+          : (['admin1'] as BoundaryName[])
+  for (const name of names) {
+    const collection = getCleanBoundaryCollection(name)
+    if (!collection) continue
+    const boundaryLevelValue = boundaryLevel(name)
+    const feature = collection.features.find((item) => featureGeoKey(item, boundaryLevelValue) === geoKey)
+    if (feature) return enrichSingleBoundaryFeature(feature, boundaryLevelValue, stat)
+  }
+  return null
+}
+
+function enrichSingleBoundaryFeature(
+  feature: GeoJsonFeature,
+  level: MapRegionStat['level'],
+  sourceStat?: MapRegionStat,
+) {
+  const geoKey = featureGeoKey(feature, level)
+  const stat = sourceStat ?? buildStatIndex().get(`${level}|${geoKey}`)
+  const statProps = stat ? statProperties(stat) : {}
+  return {
+    ...feature,
+    properties: {
+      ...feature.properties,
+      ...statProps,
+      boundaryLevel: level,
+      geoKey,
+      sourceLevel: stat?.level ?? level,
+      sourceGeoKey: stat?.geoKey ?? geoKey,
+    },
+  }
+}
+
+function isRegionFeature(feature?: GeoJsonFeature | null) {
+  return Boolean(feature?.properties?.boundaryLevel)
+}
+
+function regionFeatureKey(feature?: GeoJsonFeature | null) {
+  if (!feature?.properties) return ''
+  const regionId = regionIdFromProperties(feature.properties)
+  if (regionId) return regionId
+  const level = String(feature.properties.boundaryLevel ?? feature.properties.level ?? '')
+  const geoKey = String(feature.properties.geoKey ?? feature.properties.geo_key ?? '')
+  return level && geoKey ? `${level}|${geoKey}` : ''
+}
+
 function buildTooltipHtml(props: Record<string, unknown>) {
   if (isClusterFeature(props)) {
-    return `<strong>PNDL 位置聚合</strong><br>合并位置：${formatNumber(Number(props.point_count ?? 0))}<br>双击放大查看`
+    return `<strong>${ui.value.clusterTitle}</strong><br>${ui.value.clusterCount}：${formatNumber(Number(props.point_count ?? 0))}<br>${ui.value.clusterHint}`
   }
-  const title = escapeHtml(String(props.displayName ?? '未命名区域'))
+  const title = escapeHtml(String(props.displayName ?? ui.value.unnamedRegion))
   if (props.pndlGeomean == null) {
-    return `<strong>${title}</strong><br>当前筛选无 PNDL 数据`
+    return `<strong>${title}</strong><br>${ui.value.noPndlForSelection}`
   }
-  return `<strong>${title}</strong><br>${escapeHtml(String(props.locationPrecision ?? '位置'))}<br>biomarker：${escapeHtml(String(props.biomarkerLabel ?? selectedBiomarkerLabel.value))}<br>PNDL几何均值：${formatCompact(Number(props.pndlGeomean))}<br>记录数：${formatNumber(Number(props.recordCount ?? 0))}<br>文献数：${formatNumber(Number(props.doiCount ?? 0))}`
+  return `<strong>${title}</strong><br>${escapeHtml(String(props.locationPrecision ?? ui.value.locationPrecision))}<br>${ui.value.biomarker}：${escapeHtml(displayOptionLabel(String(props.biomarkerLabel ?? selectedBiomarkerLabel.value)))}<br>${ui.value.pndlGeomean}：${formatCompact(Number(props.pndlGeomean))}<br>${ui.value.records}：${formatNumber(Number(props.recordCount ?? 0))}<br>${ui.value.literature}：${formatNumber(Number(props.doiCount ?? 0))}`
 }
 
 function closeDetail() {
@@ -1433,6 +2775,7 @@ function toggleFilters() {
 
 function toggleLayerPanel() {
   isLayerPanelOpen.value = !isLayerPanelOpen.value
+  isLanguageMenuOpen.value = false
   closeSearch()
 }
 
@@ -1441,12 +2784,13 @@ function resetMapView() {
   closeSearch()
   isLayerPanelOpen.value = false
   map.stop()
+  const center = map.getCenter()
   const targetZoom =
     mapMode.value === 'globe'
       ? Math.max(GLOBE_INITIAL_ZOOM, getGlobeSafeZoom())
-      : CHINA_VIEW_ZOOM
+      : Math.max(FLAT_INITIAL_ZOOM, FLAT_MIN_ZOOM + 0.2)
   map.easeTo({
-    center: CHINA_CENTER as LngLatLike,
+    center,
     zoom: targetZoom,
     bearing: 0,
     pitch: 0,
@@ -1480,6 +2824,7 @@ function handleMapMouseMove(event: MapMouseEvent) {
   pendingCursorPoint = [event.lngLat.lng, event.lngLat.lat]
   pendingCursorPixel = [event.point.x, event.point.y]
   scheduleLiveMapStatusUpdate()
+  updateRegionHoverFromPoint(event)
 }
 
 function handleMapContainerMouseMove(event: MouseEvent) {
@@ -1497,6 +2842,9 @@ function handleMapContainerMouseMove(event: MouseEvent) {
 function handleMapMouseLeave() {
   pendingCursorPoint = null
   pendingCursorPixel = null
+  clearHoveredPoint()
+  setHoveredRegion(null)
+  hideTooltip()
   updateMapStatus()
 }
 
@@ -1528,7 +2876,7 @@ function updateMapCountry(preserveOnMiss: boolean) {
   mapStatus.value = {
     latitude: point[1],
     longitude: point[0],
-    country: country ?? (preserveOnMiss ? mapStatus.value.country : '未识别'),
+    country: country ?? (preserveOnMiss ? mapStatus.value.country : ui.value.unknownCountry),
     mode: pendingCursorPoint ? 'cursor' : 'center',
   }
 }
@@ -1543,7 +2891,7 @@ function cursorCoordinatePoint() {
 }
 
 function countryAtPoint(point: [number, number]) {
-  const countries = boundaryCache.get('countries')
+  const countries = getCleanBoundaryCollection('countries')
   if (!countries) return null
   const feature = countries.features.find((item) => {
     const bbox = geometryBbox(item.geometry)
@@ -1577,37 +2925,60 @@ function pointInGeometry(point: [number, number], geometry: unknown) {
 function setMapMode(mode: MapMode) {
   if (!map) return
   if (mode === 'globe' && !globeAvailable.value) return
+  if (projectionSwitchInProgress || mode === mapMode.value) return
+  projectionSwitchInProgress = true
+  isMapStyleSwitching.value = true
   map.stop()
   isLayerPanelOpen.value = false
+  closeSearch()
+  clearHoveredPoint()
+  setHoveredRegion(null)
+  unbindLayerEvents()
+  mapReady.value = false
   mapMode.value = mode
-  const projection = { type: mode === 'globe' ? 'globe' : 'mercator' }
-  ;(map as unknown as { setProjection?: (projection: { type: string }) => void })?.setProjection?.(
-    projection,
-  )
   const safeMinZoom = mode === 'globe' ? getGlobeSafeZoom() : FLAT_MIN_ZOOM
   map.setMinZoom(safeMinZoom)
-  if (map.getLayer('background')) {
-    map.setPaintProperty('background', 'background-color', mode === 'globe' ? '#83a4b8' : '#e7edf1')
-  }
-  syncAtmosphereStyle()
+  const currentCenter = map.getCenter()
+  const currentZoom = map.getZoom()
+  map.setStyle(buildMapStyle(mode, activeBasemapConfig) as never)
   const nextZoom =
     mode === 'globe'
-      ? Math.max(map.getZoom(), safeMinZoom, GLOBE_INITIAL_ZOOM)
-      : Math.max(map.getZoom(), safeMinZoom)
-  map.easeTo({
-    center: map.getCenter(),
-    zoom: nextZoom,
-    bearing: 0,
-    pitch: 0,
-    duration: 680,
-    essential: true,
-  })
+      ? Math.max(currentZoom, safeMinZoom, GLOBE_INITIAL_ZOOM)
+      : Math.max(currentZoom, safeMinZoom)
+  const restore = () => {
+    if (!projectionSwitchInProgress || !map) return
+    if (!map.isStyleLoaded()) {
+      map.once('idle', restore)
+      return
+    }
+    mapReady.value = true
+    addMapSourcesAndLayers()
+    bindLayerEvents()
+    void ensureBoundary('countries')
+    ensureFallbackBoundaries()
+    updateMapData()
+    syncAtmosphereStyle()
+    map.setMaxZoom(MAP_MAX_ZOOM)
+    map.setMinZoom(safeMinZoom)
+    map.easeTo({
+      center: currentCenter,
+      zoom: nextZoom,
+      bearing: 0,
+      pitch: 0,
+      duration: 680,
+      essential: true,
+    })
+    projectionSwitchInProgress = false
+    isMapStyleSwitching.value = false
+  }
+  map.once('idle', restore)
+  window.setTimeout(restore, 900)
 }
 
 function getGlobeSafeZoom() {
   const height = mapContainer.value?.clientHeight ?? window.innerHeight
-  if (height < 520) return 2.56
-  if (height < 680) return 2.48
+  if (height < 520) return 2.74
+  if (height < 680) return 2.68
   return GLOBE_MIN_ZOOM
 }
 
@@ -1641,7 +3012,8 @@ function applyViewLayerVisibility() {
   if (!map) return
   setLayerVisibility([...PNDL_LAYER_IDS], viewLayers.pndl)
   setLayerVisibility(layerIdsForViewGroup('labels'), viewLayers.labels)
-  setLayerVisibility(layerIdsForViewGroup('boundaries'), viewLayers.boundaries)
+  setLayerVisibility([...REGION_FILL_LAYER_IDS], true)
+  setLayerVisibility([...layerIdsForViewGroup('boundaries'), ...REGION_LINE_LAYER_IDS], viewLayers.boundaries)
   syncAtmosphereStyle()
 }
 
@@ -1655,7 +3027,7 @@ function layerIdsForViewGroup(group: 'labels' | 'boundaries') {
     if (PNDL_LAYER_IDS.includes(id as (typeof PNDL_LAYER_IDS)[number])) return []
     const type = String((layer as { type?: string }).type ?? '')
     if (group === 'labels') return type === 'symbol' ? [id] : []
-    return type === 'line' && /admin|boundary|border|country|province|state/i.test(id) ? [id] : []
+    return type === 'line' && /admin|boundar|border|country|province|state/i.test(id) ? [id] : []
   })
 }
 
@@ -1669,15 +3041,39 @@ function setLayerVisibility(layerIds: string[], visible: boolean) {
 function syncAtmosphereStyle() {
   if (!map) return
   const mapWithSky = map as unknown as { setSky?: (sky?: Record<string, unknown>) => void }
-  if (mapMode.value === 'globe' && viewLayers.ambience) {
-    mapWithSky.setSky?.(globeAtmosphereStyle().sky)
-  } else {
-    mapWithSky.setSky?.(undefined)
-  }
+  mapWithSky.setSky?.(undefined)
 }
 
 function refreshStats() {
   scheduleStatsFetch(0)
+}
+
+function readInitialLocale(): Locale {
+  if (typeof window === 'undefined') return 'zh'
+  return window.localStorage.getItem(MAP_LOCALE_STORAGE_KEY) === 'en' ? 'en' : 'zh'
+}
+
+function setLocale(value: Locale) {
+  locale.value = value
+  isLanguageMenuOpen.value = false
+}
+
+function displayOptionLabel(value?: string | null) {
+  if (!value) return ''
+  const normalized = value.trim()
+  if (locale.value === 'en') {
+    if (normalized === 'ALL') return ui.value.allTargetClasses
+    if (normalized === '全部小类') return ui.value.allSubcategories
+    if (normalized === '全部年份') return ui.value.allYears
+    if (normalized === '全部 biomarker' || normalized === '全部生物标记物') {
+      return ui.value.allBiomarkers
+    }
+    if (normalized === '未标注年份') return ui.value.unspecifiedYear
+    return normalized
+  }
+  if (normalized === '全部 biomarker') return ui.value.allBiomarkers
+  if (normalized === 'ALL') return ui.value.allTargetClasses
+  return normalized
 }
 
 function isClusterFeature(props: Record<string, unknown>) {
@@ -1885,15 +3281,16 @@ function numberOrNull(value?: number | null) {
 
 function formatNumber(value?: number | null) {
   if (value == null || Number.isNaN(Number(value))) return '0'
-  return new Intl.NumberFormat('zh-CN').format(Number(value))
+  return new Intl.NumberFormat(locale.value === 'zh' ? 'zh-CN' : 'en-US').format(Number(value))
 }
 
 function formatCompact(value?: number | null) {
-  if (value == null || Number.isNaN(Number(value))) return '无数据'
+  if (value == null || Number.isNaN(Number(value))) return ui.value.noData
   const number = Number(value)
-  if (number >= 1000) return number.toLocaleString('zh-CN', { maximumFractionDigits: 0 })
-  if (number >= 10) return number.toLocaleString('zh-CN', { maximumFractionDigits: 1 })
-  return number.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
+  const numberLocale = locale.value === 'zh' ? 'zh-CN' : 'en-US'
+  if (number >= 1000) return number.toLocaleString(numberLocale, { maximumFractionDigits: 0 })
+  if (number >= 10) return number.toLocaleString(numberLocale, { maximumFractionDigits: 1 })
+  return number.toLocaleString(numberLocale, { maximumFractionDigits: 2 })
 }
 
 function formatCoordinate(value: number, axis: 'latitude' | 'longitude') {
@@ -1921,34 +3318,34 @@ function escapeHtml(value: string) {
 <template>
   <main class="map-page">
     <header class="site-header">
-      <RouterLink class="brand" to="/" aria-label="污水信息因子数据库首页">
+      <RouterLink class="brand" to="/" :aria-label="ui.brandHome">
         <span class="brand-logo" aria-hidden="true">
           <span class="brand-drop"></span>
           <span class="brand-bars"><i></i><i></i><i></i></span>
           <span class="brand-line"><i></i><i></i></span>
         </span>
         <span>
-          <strong>污水信息因子数据库</strong>
-          <small>Wastewater Biomarker Evidence</small>
+          <strong>{{ ui.brandTitle }}</strong>
+          <small>{{ ui.brandSubtitle }}</small>
         </span>
       </RouterLink>
 
       <div class="header-center">
-        <h1 class="page-title">地图可视化</h1>
+        <h1 class="page-title">{{ ui.pageTitle }}</h1>
 
         <div class="location-search" :class="{ active: isSearchFocused && searchQuery }">
           <span class="search-mark" aria-hidden="true"></span>
           <input
             v-model="searchQuery"
             type="search"
-            placeholder="搜索国家、省州、城市"
-            aria-label="搜索地图地点"
+            :placeholder="ui.searchPlaceholder"
+            :aria-label="ui.searchLabel"
             @focus="openSearch"
             @input="openSearch"
             @blur="closeSearchSoon"
             @keydown.enter.prevent="applyFirstSearchResult"
           />
-          <button v-if="searchQuery" type="button" aria-label="清空搜索" @mousedown.prevent @click="clearSearch">
+          <button v-if="searchQuery" type="button" :aria-label="ui.clearSearch" @mousedown.prevent @click="clearSearch">
             ×
           </button>
 
@@ -1962,13 +3359,35 @@ function escapeHtml(value: string) {
               <strong>{{ result.label }}</strong>
               <span>{{ result.meta }}</span>
             </button>
-            <p v-if="!searchResults.length">未找到匹配地点</p>
+            <p v-if="!searchResults.length">{{ ui.noSearchResults }}</p>
           </div>
         </div>
       </div>
 
       <div class="header-tools">
-        <RouterLink class="login-button" to="/">返回首页</RouterLink>
+        <div class="language-menu" :class="{ open: isLanguageMenuOpen }">
+          <button
+            type="button"
+            :aria-label="ui.languageMenu"
+            :aria-expanded="isLanguageMenuOpen"
+            @click="isLanguageMenuOpen = !isLanguageMenuOpen"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="9"></circle>
+              <path d="M3 12h18M12 3a13 13 0 0 1 0 18M12 3a13 13 0 0 0 0 18"></path>
+            </svg>
+            <span>{{ locale === 'zh' ? '中' : 'EN' }}</span>
+          </button>
+          <div v-if="isLanguageMenuOpen" class="language-popover">
+            <button type="button" :class="{ active: locale === 'zh' }" @click="setLocale('zh')">
+              {{ ui.chinese }}
+            </button>
+            <button type="button" :class="{ active: locale === 'en' }" @click="setLocale('en')">
+              {{ ui.english }}
+            </button>
+          </div>
+        </div>
+        <RouterLink class="login-button" to="/">{{ ui.backHome }}</RouterLink>
       </div>
     </header>
 
@@ -1977,6 +3396,7 @@ function escapeHtml(value: string) {
       :class="{
         'detail-open': isDetailOpen,
         'filters-closed': !isFilterOpen,
+        switching: isMapStyleSwitching,
         globe: mapMode === 'globe',
         ambience: viewLayers.ambience,
       }"
@@ -1993,20 +3413,20 @@ function escapeHtml(value: string) {
         <button
           class="map-tool-button"
           type="button"
-          aria-label="回到中国视图"
-          title="回到中国视图"
+          :aria-label="ui.resetTitle"
+          :title="ui.resetTitle"
           @click="resetMapView"
         >
           <span class="reset-icon" aria-hidden="true"></span>
-          <span class="tool-label">回中</span>
+          <span class="tool-label">{{ ui.resetView }}</span>
         </button>
 
         <button
           class="map-tool-button"
           type="button"
           :disabled="!globeAvailable"
-          :aria-label="mapMode === 'globe' ? '切换到平面地图' : '切换到球形地图'"
-          :title="mapMode === 'globe' ? '切换到平面地图' : '切换到球形地图'"
+          :aria-label="mapMode === 'globe' ? ui.switchToFlat : ui.switchToGlobe"
+          :title="mapMode === 'globe' ? ui.switchToFlat : ui.switchToGlobe"
           @click="setMapMode(mapMode === 'globe' ? 'flat' : 'globe')"
         >
           <svg
@@ -2030,8 +3450,8 @@ function escapeHtml(value: string) {
             class="map-tool-button"
             type="button"
             :aria-expanded="isLayerPanelOpen"
-            aria-label="地图图层显示"
-            title="地图图层显示"
+            :aria-label="ui.mapLayers"
+            :title="ui.mapLayers"
             @click="toggleLayerPanel"
           >
             <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -2043,89 +3463,106 @@ function escapeHtml(value: string) {
           </button>
 
           <div v-if="isLayerPanelOpen" class="layer-panel" @click.stop>
-            <strong>显示图层</strong>
+            <strong>{{ ui.layerPanelTitle }}</strong>
             <label>
               <input v-model="viewLayers.labels" type="checkbox" />
-              <span>地区名称</span>
+              <span>{{ ui.labelsLayer }}</span>
             </label>
             <label>
               <input v-model="viewLayers.boundaries" type="checkbox" />
-              <span>边界线</span>
+              <span>{{ ui.boundariesLayer }}</span>
             </label>
             <label>
               <input v-model="viewLayers.pndl" type="checkbox" />
-              <span>PNDL 气泡</span>
+              <span>{{ ui.pndlLayer }}</span>
             </label>
             <label>
               <input v-model="viewLayers.ambience" type="checkbox" />
-              <span>轻量动效</span>
+              <span>{{ ui.ambienceLayer }}</span>
             </label>
+            <p>{{ ui.coverageNote }}</p>
           </div>
         </div>
       </div>
 
       <div class="filter-shell" :class="{ collapsed: !isFilterOpen }">
         <form class="floating-filters" :aria-hidden="!isFilterOpen" @submit.prevent="refreshStats">
+          <div class="filter-head">
+            <strong>{{ ui.filterTitle }}</strong>
+            <small>{{ filterSummary }}</small>
+          </div>
           <label>
-            <span>类别</span>
-            <select v-model="selection.category" :disabled="isLoadingFilters || !filters">
-              <option v-for="category in filters?.categories ?? []" :key="category" :value="category">
-                {{ category }}
+            <span>{{ ui.targetClass }}</span>
+            <select v-model="selection.targetClass" :disabled="isLoadingFilters || !filters">
+              <option value="ALL">{{ ui.allTargetClasses }}</option>
+              <option v-for="targetClass in currentTargetClasses" :key="targetClass" :value="targetClass">
+                {{ displayOptionLabel(targetClass) }}
               </option>
             </select>
           </label>
 
           <label>
-            <span>子类</span>
+            <span>{{ ui.category }}</span>
+            <select v-model="selection.category" :disabled="isLoadingFilters || !filters">
+              <option v-for="category in currentCategories" :key="category" :value="category">
+                {{ displayOptionLabel(category) }}
+              </option>
+            </select>
+          </label>
+
+          <label>
+            <span>{{ ui.subcategory }}</span>
             <select v-model="selection.subcategory" :disabled="!currentSubcategories.length">
               <option v-for="subcategory in currentSubcategories" :key="subcategory" :value="subcategory">
-                {{ subcategory }}
+                {{ displayOptionLabel(subcategory) }}
               </option>
             </select>
           </label>
 
           <label>
-            <span>biomarker</span>
+            <span>{{ ui.biomarker }}</span>
             <select v-model="selection.biomarkerKey" :disabled="!currentBiomarkers.length">
               <option v-for="biomarker in currentBiomarkers" :key="biomarker.key" :value="biomarker.key">
-                {{ biomarker.label }}
+                {{ displayOptionLabel(biomarker.label) }}
               </option>
             </select>
           </label>
 
           <label>
-            <span>年份</span>
+            <span>{{ ui.year }}</span>
             <select v-model="selection.year" :disabled="!currentYears.length">
               <option v-for="year in currentYears" :key="year" :value="year">
-                {{ year }}
+                {{ displayOptionLabel(year) }}
               </option>
             </select>
           </label>
 
           <button type="submit" :disabled="isLoadingStats">
-            {{ isLoadingStats ? '刷新中' : '刷新' }}
+            {{ isLoadingStats ? ui.refreshing : ui.refresh }}
           </button>
         </form>
         <button
           class="filter-toggle"
           type="button"
-          :aria-label="isFilterOpen ? '收起筛选条件' : '展开筛选条件'"
+          :aria-label="isFilterOpen ? ui.collapseFilters : ui.expandFilters"
           @click="toggleFilters"
         >
           <span aria-hidden="true"></span>
         </button>
       </div>
 
-      <p v-if="mapError || filterError" class="map-message error">{{ mapError || filterError }}</p>
-      <p v-else-if="isLoadingFilters || isLoadingStats" class="map-message">
-        {{ isLoadingFilters ? '正在加载筛选项' : '正在更新地图数据' }}
+      <p v-if="activeMapMessage" class="map-message" :class="activeMapMessage.type">
+        {{ activeMapMessage.text }}
+      </p>
+      <p v-if="boundaryLoadingMessage" class="boundary-loading-chip">
+        {{ boundaryLoadingMessage }}
       </p>
 
       <div class="map-status-chip" aria-live="polite">
         <strong>{{ formattedMapStatus.label }}</strong>
-        <span>纬度 {{ formattedMapStatus.latitude }}</span>
-        <span>经度 {{ formattedMapStatus.longitude }}</span>
-        <strong>国家：{{ formattedMapStatus.country }}</strong>
+        <span>{{ ui.latitude }} {{ formattedMapStatus.latitude }}</span>
+        <span>{{ ui.longitude }} {{ formattedMapStatus.longitude }}</span>
+        <strong>{{ ui.country }}：{{ formattedMapStatus.country }}</strong>
       </div>
 
       <aside
@@ -2135,58 +3572,57 @@ function escapeHtml(value: string) {
         aria-live="polite"
       >
         <header>
-          <span>详情</span>
-          <button type="button" aria-label="关闭详情" @click.stop="closeDetail">×</button>
+          <span>{{ ui.detail }}</span>
+          <button type="button" :aria-label="ui.closeDetail" @click.stop="closeDetail">×</button>
         </header>
 
         <template v-if="detailRegion">
           <h2>{{ detailRegion.displayName }}</h2>
           <dl class="detail-metrics">
             <div>
-              <dt>位置精度</dt>
+              <dt>{{ ui.locationPrecision }}</dt>
               <dd>{{ locationPrecisionLabel(detailRegion.level) }}</dd>
             </div>
             <div>
-              <dt>PNDL几何均值</dt>
+              <dt>{{ ui.pndlGeomean }}</dt>
               <dd>{{ formatCompact(detailRegion.pndlGeomeanMgD1000inh) }}</dd>
             </div>
             <div>
-              <dt>PNDL均值</dt>
+              <dt>{{ ui.pndlMean }}</dt>
               <dd>{{ formatCompact(detailRegion.pndlMeanMgD1000inh) }}</dd>
             </div>
             <div>
-              <dt>范围</dt>
+              <dt>{{ ui.range }}</dt>
               <dd>
                 {{ formatCompact(detailRegion.pndlMinMgD1000inh) }} -
                 {{ formatCompact(detailRegion.pndlMaxMgD1000inh) }}
               </dd>
             </div>
             <div>
-              <dt>记录/文献</dt>
+              <dt>{{ ui.recordsAndDoi }}</dt>
               <dd>{{ formatNumber(detailRegion.recordCount) }} / {{ formatNumber(detailRegion.doiCount) }}</dd>
             </div>
             <div>
-              <dt>来源</dt>
-              <dd>{{ detailRegion.pndlSources || '无数据' }}</dd>
+              <dt>{{ ui.source }}</dt>
+              <dd>{{ detailRegion.pndlSources || ui.noData }}</dd>
             </div>
           </dl>
 
           <section class="source-list">
-            <h3>来源记录</h3>
+            <h3>{{ ui.sourceRecords }}</h3>
             <article v-for="source in selectedDetail?.sources ?? []" :key="source.measurementId">
               <strong>{{ source.biomarkerName || source.drugName }}</strong>
               <span>{{ source.country }} {{ source.province }} {{ source.city }}</span>
               <em>{{ formatCompact(source.pndlMgD1000inh) }} mg/day/1000 inh · {{ source.pndlSource }}</em>
-              <small>{{ source.doi || source.sourceWorkbook || '来源待补充' }}</small>
+              <small>{{ source.doi || source.sourceWorkbook || ui.sourcePending }}</small>
             </article>
-            <p v-if="!(selectedDetail?.sources?.length)">暂无来源记录</p>
+            <p v-if="!(selectedDetail?.sources?.length)">{{ ui.noSourceRecords }}</p>
           </section>
         </template>
 
-        <p v-else-if="isLoadingDetail" class="drawer-message">正在加载详情</p>
+        <p v-else-if="isLoadingDetail" class="drawer-message">{{ ui.loadingDetail }}</p>
         <p v-else class="drawer-message">
-          {{ selection.category }} / {{ selection.subcategory }} / {{ selectedBiomarkerLabel }} /
-          {{ selection.year }}
+          {{ detailError || selectedDetail ? ui.emptyBackendDetail : filterSummary }}
         </p>
         <p v-if="detailError" class="drawer-message error">{{ detailError }}</p>
       </aside>
@@ -2467,7 +3903,79 @@ function escapeHtml(value: string) {
 
 .header-tools {
   display: flex;
+  align-items: center;
+  gap: 10px;
   justify-content: flex-end;
+}
+
+.language-menu {
+  position: relative;
+}
+
+.language-menu > button {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid rgba(91, 117, 132, 0.16);
+  border-radius: 8px;
+  color: #173247;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
+  font-size: 11px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.language-menu > button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: #229384;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.language-menu.open > button {
+  border-color: rgba(34, 147, 132, 0.34);
+  box-shadow:
+    0 0 0 3px rgba(34, 147, 132, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
+}
+
+.language-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 12;
+  min-width: 138px;
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid rgba(91, 117, 132, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 18px 42px rgba(19, 46, 63, 0.16);
+}
+
+.language-popover button {
+  height: 34px;
+  border: 0;
+  border-radius: 6px;
+  color: #607384;
+  background: transparent;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.language-popover button:hover,
+.language-popover button.active {
+  color: #173247;
+  background: rgba(34, 147, 132, 0.1);
 }
 
 .login-button {
@@ -2490,7 +3998,7 @@ function escapeHtml(value: string) {
   position: relative;
   min-height: calc(100vh - 70px);
   overflow: hidden;
-  background: #e7edf1;
+  background: #dcecf5;
   transition: background 0.28s ease;
 }
 
@@ -2510,44 +4018,48 @@ function escapeHtml(value: string) {
 
 .map-stage.ambience:not(.globe)::before {
   background:
-    linear-gradient(115deg, transparent 0 36%, rgba(255, 255, 255, 0.18) 44%, transparent 52%),
-    radial-gradient(circle at 18% 32%, rgba(255, 255, 255, 0.2), transparent 24%),
+    linear-gradient(115deg, transparent 0 35%, rgba(26, 143, 132, 0.13) 44%, transparent 53%),
+    radial-gradient(circle at 18% 32%, rgba(34, 147, 132, 0.15), transparent 24%),
+    radial-gradient(circle at 78% 24%, rgba(57, 125, 161, 0.1) 0 2px, transparent 2.8px),
+    radial-gradient(circle at 34% 72%, rgba(34, 147, 132, 0.1) 0 1.8px, transparent 2.8px),
     repeating-linear-gradient(
       145deg,
-      rgba(45, 102, 128, 0.06) 0 1px,
-      transparent 1px 44px
+      rgba(23, 86, 105, 0.04) 0 1px,
+      transparent 1px 46px
     );
   background-size:
     620px 620px,
     760px 760px,
-    420px 420px;
+    380px 380px,
+    520px 520px,
+    430px 430px;
   mix-blend-mode: soft-light;
-  animation: oceanDrift 28s linear infinite;
+  opacity: 0.38;
+  animation: monitorFlow 34s linear infinite;
 }
 
 .map-stage.globe {
-  background:
-    radial-gradient(circle at 50% 50%, rgba(18, 44, 62, 0.4), transparent 37%),
-    radial-gradient(circle at 50% 52%, rgba(255, 255, 255, 0.22), transparent 42%),
-    linear-gradient(180deg, #55768a, #7896a7);
+  background: linear-gradient(180deg, #334f5e, #3d5d6b);
 }
 
 .map-stage.globe.ambience::before {
   background:
-    radial-gradient(circle at 14% 18%, rgba(255, 255, 255, 0.72) 0 1px, transparent 1.6px),
-    radial-gradient(circle at 78% 22%, rgba(255, 255, 255, 0.55) 0 1px, transparent 1.5px),
-    radial-gradient(circle at 36% 72%, rgba(255, 255, 255, 0.5) 0 1px, transparent 1.4px),
-    radial-gradient(circle at 62% 58%, rgba(255, 255, 255, 0.42) 0 1px, transparent 1.5px),
-    radial-gradient(circle at 50% 46%, rgba(151, 190, 209, 0.14), transparent 40%);
+    linear-gradient(120deg, transparent 0 37%, rgba(82, 157, 156, 0.08) 45%, transparent 54%),
+    radial-gradient(circle at 18% 30%, rgba(116, 185, 181, 0.12) 0 2px, transparent 3px),
+    radial-gradient(circle at 72% 68%, rgba(127, 139, 222, 0.08) 0 2px, transparent 3px),
+    repeating-linear-gradient(
+      145deg,
+      rgba(236, 252, 251, 0.052) 0 1px,
+      transparent 1px 54px
+    );
   background-size:
-    330px 330px,
+    720px 720px,
     420px 420px,
-    520px 520px,
-    610px 610px,
-    100% 100%;
-  mix-blend-mode: screen;
-  opacity: 0.38;
-  animation: starDrift 60s linear infinite;
+    560px 560px,
+    520px 520px;
+  mix-blend-mode: soft-light;
+  opacity: 0.16;
+  animation: monitorFlow 42s linear infinite;
 }
 
 .map-canvas {
@@ -2555,6 +4067,11 @@ function escapeHtml(value: string) {
   inset: 0;
   z-index: 0;
   animation: mapCanvasIn 0.32s ease 0.04s both;
+  transition: opacity 0.18s ease;
+}
+
+.map-stage.switching .map-canvas {
+  opacity: 0.35;
 }
 
 .map-tool-stack {
@@ -2705,6 +4222,16 @@ function escapeHtml(value: string) {
   accent-color: #229384;
 }
 
+.layer-panel p {
+  margin: 2px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid rgba(91, 117, 132, 0.12);
+  color: #6a7d88;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
 .filter-shell {
   position: absolute;
   top: 18px;
@@ -2726,17 +4253,41 @@ function escapeHtml(value: string) {
   position: relative;
   display: grid;
   grid-template-columns: 1fr;
-  gap: 11px;
-  padding: 14px;
-  border: 1px solid rgba(100, 121, 133, 0.2);
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid rgba(100, 121, 133, 0.16);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 18px 45px rgba(19, 46, 63, 0.18);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 14px 34px rgba(19, 46, 63, 0.14);
   transition:
     opacity 0.22s ease,
     max-height 0.3s cubic-bezier(0.2, 0.78, 0.18, 1),
     transform 0.3s cubic-bezier(0.2, 0.78, 0.18, 1);
   backdrop-filter: blur(16px);
+}
+
+.filter-head {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(91, 117, 132, 0.1);
+}
+
+.filter-head strong {
+  color: #173247;
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.filter-head small {
+  overflow: hidden;
+  color: #6a7d88;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .filter-shell.collapsed .floating-filters {
@@ -2845,6 +4396,33 @@ function escapeHtml(value: string) {
 .map-message.error,
 .drawer-message.error {
   color: #9c2f1f;
+}
+
+.map-message.notice {
+  color: #715017;
+  background: rgba(255, 248, 223, 0.96);
+}
+
+.map-message.loading {
+  color: #173247;
+}
+
+.boundary-loading-chip {
+  position: absolute;
+  left: 18px;
+  bottom: 58px;
+  z-index: 3;
+  margin: 0;
+  padding: 7px 10px;
+  border: 1px solid rgba(91, 117, 132, 0.12);
+  border-radius: 999px;
+  color: #365061;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 10px 24px rgba(19, 46, 63, 0.12);
+  font-size: 11px;
+  font-weight: 850;
+  pointer-events: none;
+  backdrop-filter: blur(14px);
 }
 
 .map-status-chip {
@@ -3045,6 +4623,10 @@ function escapeHtml(value: string) {
   box-shadow: 0 18px 45px rgba(19, 46, 63, 0.18);
 }
 
+:deep(.maplibregl-popup-content strong) {
+  color: #312e81;
+}
+
 @keyframes mapHeaderIn {
   from {
     opacity: 0;
@@ -3077,9 +4659,11 @@ function escapeHtml(value: string) {
   }
 }
 
-@keyframes oceanDrift {
+@keyframes monitorFlow {
   from {
     background-position:
+      0 0,
+      0 0,
       0 0,
       0 0,
       0 0;
@@ -3087,29 +4671,11 @@ function escapeHtml(value: string) {
 
   to {
     background-position:
-      620px 0,
-      -260px 180px,
-      420px 420px;
-  }
-}
-
-@keyframes starDrift {
-  from {
-    background-position:
-      0 0,
-      0 0,
-      0 0,
-      0 0,
-      50% 46%;
-  }
-
-  to {
-    background-position:
-      330px 120px,
-      -420px 160px,
-      260px -220px,
-      -300px -180px,
-      50% 46%;
+      720px 0,
+      -240px 180px,
+      210px -180px,
+      -260px 220px,
+      430px 430px;
   }
 }
 
@@ -3128,7 +4694,8 @@ function escapeHtml(value: string) {
 
 @media (max-width: 1180px) {
   .site-header {
-    grid-template-columns: auto 1fr;
+    grid-template-columns: auto 1fr auto;
+    gap: 14px;
   }
 
   .header-center {
@@ -3139,8 +4706,8 @@ function escapeHtml(value: string) {
     font-size: 20px;
   }
 
-  .header-tools {
-    display: none;
+  .login-button {
+    padding: 0 12px;
   }
 }
 
@@ -3154,6 +4721,10 @@ function escapeHtml(value: string) {
     width: 100%;
     grid-template-columns: 1fr;
     justify-self: stretch;
+  }
+
+  .header-tools {
+    justify-content: flex-start;
   }
 
   .page-title {

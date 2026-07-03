@@ -15,5 +15,7 @@ describe('App', () => {
     })
 
     expect(wrapper.text()).toContain('污水信息因子数据库')
+    expect(wrapper.text()).toContain('ICD11 桑基图')
+    expect(router.getRoutes().some((route) => route.path === '/icd11-sankey')).toBe(true)
   })
 })

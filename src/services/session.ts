@@ -41,7 +41,13 @@ export function authHeaders(): HeadersInit {
 }
 
 export function canManageData(user?: UserResponse | null) {
-  return user?.role === 'admin' || user?.role === 'editor' || user?.canUpload === true
+  return (
+    user?.role === 'admin' ||
+    user?.role === 'editor' ||
+    user?.canUpload === true ||
+    user?.canReviewUploads === true ||
+    user?.canSyncData === true
+  )
 }
 
 export function isAdmin(user?: UserResponse | null) {

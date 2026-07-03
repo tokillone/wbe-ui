@@ -1,4 +1,4 @@
-import { authHeaders } from './session'
+import { fetchBlob, requestApi } from './api'
 
 export interface DataUploadBatch {
   uploadId: number
@@ -6,6 +6,7 @@ export interface DataUploadBatch {
   status: string
   uploadedBy: number
   uploadedByName: string
+  uploadedByRole?: string | null
   totalRows: number
   validRows: number
   errorRows: number
@@ -14,6 +15,13 @@ export interface DataUploadBatch {
   duplicateMessage?: string | null
   createdAt?: string | null
   syncedAt?: string | null
+  reviewedBy?: number | null
+  reviewedByName?: string | null
+  reviewedAt?: string | null
+  reviewAction?: string | null
+  reviewNote?: string | null
+  syncedBy?: number | null
+  syncedByName?: string | null
 }
 
 export interface DataUploadRow {
@@ -43,6 +51,14 @@ export interface DataUploadRowsPage {
   rows: DataUploadRow[]
 }
 
+export interface DataUploadBatchPage {
+  items: DataUploadBatch[]
+  page: number
+  size: number
+  total: number
+  totalPages: number
+}
+
 export interface DataUploadSyncResult {
   batch: DataUploadBatch
   insertedRows: number
@@ -50,65 +66,54 @@ export interface DataUploadSyncResult {
   warnings: string[]
 }
 
-interface ApiResponse<T> {
-  code: number
-  message: string
-  data: T
-}
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
-
-async function requestDataUpload<T>(endpoint: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...options,
-    headers: {
-      ...authHeaders(),
-      ...(options?.headers ?? {}),
-    },
-  })
-  const result = (await response.json().catch(() => null)) as ApiResponse<T> | null
-
-  if (!response.ok || result?.code !== 200) {
-    throw new Error(result?.message || '数据上传请求失败')
-  }
-
-  return result.data
-}
-
 export function uploadPreview(file: File) {
   const formData = new FormData()
   formData.set('file', file)
-  return requestDataUpload<DataUploadPreview>('/data-uploads/preview', {
+  return requestApi<DataUploadPreview>('/data-uploads/preview', {
     method: 'POST',
     body: formData,
   })
 }
 
 export function syncUpload(uploadId: number) {
-  return requestDataUpload<DataUploadSyncResult>(`/data-uploads/${uploadId}/sync`, {
+  return requestApi<DataUploadSyncResult>(`/data-uploads/${uploadId}/sync`, {
     method: 'POST',
   })
 }
 
-export function rejectUpload(uploadId: number) {
-  return requestDataUpload<DataUploadBatch>(`/data-uploads/${uploadId}/reject`, {
+export function rejectUpload(uploadId: number, reason?: string) {
+  return requestApi<DataUploadBatch>(`/data-uploads/${uploadId}/reject`, {
     method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ reason }),
   })
 }
 
-export function fetchUploads() {
-  return requestDataUpload<DataUploadBatch[]>('/data-uploads')
+export interface FetchUploadsParams {
+  page?: number
+  size?: number
+  keyword?: string
+  status?: string
+  scope?: string
+  uploaderType?: string
+  sort?: string
+}
+
+export function fetchUploads(params: FetchUploadsParams = {}) {
+  const search = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      search.set(key, String(value))
+    }
+  })
+  const query = search.toString()
+  return requestApi<DataUploadBatchPage>(`/data-uploads${query ? `?${query}` : ''}`)
 }
 
 export async function downloadUploadTemplate() {
-  const response = await fetch(`${API_BASE_URL}/data-uploads/template`, {
-    headers: authHeaders(),
-  })
-  if (!response.ok) {
-    const result = (await response.json().catch(() => null)) as { message?: string } | null
-    throw new Error(result?.message || '模板下载失败')
-  }
-  const blob = await response.blob()
+  const blob = await fetchBlob('/data-uploads/template', '模板下载失败')
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
@@ -117,20 +122,16 @@ export async function downloadUploadTemplate() {
   URL.revokeObjectURL(url)
 }
 
-export function fetchUploadRows(uploadId: number, page = 1, size = 20) {
+export function fetchUploadRows(uploadId: number, page = 1, size = 20, status = 'all') {
   const params = new URLSearchParams({ page: String(page), size: String(size) })
-  return requestDataUpload<DataUploadRowsPage>(`/data-uploads/${uploadId}/rows?${params}`)
+  if (status !== 'all') {
+    params.set('status', status)
+  }
+  return requestApi<DataUploadRowsPage>(`/data-uploads/${uploadId}/rows?${params}`)
 }
 
 export async function downloadUploadFile(uploadId: number, fileName: string) {
-  const response = await fetch(`${API_BASE_URL}/data-uploads/${uploadId}/file`, {
-    headers: authHeaders(),
-  })
-  if (!response.ok) {
-    const result = (await response.json().catch(() => null)) as { message?: string } | null
-    throw new Error(result?.message || '文件下载失败')
-  }
-  const blob = await response.blob()
+  const blob = await fetchBlob(`/data-uploads/${uploadId}/file`, '文件下载失败')
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url

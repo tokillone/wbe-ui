@@ -20,6 +20,7 @@ import {
   syncUpload,
   uploadPreview,
   type DataUploadBatch,
+  type DataUploadBatchPage,
   type DataUploadPreview,
   type DataUploadRowsPage,
 } from '../services/dataUploads'
@@ -27,6 +28,10 @@ import { clearSession, getStoredSession, isAdmin, updateStoredUser } from '../se
 
 type WorkspaceSection = 'upload' | 'batches' | 'users'
 type PermissionFilter = 'all' | 'true' | 'false'
+type BatchStatusFilter = 'all' | 'PENDING_REVIEW' | 'PREVIEWED' | 'VALIDATION_FAILED' | 'SYNCED' | 'REJECTED'
+type BatchScopeFilter = 'all' | 'mine' | 'pendingReview'
+type BatchUploaderTypeFilter = 'all' | 'viewer' | 'manager'
+type RowStatusFilter = 'all' | 'ERROR' | 'WARNING' | 'VALID' | 'SYNCED' | 'SKIPPED'
 
 const PREVIEW_COLUMNS = [
   '文献编号',
@@ -69,6 +74,27 @@ const BATCH_STATUS_FILTERS = [
   { value: 'REJECTED', label: '已驳回' },
 ]
 
+const BATCH_SCOPE_FILTERS = [
+  { value: 'all', label: '全部批次' },
+  { value: 'mine', label: '我的上传' },
+  { value: 'pendingReview', label: '待审核队列' },
+]
+
+const BATCH_UPLOADER_FILTERS = [
+  { value: 'all', label: '全部上传人' },
+  { value: 'viewer', label: '普通用户上传' },
+  { value: 'manager', label: '管理人员上传' },
+]
+
+const ROW_STATUS_FILTERS = [
+  { value: 'all', label: '全部行' },
+  { value: 'ERROR', label: '错误' },
+  { value: 'WARNING', label: '警告' },
+  { value: 'VALID', label: '通过' },
+  { value: 'SYNCED', label: '已同步' },
+  { value: 'SKIPPED', label: '已跳过' },
+]
+
 const ROLE_LABELS: Record<UserResponse['role'], string> = {
   admin: '系统管理员',
   editor: '管理人员',
@@ -89,6 +115,7 @@ const PERMISSION_FILTERS = [
 ]
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50]
+const PREVIEW_ISSUE_LIMIT = 6
 
 const BULK_ACTIONS = [
   { value: 'role-editor', label: '设为管理人员' },
@@ -111,6 +138,37 @@ const emptyUserPage: AdminUserPage = {
   totalPages: 0,
 }
 
+const emptyBatchPage: DataUploadBatchPage = {
+  items: [],
+  page: 1,
+  size: 20,
+  total: 0,
+  totalPages: 0,
+}
+
+function normalizeBatchPagePayload(payload: unknown, fallbackPage: number, fallbackSize: number): DataUploadBatchPage {
+  if (payload && typeof payload === 'object' && Array.isArray((payload as DataUploadBatchPage).items)) {
+    const page = payload as DataUploadBatchPage
+    return {
+      items: page.items,
+      page: Number.isFinite(page.page) ? page.page : fallbackPage,
+      size: Number.isFinite(page.size) ? page.size : fallbackSize,
+      total: Number.isFinite(page.total) ? page.total : page.items.length,
+      totalPages: Number.isFinite(page.totalPages) ? page.totalPages : (page.items.length ? 1 : 0),
+    }
+  }
+  if (Array.isArray(payload)) {
+    return {
+      items: payload as DataUploadBatch[],
+      page: fallbackPage,
+      size: fallbackSize,
+      total: payload.length,
+      totalPages: payload.length ? 1 : 0,
+    }
+  }
+  return { ...emptyBatchPage, page: fallbackPage, size: fallbackSize }
+}
+
 const session = getStoredSession()
 const router = useRouter()
 const currentUser = ref<UserResponse | null>(session?.user ?? null)
@@ -124,16 +182,23 @@ const isLoadingRows = ref(false)
 const isLoadingUsers = ref(false)
 const isSavingUser = ref(false)
 const preview = ref<DataUploadPreview | null>(null)
+const selectedBatch = ref<DataUploadBatch | null>(null)
 const selectedRowsPage = ref<DataUploadRowsPage | null>(null)
-const batches = ref<DataUploadBatch[]>([])
+const batchPage = ref<DataUploadBatchPage>({ ...emptyBatchPage })
 const userPage = ref<AdminUserPage>({ ...emptyUserPage })
 const selectedUserIds = ref<Set<number>>(new Set())
 const editingUser = ref<UserResponse | null>(null)
 const bulkAction = ref('')
+const reviewNote = ref('')
 const message = ref('')
 const messageType = ref<'success' | 'error'>('success')
-const batchSearch = ref('')
-const batchStatusFilter = ref('all')
+const rowStatusFilter = ref<RowStatusFilter>('all')
+const batchFilters = reactive({
+  keyword: '',
+  status: 'all' as BatchStatusFilter,
+  scope: 'all' as BatchScopeFilter,
+  uploaderType: 'all' as BatchUploaderTypeFilter,
+})
 const userFilters = reactive({
   keyword: '',
   role: 'all' as UserResponse['role'] | 'all',
@@ -166,6 +231,27 @@ const canSyncPreview = computed(
     canSyncData.value &&
     ['PREVIEWED', 'PENDING_REVIEW'].includes(preview.value.batch.status),
 )
+const visibleHeaderErrors = computed(() => preview.value?.headerErrors.slice(0, PREVIEW_ISSUE_LIMIT) ?? [])
+const hiddenHeaderErrorCount = computed(() =>
+  Math.max(0, (preview.value?.headerErrors.length ?? 0) - PREVIEW_ISSUE_LIMIT),
+)
+const visibleBatchWarnings = computed(() => preview.value?.batchWarnings.slice(0, PREVIEW_ISSUE_LIMIT) ?? [])
+const hiddenBatchWarningCount = computed(() =>
+  Math.max(0, (preview.value?.batchWarnings.length ?? 0) - PREVIEW_ISSUE_LIMIT),
+)
+const previewBlockingMessage = computed(() => {
+  if (!preview.value) return ''
+  if (preview.value.batch.status === 'VALIDATION_FAILED') {
+    return '该文件未通过基础格式校验，不能同步入库。请确认存在“数据表”工作表，并按模板修正前 58 列字段后重新上传。'
+  }
+  if (preview.value.batch.errorRows > 0) {
+    return '存在阻断错误的行，不能同步入库。请查看行预览中的问题字段，修正后重新上传。'
+  }
+  if (preview.value.batch.status === 'REJECTED') {
+    return '该批次已被驳回，不能继续同步；如需入库请重新上传修正后的文件。'
+  }
+  return ''
+})
 
 const workspaceSections = computed(() => {
   const sections: Array<{ key: WorkspaceSection; title: string; caption: string }> = []
@@ -181,20 +267,10 @@ const workspaceSections = computed(() => {
   return sections
 })
 
-const filteredBatches = computed(() => {
-  const keyword = normalizeKeyword(batchSearch.value)
-  return batches.value.filter((batch) => {
-    const matchesStatus = batchStatusFilter.value === 'all' || batch.status === batchStatusFilter.value
-    const searchable = [
-      batch.fileName,
-      batch.uploadedByName,
-      statusLabel(batch.status),
-      batch.duplicateMessage ?? '',
-    ]
-      .join(' ')
-      .toLowerCase()
-    return matchesStatus && (!keyword || searchable.includes(keyword))
-  })
+const activeHeaderLabel = computed(() => {
+  if (activeSection.value === 'batches') return '上传记录'
+  if (activeSection.value === 'users') return '权限管理'
+  return '上传录入'
 })
 
 const selectableCurrentPageUsers = computed(() => userPage.value.items.filter((user) => user.role !== 'admin'))
@@ -236,10 +312,6 @@ function setActiveSection(section: WorkspaceSection) {
   activeSection.value = section
 }
 
-function normalizeKeyword(value: string) {
-  return value.trim().toLowerCase()
-}
-
 function statusLabel(status: string) {
   return STATUS_LABELS[status] ?? status
 }
@@ -251,6 +323,24 @@ function roleLabel(role: UserResponse['role']) {
 function formatDate(value?: string | null) {
   if (!value) return '未记录'
   return value.replace('T', ' ').slice(0, 16)
+}
+
+function formatMaybeDate(value?: string | null) {
+  return value ? formatDate(value) : '-'
+}
+
+function uploadRoleLabel(role?: string | null) {
+  if (role === 'admin') return '系统管理员'
+  if (role === 'editor') return '管理人员'
+  if (role === 'viewer') return '普通用户'
+  return '未知角色'
+}
+
+function uploadSourceLabel(batch: DataUploadBatch) {
+  if (batch.uploadedBy === currentUser.value?.userId) return '我的上传'
+  if (batch.uploadedByRole === 'viewer') return '普通用户上传'
+  if (batch.uploadedByRole === 'admin' || batch.uploadedByRole === 'editor') return '管理人员上传'
+  return '未知来源'
 }
 
 function userCapabilities(user: UserResponse) {
@@ -297,6 +387,7 @@ async function handlePreview() {
   try {
     isUploading.value = true
     preview.value = await uploadPreview(selectedFile.value)
+    selectedBatch.value = null
     selectedRowsPage.value = null
     await loadBatches()
     const { errorRows, warningRows, status } = preview.value.batch
@@ -320,9 +411,22 @@ async function handlePreviewSync() {
 }
 
 async function loadBatches() {
+  await loadBatchPage(batchPage.value.page)
+}
+
+async function loadBatchPage(page = batchPage.value.page) {
   try {
     isLoadingBatches.value = true
-    batches.value = await fetchUploads()
+    const response = await fetchUploads({
+      page,
+      size: batchPage.value.size,
+      keyword: batchFilters.keyword,
+      status: batchFilters.status,
+      scope: batchFilters.scope,
+      uploaderType: batchFilters.uploaderType,
+      sort: 'createdAt_desc',
+    })
+    batchPage.value = normalizeBatchPagePayload(response, page, batchPage.value.size)
   } catch (error) {
     setMessage('error', error instanceof Error ? error.message : '上传批次加载失败')
   } finally {
@@ -333,7 +437,8 @@ async function loadBatches() {
 async function loadRows(batch: DataUploadBatch, page = 1) {
   try {
     isLoadingRows.value = true
-    selectedRowsPage.value = await fetchUploadRows(batch.uploadId, page, 20)
+    selectedBatch.value = batch
+    selectedRowsPage.value = await fetchUploadRows(batch.uploadId, page, 20, rowStatusFilter.value)
   } catch (error) {
     setMessage('error', error instanceof Error ? error.message : '行预览加载失败')
   } finally {
@@ -341,8 +446,37 @@ async function loadRows(batch: DataUploadBatch, page = 1) {
   }
 }
 
+async function applyBatchFilters() {
+  await loadBatchPage(1)
+}
+
+async function changeBatchPageSize(event: Event) {
+  const select = event.target as HTMLSelectElement
+  batchPage.value = { ...batchPage.value, size: Number(select.value) }
+  await loadBatchPage(1)
+}
+
+async function changeRowStatusFilter() {
+  if (!selectedBatch.value) return
+  await loadRows(selectedBatch.value, 1)
+}
+
+function closeBatchDrawer() {
+  selectedBatch.value = null
+  selectedRowsPage.value = null
+  reviewNote.value = ''
+  rowStatusFilter.value = 'all'
+}
+
+function canApproveAndSync(batch: DataUploadBatch) {
+  if (batch.status === 'PENDING_REVIEW') {
+    return canReviewUploads.value && canSyncData.value
+  }
+  return batch.status === 'PREVIEWED' && canSyncData.value
+}
+
 async function handleBatchSync(batch: DataUploadBatch) {
-  if (!canSyncData.value) return
+  if (!canApproveAndSync(batch)) return
   const action = batch.status === 'PENDING_REVIEW' ? '通过审核并同步入库' : '同步入库'
   if (!window.confirm(`确定要${action}「${batch.fileName}」吗？`)) return
   try {
@@ -351,7 +485,11 @@ async function handleBatchSync(batch: DataUploadBatch) {
     if (preview.value?.batch.uploadId === batch.uploadId) {
       preview.value = { ...preview.value, batch: result.batch }
     }
+    selectedBatch.value = result.batch
     await loadBatches()
+    if (selectedRowsPage.value?.uploadId === batch.uploadId) {
+      await loadRows(result.batch, selectedRowsPage.value.page)
+    }
     const warningText = result.warnings.length ? `；${result.warnings.join('；')}` : ''
     setMessage('success', `已同步 ${result.insertedRows} 行，跳过重复 ${result.skippedRows} 行${warningText}`)
   } catch (error) {
@@ -362,11 +500,13 @@ async function handleBatchSync(batch: DataUploadBatch) {
 }
 
 async function handleRejectBatch(batch: DataUploadBatch) {
-  if (!canReviewUploads.value) return
+  if (!canReviewUploads.value || batch.status !== 'PENDING_REVIEW') return
   if (!window.confirm(`确定驳回「${batch.fileName}」吗？`)) return
   try {
-    await rejectUpload(batch.uploadId)
+    const rejectedBatch = await rejectUpload(batch.uploadId, reviewNote.value)
+    selectedBatch.value = rejectedBatch
     await loadBatches()
+    reviewNote.value = ''
     setMessage('success', '批次已驳回')
   } catch (error) {
     setMessage('error', error instanceof Error ? error.message : '驳回失败')
@@ -563,6 +703,11 @@ async function handleLogout() {
           <small>Data Entry Console</small>
         </span>
       </RouterLink>
+      <div class="header-title">
+        <strong>数据工作台</strong>
+        <span>/</span>
+        <em>{{ activeHeaderLabel }}</em>
+      </div>
       <nav class="entry-nav" aria-label="数据录入导航">
         <RouterLink to="/">首页</RouterLink>
         <RouterLink to="/map-visualization">地图可视化</RouterLink>
@@ -574,21 +719,13 @@ async function handleLogout() {
       <button class="logout-button" type="button" @click="handleLogout">退出</button>
     </header>
 
-    <section class="entry-title">
-      <p>DATA WORKSPACE</p>
-      <h1>数据工作台</h1>
-      <span>上传录入、上传批次和用户权限已经拆分为独立工作区。</span>
-    </section>
-
-    <p v-if="message" class="page-message" :class="messageType">{{ message }}</p>
-
     <section class="workspace-layout">
       <aside class="workspace-nav" aria-label="数据工作台模块">
         <button
           v-for="section in workspaceSections"
           :key="section.key"
           type="button"
-          :class="{ active: activeSection === section.key }"
+          :class="[{ active: activeSection === section.key }, `section-${section.key}`]"
           @click="setActiveSection(section.key)"
         >
           <strong>{{ section.title }}</strong>
@@ -597,11 +734,12 @@ async function handleLogout() {
       </aside>
 
       <div class="workspace-main">
+        <p v-if="message" class="page-message" :class="messageType">{{ message }}</p>
+
         <section v-if="activeSection === 'upload' && canUploadData" class="workspace-panel" aria-label="上传录入">
           <header class="section-head">
-            <span>UPLOAD</span>
-            <h2>上传录入</h2>
-            <p>先下载模板或按 WBE 汇总表整理字段，上传后完成字段识别、校验摘要和前 20 行预览。</p>
+            <h2>上传文件</h2>
+            <p>下载模板或按 WBE 汇总表整理字段，上传后完成字段识别、校验摘要和前 20 行预览。</p>
           </header>
 
           <div class="import-grid" aria-label="上传与校验">
@@ -655,13 +793,19 @@ async function handleLogout() {
                 </article>
               </div>
               <p v-else class="empty-state">上传文件后会显示字段识别、错误和警告摘要。</p>
-              <div v-if="preview?.headerErrors.length" class="issue-list error">
-                <strong>表头错误</strong>
-                <p v-for="item in preview.headerErrors" :key="item">{{ item }}</p>
+              <div v-if="previewBlockingMessage" class="issue-list blocker">
+                <strong>不能同步</strong>
+                <p>{{ previewBlockingMessage }}</p>
               </div>
-              <div v-if="preview?.batchWarnings.length" class="issue-list warning">
+              <div v-if="visibleHeaderErrors.length" class="issue-list error">
+                <strong>表头错误</strong>
+                <p v-for="item in visibleHeaderErrors" :key="item">{{ item }}</p>
+                <p v-if="hiddenHeaderErrorCount" class="issue-more">还有 {{ hiddenHeaderErrorCount }} 条表头错误未展开。</p>
+              </div>
+              <div v-if="visibleBatchWarnings.length" class="issue-list warning">
                 <strong>批次提示</strong>
-                <p v-for="item in preview.batchWarnings" :key="item">{{ item }}</p>
+                <p v-for="item in visibleBatchWarnings" :key="item">{{ item }}</p>
+                <p v-if="hiddenBatchWarningCount" class="issue-more">还有 {{ hiddenBatchWarningCount }} 条提示未展开。</p>
               </div>
               <p v-if="preview?.batch.status === 'PENDING_REVIEW'" class="review-note">
                 该批次已进入待审核队列，需由具备审核/同步权限的人员处理。
@@ -704,7 +848,10 @@ async function handleLogout() {
               <span>PREVIEW</span>
               <h3>前 {{ preview.previewRows.length }} 行预览</h3>
             </header>
-            <div class="table-scroll">
+            <p v-if="!preview.previewRows.length" class="empty-state">
+              当前批次没有可预览行；通常是工作表缺失、表头不匹配或文件解析失败，请按模板修正后重新上传。
+            </p>
+            <div v-else class="table-scroll">
               <table>
                 <thead>
                   <tr>
@@ -736,85 +883,260 @@ async function handleLogout() {
         </section>
 
         <section v-if="activeSection === 'batches' && canSeeBatchModule" class="workspace-panel" aria-label="上传批次">
-          <div class="module-toolbar">
+          <div class="module-toolbar compact-toolbar">
             <header class="section-head">
-              <span>HISTORY</span>
-              <h2>上传批次</h2>
-              <p>查看上传记录、下载原文件、预览行级问题，并处理待审核批次。</p>
+              <h2>上传记录</h2>
+              <p>按时间倒序查看上传记录。审核者可看全部批次，普通上传者只看自己的批次。</p>
             </header>
-            <div class="list-toolbar" aria-label="批次筛选">
+            <div class="list-toolbar batch-toolbar" aria-label="批次筛选">
               <label>
-                <span>搜索批次</span>
-                <input v-model.trim="batchSearch" type="search" placeholder="文件名 / 上传人 / 状态" />
+                <span>搜索</span>
+                <input v-model.trim="batchFilters.keyword" type="search" placeholder="文件名 / 上传人 / 状态" />
               </label>
               <label>
                 <span>状态</span>
-                <select v-model="batchStatusFilter">
+                <select v-model="batchFilters.status">
                   <option v-for="item in BATCH_STATUS_FILTERS" :key="item.value" :value="item.value">
                     {{ item.label }}
                   </option>
                 </select>
               </label>
-              <button type="button" @click="loadBatches">刷新</button>
+              <label>
+                <span>范围</span>
+                <select v-model="batchFilters.scope">
+                  <option v-for="item in BATCH_SCOPE_FILTERS" :key="item.value" :value="item.value">
+                    {{ item.label }}
+                  </option>
+                </select>
+              </label>
+              <label>
+                <span>上传人</span>
+                <select v-model="batchFilters.uploaderType">
+                  <option v-for="item in BATCH_UPLOADER_FILTERS" :key="item.value" :value="item.value">
+                    {{ item.label }}
+                  </option>
+                </select>
+              </label>
+              <button type="button" @click="applyBatchFilters">查询</button>
+              <button type="button" class="secondary-action compact" @click="loadBatches">刷新</button>
             </div>
           </div>
+
           <p v-if="isLoadingBatches" class="empty-state">正在加载上传批次。</p>
-          <p v-else-if="!filteredBatches.length" class="empty-state">没有匹配的上传批次。</p>
-          <div v-else class="history-list">
-            <article v-for="batch in filteredBatches" :key="batch.uploadId">
-              <div>
-                <strong>{{ batch.fileName }}</strong>
-                <span>{{ batch.uploadedByName }} / {{ formatDate(batch.createdAt) }}</span>
-              </div>
-              <span class="status-pill" :class="batch.status.toLowerCase()">
-                {{ statusLabel(batch.status) }}
-              </span>
-              <p>
-                {{ batch.totalRows }} 行，错误 {{ batch.errorRows }}，警告 {{ batch.warningRows }}，已入库
-                {{ batch.syncedRows }}
-              </p>
-              <div class="row-actions">
-                <button type="button" @click="loadRows(batch)">查看行</button>
-                <button type="button" :disabled="!currentUserCanDownload" @click="downloadBatch(batch)">下载原文件</button>
-                <button
-                  v-if="canSyncData && ['PREVIEWED', 'PENDING_REVIEW'].includes(batch.status)"
-                  type="button"
-                  @click="handleBatchSync(batch)"
-                >
-                  {{ batch.status === 'PENDING_REVIEW' ? '通过并同步' : '同步入库' }}
-                </button>
-                <button
-                  v-if="canReviewUploads && batch.status === 'PENDING_REVIEW'"
-                  type="button"
-                  class="danger-action"
-                  @click="handleRejectBatch(batch)"
-                >
-                  驳回
-                </button>
-              </div>
-            </article>
+          <p v-else-if="!batchPage.items.length" class="empty-state">没有匹配的上传批次。</p>
+          <div v-else class="table-scroll batch-table">
+            <table class="batch-list-table">
+              <thead>
+                <tr>
+                  <th>状态</th>
+                  <th>文件</th>
+                  <th>上传人</th>
+                  <th>行数 / 问题</th>
+                  <th>上传时间</th>
+                  <th>审核 / 同步</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="batch in batchPage.items" :key="batch.uploadId">
+                  <td>
+                    <span class="status-pill" :class="batch.status.toLowerCase()">
+                      {{ statusLabel(batch.status) }}
+                    </span>
+                  </td>
+                  <td class="batch-file-cell">
+                    <strong>{{ batch.fileName }}</strong>
+                    <span v-if="batch.duplicateMessage">{{ batch.duplicateMessage }}</span>
+                  </td>
+                  <td>
+                    <strong>{{ batch.uploadedByName }}</strong>
+                    <span class="muted">{{ uploadSourceLabel(batch) }} / {{ uploadRoleLabel(batch.uploadedByRole) }}</span>
+                  </td>
+                  <td class="batch-counts">
+                    <span>{{ batch.totalRows }} 行</span>
+                    <span>错 {{ batch.errorRows }}</span>
+                    <span>警 {{ batch.warningRows }}</span>
+                    <span>入库 {{ batch.syncedRows }}</span>
+                  </td>
+                  <td>{{ formatDate(batch.createdAt) }}</td>
+                  <td>
+                    <span class="audit-line">审：{{ batch.reviewedByName || '-' }} / {{ formatMaybeDate(batch.reviewedAt) }}</span>
+                    <span class="audit-line">同：{{ batch.syncedByName || '-' }} / {{ formatMaybeDate(batch.syncedAt) }}</span>
+                  </td>
+                  <td>
+                    <div class="row-actions compact-actions">
+                      <button type="button" @click="loadRows(batch)">
+                        {{ batch.status === 'PENDING_REVIEW' ? '查看/审核' : '查看' }}
+                      </button>
+                      <button type="button" :disabled="!currentUserCanDownload" @click="downloadBatch(batch)">下载</button>
+                      <button v-if="canApproveAndSync(batch)" type="button" @click="handleBatchSync(batch)">
+                        {{ batch.status === 'PENDING_REVIEW' ? '通过同步' : '同步' }}
+                      </button>
+                      <button
+                        v-if="canReviewUploads && batch.status === 'PENDING_REVIEW'"
+                        type="button"
+                        class="danger-action"
+                        @click="loadRows(batch)"
+                      >
+                        审核
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <div v-if="selectedRowsPage" class="rows-drawer">
-            <header>
-              <strong>批次 #{{ selectedRowsPage.uploadId }} 行预览</strong>
-              <span>{{ selectedRowsPage.total }} 行</span>
-            </header>
-            <p v-if="isLoadingRows" class="empty-state">正在加载行数据。</p>
-            <div v-else class="compact-rows">
-              <article v-for="row in selectedRowsPage.rows" :key="row.rowId">
-                <span>第 {{ row.excelRowNumber }} 行</span>
-                <strong>{{ row.data['药物'] || row.data['生物标记物名称'] || 'NA' }}</strong>
-                <em>{{ statusLabel(row.status) }}</em>
-                <p>{{ [...row.errors, ...row.warnings].join('；') || '通过' }}</p>
-              </article>
+
+          <div class="pagination-bar" aria-label="批次分页">
+            <span>共 {{ batchPage.total }} 条</span>
+            <label>
+              每页
+              <select :value="batchPage.size" @change="changeBatchPageSize">
+                <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
+              </select>
+            </label>
+            <button type="button" :disabled="batchPage.page <= 1" @click="loadBatchPage(batchPage.page - 1)">
+              上一页
+            </button>
+            <strong>第 {{ batchPage.page }} / {{ Math.max(batchPage.totalPages, 1) }} 页</strong>
+            <button
+              type="button"
+              :disabled="batchPage.totalPages === 0 || batchPage.page >= batchPage.totalPages"
+              @click="loadBatchPage(batchPage.page + 1)"
+            >
+              下一页
+            </button>
+          </div>
+
+          <Transition name="drawer-fade">
+            <div v-if="selectedBatch" class="batch-drawer-shell" role="dialog" aria-modal="true">
+              <button class="drawer-scrim" type="button" aria-label="关闭批次详情" @click="closeBatchDrawer"></button>
+              <aside class="batch-detail-drawer">
+                <header class="drawer-head">
+                  <div>
+                    <span>{{ statusLabel(selectedBatch.status) }}</span>
+                    <h3>{{ selectedBatch.fileName }}</h3>
+                    <p>{{ selectedBatch.uploadedByName }} / {{ uploadRoleLabel(selectedBatch.uploadedByRole) }}</p>
+                  </div>
+                  <button type="button" class="ghost-button" @click="closeBatchDrawer">关闭</button>
+                </header>
+
+                <div class="drawer-metrics">
+                  <article>
+                    <span>总行</span>
+                    <strong>{{ selectedBatch.totalRows }}</strong>
+                  </article>
+                  <article>
+                    <span>错误</span>
+                    <strong>{{ selectedBatch.errorRows }}</strong>
+                  </article>
+                  <article>
+                    <span>警告</span>
+                    <strong>{{ selectedBatch.warningRows }}</strong>
+                  </article>
+                  <article>
+                    <span>已入库</span>
+                    <strong>{{ selectedBatch.syncedRows }}</strong>
+                  </article>
+                </div>
+
+                <div class="drawer-audit">
+                  <p>上传时间：{{ formatDate(selectedBatch.createdAt) }}</p>
+                  <p>审核人：{{ selectedBatch.reviewedByName || '-' }} / {{ formatMaybeDate(selectedBatch.reviewedAt) }}</p>
+                  <p>同步人：{{ selectedBatch.syncedByName || '-' }} / {{ formatMaybeDate(selectedBatch.syncedAt) }}</p>
+                  <p v-if="selectedBatch.reviewNote">审核备注：{{ selectedBatch.reviewNote }}</p>
+                </div>
+
+                <div class="drawer-row-toolbar">
+                  <label>
+                    行状态
+                    <select v-model="rowStatusFilter" @change="changeRowStatusFilter">
+                      <option v-for="item in ROW_STATUS_FILTERS" :key="item.value" :value="item.value">
+                        {{ item.label }}
+                      </option>
+                    </select>
+                  </label>
+                  <span v-if="selectedRowsPage">{{ selectedRowsPage.total }} 行</span>
+                </div>
+
+                <p v-if="isLoadingRows" class="empty-state">正在加载行数据。</p>
+                <div v-else-if="selectedRowsPage" class="drawer-row-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>行</th>
+                        <th>状态</th>
+                        <th>目标物</th>
+                        <th>问题</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="row in selectedRowsPage.rows" :key="row.rowId">
+                        <td>{{ row.excelRowNumber }}</td>
+                        <td>
+                          <span class="status-pill" :class="row.status.toLowerCase()">
+                            {{ statusLabel(row.status) }}
+                          </span>
+                        </td>
+                        <td>{{ row.data['药物'] || row.data['生物标记物名称'] || row.data.biomarker || 'NA' }}</td>
+                        <td>{{ [...row.errors, ...row.warnings].join('；') || '通过' }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div class="pagination-bar drawer-pages">
+                    <button
+                      type="button"
+                      :disabled="selectedRowsPage.page <= 1"
+                      @click="selectedBatch && loadRows(selectedBatch, selectedRowsPage.page - 1)"
+                    >
+                      上一页
+                    </button>
+                    <strong>第 {{ selectedRowsPage.page }} 页</strong>
+                    <button
+                      type="button"
+                      :disabled="selectedRowsPage.page * selectedRowsPage.size >= selectedRowsPage.total"
+                      @click="selectedBatch && loadRows(selectedBatch, selectedRowsPage.page + 1)"
+                    >
+                      下一页
+                    </button>
+                  </div>
+                </div>
+
+                <footer class="drawer-actions">
+                  <textarea
+                    v-if="selectedBatch.status === 'PENDING_REVIEW' && canReviewUploads"
+                    v-model.trim="reviewNote"
+                    maxlength="500"
+                    placeholder="驳回原因（可选，最多 500 字）"
+                  ></textarea>
+                  <div>
+                    <button
+                      v-if="selectedBatch.status === 'PENDING_REVIEW' && canReviewUploads"
+                      type="button"
+                      class="danger-action"
+                      @click="handleRejectBatch(selectedBatch)"
+                    >
+                      驳回
+                    </button>
+                    <button
+                      v-if="canApproveAndSync(selectedBatch)"
+                      type="button"
+                      class="primary-action compact"
+                      :disabled="isSyncing"
+                      @click="handleBatchSync(selectedBatch)"
+                    >
+                      {{ selectedBatch.status === 'PENDING_REVIEW' ? '通过并同步' : '同步入库' }}
+                    </button>
+                  </div>
+                </footer>
+              </aside>
             </div>
-          </div>
+          </Transition>
         </section>
 
         <section v-if="activeSection === 'users' && currentUserIsAdmin" class="workspace-panel" aria-label="用户权限">
           <header class="section-head">
-            <span>ADMIN</span>
-            <h2>用户权限</h2>
+            <h2>账号权限</h2>
             <p>分页查看所有用户，按角色和功能筛选，支持跨页保留勾选并批量调整普通用户和管理人员权限。</p>
           </header>
 
@@ -856,15 +1178,17 @@ async function handleLogout() {
             <button type="button" @click="applyUserFilters">查询</button>
           </div>
 
-          <div v-if="selectedCount" class="bulk-toolbar">
-            <strong>已选择 {{ selectedCount }} 个用户</strong>
-            <select v-model="bulkAction">
-              <option value="">选择批量操作</option>
-              <option v-for="item in BULK_ACTIONS" :key="item.value" :value="item.value">{{ item.label }}</option>
-            </select>
-            <button type="button" @click="applyBulkAction">应用</button>
-            <button type="button" class="ghost-action" @click="clearSelectedUsers">清空选择</button>
-          </div>
+          <Transition name="selection-bar">
+            <div v-if="selectedCount" class="bulk-toolbar selection-toolbar">
+              <strong>已选择 {{ selectedCount }} 个用户</strong>
+              <select v-model="bulkAction">
+                <option value="">选择批量操作</option>
+                <option v-for="item in BULK_ACTIONS" :key="item.value" :value="item.value">{{ item.label }}</option>
+              </select>
+              <button type="button" @click="applyBulkAction">应用</button>
+              <button type="button" class="ghost-action" @click="clearSelectedUsers">清空选择</button>
+            </div>
+          </Transition>
 
           <p v-if="isLoadingUsers" class="empty-state">正在加载用户列表。</p>
           <div v-else class="user-table table-scroll">
@@ -930,10 +1254,11 @@ async function handleLogout() {
                   </td>
                   <td>{{ formatDate(user.lastLogin) }}</td>
                   <td>
+                    <span v-if="user.role === 'admin'" class="locked-action">系统保留</span>
                     <button
+                      v-else
                       type="button"
                       class="table-action"
-                      :disabled="user.role === 'admin'"
                       @click="openPermissionDrawer(user)"
                     >
                       编辑
@@ -1024,6 +1349,7 @@ async function handleLogout() {
 }
 
 .entry-shell {
+  --entry-header-height: 76px;
   min-height: 100vh;
 }
 
@@ -1032,10 +1358,11 @@ async function handleLogout() {
   top: 0;
   z-index: 20;
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto auto auto;
-  gap: 24px;
+  min-height: var(--entry-header-height);
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, auto) auto auto auto;
+  gap: 18px;
   align-items: center;
-  padding: 14px clamp(18px, 4vw, 56px);
+  padding: 12px clamp(18px, 3vw, 42px);
   border-bottom: 1px solid #d8e2e5;
   background: rgba(250, 252, 252, 0.94);
   backdrop-filter: blur(16px);
@@ -1122,6 +1449,40 @@ async function handleLogout() {
   font-size: 15px;
 }
 
+.header-title {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 4px;
+  color: #526a72;
+  white-space: nowrap;
+}
+
+.header-title strong,
+.header-title em {
+  color: #173247;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.header-title strong {
+  font-size: 18px;
+}
+
+.header-title em {
+  color: #34525b;
+  font-size: 16px;
+}
+
+.header-title span {
+  color: #8aa0a7;
+  font-size: 15px;
+  font-weight: 800;
+}
+
 .brand small,
 .operator-chip span {
   color: #61737a;
@@ -1165,18 +1526,13 @@ async function handleLogout() {
   white-space: nowrap;
 }
 
-.entry-title,
 .workspace-layout,
 .page-message {
-  width: min(1120px, calc(100% - 32px));
-  margin: 0 auto;
+  width: 100%;
+  margin-left: 0;
+  margin-right: auto;
 }
 
-.entry-title {
-  padding: 24px 0 16px;
-}
-
-.entry-title p,
 .section-head span,
 .requirements-copy span,
 .upload-panel header span,
@@ -1189,7 +1545,6 @@ async function handleLogout() {
   letter-spacing: 0;
 }
 
-.entry-title h1,
 .section-head h2,
 .section-head h3,
 .requirements-copy h3,
@@ -1200,28 +1555,25 @@ async function handleLogout() {
   letter-spacing: 0;
 }
 
-.entry-title h1 {
-  font-size: clamp(28px, 4vw, 40px);
-  line-height: 1.15;
+.section-head h2 {
+  color: #173247;
+  font-size: 26px;
+  line-height: 1.18;
 }
 
-.entry-title span,
 .section-head p,
 .requirements-copy p,
 .review-note,
 .permission-drawer p {
+  margin: 0;
   color: #5e747b;
+  font-size: 14px;
   line-height: 1.55;
 }
 
-.entry-title span {
-  display: block;
-  max-width: 680px;
-  font-size: 14px;
-}
-
 .page-message {
-  margin-bottom: 18px;
+  width: min(1280px, calc(100% - 48px));
+  margin: 16px auto 0;
   padding: 12px 14px;
   border-radius: 8px;
   font-size: 14px;
@@ -1241,40 +1593,56 @@ async function handleLogout() {
 
 .workspace-layout {
   display: grid;
-  grid-template-columns: 168px minmax(0, 1fr);
-  gap: 16px;
-  padding-bottom: 32px;
+  min-height: calc(100vh - var(--entry-header-height));
+  grid-template-columns: 196px minmax(0, 1fr);
+  gap: 0;
+  padding-bottom: 0;
+}
+
+.workspace-main {
+  min-width: 0;
 }
 
 .workspace-nav {
   position: sticky;
-  top: 78px;
+  top: var(--entry-header-height);
   display: grid;
+  min-height: calc(100vh - var(--entry-header-height));
   align-self: start;
-  gap: 6px;
-  padding: 6px;
-  border: 1px solid #d5e1e4;
-  border-radius: 8px;
-  background: #ffffff;
+  align-content: start;
+  gap: 8px;
+  padding: 18px 12px;
+  border-right: 1px solid #d5e1e4;
+  background: #f8fbfb;
 }
 
 .workspace-nav button {
   position: relative;
   display: grid;
   gap: 3px;
-  min-height: 48px;
-  padding: 8px 10px 8px 14px;
+  min-height: 52px;
+  width: 100%;
+  padding: 9px 10px 9px 16px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   background: transparent;
   color: #48626a;
   cursor: pointer;
   text-align: left;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
 }
 
 .workspace-nav button.active {
-  background: #eaf5f5;
-  color: #0f4f5c;
+  background: var(--section-bg, #eaf5f5);
+  color: var(--section-color, #0f4f5c);
+}
+
+.workspace-nav button:hover {
+  transform: translateX(1px);
+  background: var(--section-bg, #f4f8f9);
 }
 
 .workspace-nav button.active::before {
@@ -1284,8 +1652,23 @@ async function handleLogout() {
   left: 5px;
   width: 3px;
   border-radius: 999px;
-  background: #0f4f5c;
+  background: var(--section-color, #0f4f5c);
   content: '';
+}
+
+.workspace-nav button.section-upload {
+  --section-color: #0f6b7c;
+  --section-bg: #e6f4f6;
+}
+
+.workspace-nav button.section-batches {
+  --section-color: #946118;
+  --section-bg: #fff4dc;
+}
+
+.workspace-nav button.section-users {
+  --section-color: #315f68;
+  --section-bg: #e8f1f3;
 }
 
 .workspace-nav strong {
@@ -1299,12 +1682,16 @@ async function handleLogout() {
 .workspace-panel {
   display: grid;
   gap: 14px;
+  width: min(1280px, calc(100% - 48px));
+  margin: 22px auto 36px;
+  animation: panel-enter 180ms ease;
 }
 
 .section-head {
   display: grid;
   justify-items: start;
-  gap: 4px;
+  gap: 6px;
+  max-width: 820px;
 }
 
 .section-head.compact {
@@ -1399,6 +1786,12 @@ async function handleLogout() {
   font-weight: 800;
   font-size: 13px;
   white-space: nowrap;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
 }
 
 .secondary-action,
@@ -1412,6 +1805,21 @@ async function handleLogout() {
   background: #a83d31 !important;
 }
 
+.primary-action:hover:not(:disabled),
+.secondary-action:hover:not(:disabled),
+.template-actions button:hover:not(:disabled),
+.list-toolbar button:hover:not(:disabled),
+.permission-filters button:hover:not(:disabled),
+.bulk-toolbar button:hover:not(:disabled),
+.pagination-bar button:hover:not(:disabled),
+.row-actions button:hover:not(:disabled),
+.table-action:hover:not(:disabled),
+.logout-button:hover:not(:disabled),
+.ghost-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(15, 79, 92, 0.12);
+}
+
 button:disabled {
   background: #9fb2b8 !important;
   cursor: not-allowed;
@@ -1419,6 +1827,11 @@ button:disabled {
 
 .primary-action {
   width: 100%;
+}
+
+.primary-action.compact,
+.secondary-action.compact {
+  width: auto;
 }
 
 .panel-head {
@@ -1487,6 +1900,18 @@ button:disabled {
   margin: 8px 0;
   padding: 10px;
   border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.issue-list p {
+  margin: 4px 0 0;
+}
+
+.issue-list.blocker {
+  border: 1px solid #efc5c0;
+  background: #fff2f0;
+  color: #8e2f26;
 }
 
 .issue-list.error {
@@ -1497,6 +1922,12 @@ button:disabled {
 .issue-list.warning {
   background: #fff8e6;
   color: #855b11;
+}
+
+.issue-more {
+  color: inherit;
+  opacity: 0.72;
+  font-weight: 800;
 }
 
 .empty-state {
@@ -1624,6 +2055,95 @@ td {
   align-items: end;
 }
 
+.compact-toolbar {
+  grid-template-columns: minmax(260px, 0.9fr) minmax(560px, 1.6fr);
+}
+
+.batch-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.batch-toolbar label {
+  flex: 1 1 128px;
+  min-width: 120px;
+}
+
+.batch-toolbar label:first-child {
+  flex-basis: 220px;
+}
+
+.batch-toolbar button {
+  flex: 0 0 auto;
+}
+
+tbody tr {
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+tbody tr:hover {
+  background: #f7fbfb;
+}
+
+.batch-table table {
+  min-width: 1120px;
+}
+
+.batch-list-table th,
+.batch-list-table td {
+  vertical-align: middle;
+}
+
+.batch-file-cell strong,
+.batch-file-cell span,
+.muted,
+.audit-line {
+  display: block;
+}
+
+.batch-file-cell strong {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-file-cell span,
+.muted,
+.audit-line {
+  color: #647981;
+  font-size: 12px;
+}
+
+.batch-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.batch-counts span {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #edf3f4;
+  color: #47656e;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.compact-actions {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.compact-actions button {
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
 .history-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1665,6 +2185,42 @@ td {
   background: #edf7f7;
 }
 
+.selection-toolbar {
+  min-height: 42px;
+  margin-top: -2px;
+  padding: 7px 10px;
+  border-color: #b9d4d8;
+  background: #f0f8f8;
+}
+
+.selection-bar-enter-active,
+.selection-bar-leave-active {
+  overflow: hidden;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease,
+    max-height 160ms ease,
+    margin 160ms ease,
+    padding 160ms ease;
+}
+
+.selection-bar-enter-from,
+.selection-bar-leave-to {
+  max-height: 0;
+  margin-top: -8px;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+.selection-bar-enter-to,
+.selection-bar-leave-from {
+  max-height: 56px;
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .bulk-toolbar select {
   width: min(240px, 100%);
 }
@@ -1692,6 +2248,19 @@ td {
   white-space: nowrap;
 }
 
+.permission-table th:nth-child(1),
+.permission-table td:nth-child(1),
+.permission-table th:nth-child(3),
+.permission-table td:nth-child(3),
+.permission-table th:nth-child(5),
+.permission-table td:nth-child(5),
+.permission-table th:nth-child(6),
+.permission-table td:nth-child(6),
+.permission-table th:nth-child(7),
+.permission-table td:nth-child(7) {
+  text-align: center;
+}
+
 .permission-table .select-col {
   width: 78px;
 }
@@ -1717,7 +2286,7 @@ td {
 }
 
 .permission-table .action-col {
-  width: 82px;
+  width: 96px;
 }
 
 .permission-table tr.muted {
@@ -1728,6 +2297,7 @@ td {
   display: inline-flex;
   gap: 8px;
   align-items: center;
+  justify-content: center;
 }
 
 .user-info-cell strong,
@@ -1741,6 +2311,7 @@ td {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+  align-items: center;
 }
 
 .capability-list i {
@@ -1767,6 +2338,19 @@ td {
 .account-status.active {
   background: #e5f4ed;
   color: #286344;
+}
+
+.locked-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: #edf3f4;
+  color: #5b737b;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .table-empty {
@@ -1814,7 +2398,235 @@ td {
   border-radius: 6px;
 }
 
+.batch-drawer-shell,
+.drawer-backdrop {
+  animation: fade-in 160ms ease;
+}
+
+.drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 44;
+  border: 0;
+  background: rgba(18, 38, 45, 0.28);
+  cursor: pointer;
+}
+
+.batch-detail-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 45;
+  display: grid;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
+  gap: 12px;
+  width: min(720px, 100%);
+  height: 100%;
+  padding: 18px;
+  background: #ffffff;
+  box-shadow: -22px 0 42px rgba(21, 50, 58, 0.18);
+  animation: drawer-slide 180ms ease;
+}
+
+.drawer-head,
+.drawer-row-toolbar,
+.drawer-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.drawer-head h3 {
+  max-width: 520px;
+  margin: 3px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawer-head span {
+  color: #53727a;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.ghost-button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid #c9d8dc;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #173247;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.drawer-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.drawer-metrics article,
+.drawer-audit,
+.drawer-row-toolbar {
+  padding: 10px;
+  border: 1px solid #d8e2e5;
+  border-radius: 8px;
+  background: #f8fbfb;
+}
+
+.drawer-metrics span,
+.drawer-metrics strong {
+  display: block;
+}
+
+.drawer-metrics span,
+.drawer-audit p {
+  color: #607780;
+  font-size: 12px;
+}
+
+.drawer-metrics strong {
+  margin-top: 4px;
+  font-size: 20px;
+}
+
+.drawer-audit {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+}
+
+.drawer-audit p {
+  margin: 0;
+}
+
+.drawer-row-toolbar label {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: #526a72;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.drawer-row-toolbar select,
+.drawer-actions textarea {
+  border: 1px solid #c9d8dc;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #173247;
+}
+
+.drawer-row-toolbar select {
+  min-height: 32px;
+  padding: 0 8px;
+}
+
+.drawer-row-table {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid #d8e2e5;
+  border-radius: 8px;
+}
+
+.drawer-row-table table {
+  min-width: 640px;
+}
+
+.drawer-pages {
+  position: sticky;
+  bottom: 0;
+  padding: 8px;
+  border-top: 1px solid #d8e2e5;
+  background: #ffffff;
+}
+
+.drawer-actions {
+  align-items: flex-end;
+  padding-top: 10px;
+  border-top: 1px solid #d8e2e5;
+}
+
+.drawer-actions textarea {
+  min-height: 64px;
+  flex: 1;
+  resize: vertical;
+  padding: 8px 10px;
+}
+
+.drawer-actions > div {
+  display: flex;
+  gap: 8px;
+}
+
+.drawer-fade-enter-active,
+.drawer-fade-leave-active {
+  transition: opacity 160ms ease;
+}
+
+.drawer-fade-enter-from,
+.drawer-fade-leave-to {
+  opacity: 0;
+}
+
+.permission-drawer {
+  animation: drawer-slide 180ms ease;
+}
+
+@keyframes panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes drawer-slide {
+  from {
+    transform: translateX(18px);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+  }
+}
+
 @media (max-width: 980px) {
+  .workspace-layout,
+  .page-message {
+    width: min(100% - 28px, 100%);
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .entry-shell {
+    --entry-header-height: auto;
+  }
+
   .entry-header,
   .workspace-layout,
   .requirements-band,
@@ -1822,8 +2634,24 @@ td {
   .history-list,
   .list-toolbar,
   .permission-filters,
-  .module-toolbar {
+  .module-toolbar,
+  .compact-toolbar,
+  .batch-toolbar {
     grid-template-columns: 1fr;
+  }
+
+  .entry-header {
+    position: sticky;
+    gap: 12px;
+  }
+
+  .header-title small {
+    white-space: normal;
+  }
+
+  .workspace-layout {
+    min-height: auto;
+    padding: 14px 0 28px;
   }
 
   .workspace-nav {
@@ -1833,6 +2661,7 @@ td {
     padding: 0;
     border: 0;
     background: transparent;
+    min-height: auto;
   }
 
   .workspace-nav button {
@@ -1840,9 +2669,22 @@ td {
     background: #ffffff;
   }
 
+  .workspace-panel {
+    width: 100%;
+    margin: 14px 0 0;
+  }
+
   .summary-metrics,
   .requirements-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .batch-detail-drawer {
+    width: min(100%, 560px);
+  }
+
+  .drawer-audit {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1857,6 +2699,19 @@ td {
 
   .compact-rows article {
     grid-template-columns: 1fr;
+  }
+
+  .drawer-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .drawer-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .drawer-actions > div {
+    justify-content: flex-end;
   }
 }
 </style>

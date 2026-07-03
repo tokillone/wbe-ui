@@ -1,5 +1,5 @@
 import type { UserResponse } from './auth'
-import { authHeaders } from './session'
+import { requestApi } from './api'
 
 export interface AdminUserPage {
   items: UserResponse[]
@@ -42,32 +42,6 @@ export interface BulkUserPermissionResult {
   updatedUsers: UserResponse[]
 }
 
-interface ApiResponse<T> {
-  code: number
-  message: string
-  data: T
-}
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
-
-async function requestAdmin<T>(endpoint: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders(),
-      ...(options?.headers ?? {}),
-    },
-  })
-  const result = (await response.json().catch(() => null)) as ApiResponse<T> | null
-
-  if (!response.ok || result?.code !== 200) {
-    throw new Error(result?.message || '管理员请求失败')
-  }
-
-  return result.data
-}
-
 function appendParam(params: URLSearchParams, key: string, value: unknown) {
   if (value === undefined || value === null || value === '' || value === 'all') return
   params.set(key, String(value))
@@ -76,26 +50,28 @@ function appendParam(params: URLSearchParams, key: string, value: unknown) {
 export function fetchUsers(query: UserQueryParams = {}) {
   const params = new URLSearchParams()
   appendParam(params, 'page', query.page ?? 1)
-  appendParam(params, 'size', query.size ?? 20)
+  appendParam(params, 'size', query.size ?? 10)
   appendParam(params, 'keyword', query.keyword?.trim())
   appendParam(params, 'role', query.role)
   appendParam(params, 'canUpload', query.canUpload)
   appendParam(params, 'canReviewUploads', query.canReviewUploads)
   appendParam(params, 'canSyncData', query.canSyncData)
   appendParam(params, 'canDownload', query.canDownload)
-  return requestAdmin<AdminUserPage>(`/admin/users?${params}`)
+  return requestApi<AdminUserPage>(`/admin/users?${params}`)
 }
 
 export function updateUserPermissions(userId: number, payload: UserPermissionPayload) {
-  return requestAdmin<UserResponse>(`/admin/users/${userId}/permissions`, {
+  return requestApi<UserResponse>(`/admin/users/${userId}/permissions`, {
     method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
 }
 
 export function bulkUpdateUserPermissions(payload: BulkUserPermissionPayload) {
-  return requestAdmin<BulkUserPermissionResult>('/admin/users/bulk-permissions', {
+  return requestApi<BulkUserPermissionResult>('/admin/users/bulk-permissions', {
     method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
 }

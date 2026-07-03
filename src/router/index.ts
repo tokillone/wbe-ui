@@ -17,6 +17,11 @@ const routes: RouteRecordRaw[] = [
     name: 'map-visualization',
     component: () => import('../views/MapVisualizationView.vue'),
   },
+  {
+    path: '/icd11-sankey',
+    name: 'icd11-sankey',
+    component: () => import('../views/Icd11SankeyView.vue'),
+  },
 ]
 
 if (dataEntryView) {

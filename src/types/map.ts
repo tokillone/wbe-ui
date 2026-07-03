@@ -5,18 +5,31 @@ export interface MapBiomarkerOption {
 }
 
 export interface MapFilterSelection {
+  targetClass: string
   category: string
   subcategory: string
   biomarkerKey: string
   year: string
 }
 
+export interface MapDiagnostics {
+  statsRowCount: number
+  positivePndlCount: number
+  convertiblePndlCount: number
+  mappablePndlCount: number
+  geoLocationCount: number
+  message?: string | null
+}
+
 export interface MapFilterResponse {
+  targetClasses: string[]
   categories: string[]
+  categoriesByTargetClass: Record<string, string[]>
   subcategoriesByCategory: Record<string, string[]>
   biomarkersByCategorySubcategory: Record<string, MapBiomarkerOption[]>
   yearsBySelection: Record<string, string[]>
   defaultSelection: MapFilterSelection
+  diagnostics?: MapDiagnostics | null
 }
 
 export interface MapLegend {
@@ -68,6 +81,7 @@ export interface MapStatsResponse {
   summary: MapSummary
   regions: MapRegionStat[]
   points: MapRegionStat[]
+  diagnostics?: MapDiagnostics | null
 }
 
 export interface MapSourceRecord {

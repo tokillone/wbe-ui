@@ -77,12 +77,19 @@ interface BiomarkerSubclassOption {
   biomarkerCount?: number
 }
 
+interface TargetCategoryOption {
+  value: string
+  name: string
+  frequency?: number
+  targetGroup?: TargetGroupMode | string
+}
+
 interface BiomarkerFrequencyItem {
   name: string
   frequency: number
   category?: string
   targetCategory?: string
-  targetGroup?: TargetGroupMode
+  targetGroup?: TargetGroupMode | string
   docs?: number
   rows?: number
   tone?: string
@@ -135,6 +142,7 @@ interface HomeData {
   factors: FactorItem[]
   categories: CategoryItem[]
   biomarkerFrequencies: BiomarkerFrequencyItem[]
+  targetCategoryOptions?: TargetCategoryOption[]
   keywords: WordCloudItem[]
   catalogItems: CatalogItem[]
   accessRules: AccessRuleItem[]
@@ -157,6 +165,7 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const HOME_OVERVIEW_ENDPOINT = '/api/home/overview'
 const shouldFetchHomeOverview = import.meta.env.VITE_ENABLE_HOME_OVERVIEW_API === 'true'
 const DEFAULT_SUBCLASS = '默认'
+const TARGET_CATEGORY_ALL = 'all'
 const DETAIL_COLUMN_WIDTH = 56
 const DETAIL_COLUMN_MIN_WIDTH = 420
 const BIOMARKER_CHART_PALETTE = [
@@ -177,11 +186,6 @@ const BIOMARKER_SORT_OPTIONS: { mode: BiomarkerSortMode; label: string }[] = [
   { mode: 'frequency', label: '高到低' },
   { mode: 'frequencyAsc', label: '低到高' },
   { mode: 'name', label: '名称' },
-]
-const TARGET_GROUP_OPTIONS: { mode: TargetGroupMode; label: string }[] = [
-  { mode: 'all', label: '全部' },
-  { mode: 'drug', label: '药物类' },
-  { mode: 'consumer', label: '消费品类' },
 ]
 
 const mockHomeData: HomeData = {
@@ -543,9 +547,9 @@ const currentOverviewIndex = ref(0)
 const isOverviewPaused = ref(false)
 const activeKeyword = ref<string | null>(null)
 const selectedBiomarkerName = ref('')
-const selectedTargetGroup = ref<TargetGroupMode>('all')
+const selectedTargetCategory = ref(TARGET_CATEGORY_ALL)
 const selectedSubclassName = ref('')
-const biomarkerSortMode = ref<BiomarkerSortMode>('frequencyAsc')
+const biomarkerSortMode = ref<BiomarkerSortMode>('frequency')
 const selectedWord = ref<WordCloudItem | null>(null)
 const wordPopoverStyle = ref<Record<string, string>>({})
 
@@ -751,6 +755,32 @@ const categoryFrequencyFallback = computed<BiomarkerFrequencyItem[]>(() => {
     }
   })
 })
+const targetCategoryOptions = computed<TargetCategoryOption[]>(() => {
+  const supplied = homeData.value.targetCategoryOptions ?? []
+  const normalized = supplied
+    .map((option) => {
+      const value = `${option.value ?? option.name ?? ''}`.trim()
+      const name = `${option.name ?? option.value ?? ''}`.trim()
+      return {
+        ...option,
+        value,
+        name,
+        frequency: normalizeCount(option.frequency),
+      }
+    })
+    .filter((option) => option.value && option.name)
+
+  const options = normalized.length ? normalized : [{ value: TARGET_CATEGORY_ALL, name: '全部' }]
+  const hasAllOption = options.some((option) => option.value === TARGET_CATEGORY_ALL)
+
+  return hasAllOption ? options : [{ value: TARGET_CATEGORY_ALL, name: '全部' }, ...options]
+})
+const selectedTargetCategoryOption = computed(
+  () =>
+    targetCategoryOptions.value.find((option) => option.value === selectedTargetCategory.value) ??
+    targetCategoryOptions.value[0] ??
+    { value: TARGET_CATEGORY_ALL, name: '全部' },
+)
 const rawBiomarkerFrequencies = computed<BiomarkerFrequencyItem[]>(() => {
   const fallback = categoryFrequencyFallback.value
   const supplied = homeData.value.biomarkerFrequencies ?? []
@@ -786,7 +816,7 @@ const rawBiomarkerFrequencies = computed<BiomarkerFrequencyItem[]>(() => {
         subclassOptions,
       }
     })
-    .filter((item) => item.name && item.frequency > 0 && matchesTargetGroup(item))
+    .filter((item) => item.name && item.frequency > 0 && matchesTargetCategory(item))
 
   return normalizedItems.sort((a, b) => {
     if (biomarkerSortMode.value === 'name') {
@@ -906,6 +936,14 @@ const visualEntryItems = computed(() => [
     route: '/map-visualization',
   },
   {
+    icon: 'sankey',
+    title: 'ICD11 桑基图',
+    value: '10 类',
+    detail: '串联疾病分类、药物与生物标记物',
+    target: 'icd11-sankey',
+    route: '/icd11-sankey',
+  },
+  {
     icon: 'cloud',
     title: '因子词云',
     value: metricText('markers', '601', '项'),
@@ -967,7 +1005,7 @@ const wordCloudRows = computed(() => {
 
   return rows.map((items, index) => ({
     key: `word-row-${index}`,
-    duration: `${112 + index * 18}s`,
+    duration: `${155 + index * 30}s`,
     reverse: index % 2 === 1,
     items: [...items, ...items],
   }))
@@ -1030,16 +1068,16 @@ function shortBiomarkerName(name: string) {
   return `${normalized.slice(0, 4)}…${normalized.slice(-2)}`
 }
 
-function matchesTargetGroup(item: BiomarkerFrequencyItem) {
-  if (selectedTargetGroup.value === 'all') return true
-  const itemGroup = item.targetGroup
+function matchesTargetCategory(item: BiomarkerFrequencyItem) {
+  if (selectedTargetCategory.value === TARGET_CATEGORY_ALL) return true
   const itemCategory = item.targetCategory ?? item.category
 
-  if (selectedTargetGroup.value === 'drug') {
-    return itemGroup === 'drug' || itemCategory === '药物类'
-  }
+  return itemCategory === selectedTargetCategory.value
+}
 
-  return itemGroup === 'consumer' || (!!itemCategory && itemCategory !== '药物类')
+function formatTargetCategoryOption(option: TargetCategoryOption) {
+  if (option.value === TARGET_CATEGORY_ALL) return option.name
+  return `${option.name}（${formatNumber(option.frequency)}）`
 }
 
 function getAxisTop(value: number) {
@@ -1092,7 +1130,9 @@ async function loadHomeData() {
   if (!shouldFetchHomeOverview) return
 
   try {
-    const endpoint = `${HOME_OVERVIEW_ENDPOINT}?targetGroup=${selectedTargetGroup.value}`
+    const params = new URLSearchParams()
+    params.set('targetCategory', selectedTargetCategory.value)
+    const endpoint = `${HOME_OVERVIEW_ENDPOINT}?${params.toString()}`
     const response = await fetch(endpoint, {
       headers: {
         Accept: 'application/json',
@@ -1116,11 +1156,21 @@ async function loadHomeData() {
       biomarkerFrequencies: result.biomarkerFrequencies?.length
         ? result.biomarkerFrequencies
         : mockHomeData.biomarkerFrequencies,
+      targetCategoryOptions: result.targetCategoryOptions?.length
+        ? result.targetCategoryOptions
+        : (homeData.value.targetCategoryOptions ?? mockHomeData.targetCategoryOptions),
       keywords: result.keywords?.length ? result.keywords : mockHomeData.keywords,
       catalogItems: result.catalogItems?.length ? result.catalogItems : mockHomeData.catalogItems,
       accessRules: result.accessRules?.length ? result.accessRules : mockHomeData.accessRules,
       homeModules: result.homeModules?.length ? result.homeModules : mockHomeData.homeModules,
       activity: result.activity?.length ? result.activity : mockHomeData.activity,
+    }
+
+    const hasSelectedTargetCategory = targetCategoryOptions.value.some(
+      (option) => option.value === selectedTargetCategory.value,
+    )
+    if (!hasSelectedTargetCategory) {
+      selectedTargetCategory.value = TARGET_CATEGORY_ALL
     }
 
     const hasSelectedBiomarker = homeData.value.biomarkerFrequencies.some(
@@ -1158,9 +1208,10 @@ function selectBiomarker(name: string) {
   selectedSubclassName.value = ''
 }
 
-function selectTargetGroup(mode: TargetGroupMode) {
-  if (selectedTargetGroup.value === mode) return
-  selectedTargetGroup.value = mode
+function selectTargetCategory(event: Event) {
+  const value = (event.target as HTMLSelectElement).value || TARGET_CATEGORY_ALL
+  if (selectedTargetCategory.value === value) return
+  selectedTargetCategory.value = value
   selectedBiomarkerName.value = ''
   selectedSubclassName.value = ''
   void loadHomeData()
@@ -1311,6 +1362,15 @@ function openMapVisualization() {
 
 function preloadMapVisualization() {
   void import('./MapVisualizationView.vue')
+}
+
+function preloadIcd11Sankey() {
+  void import('./Icd11SankeyView.vue')
+}
+
+function preloadVisualRoute(route?: string) {
+  if (route === '/map-visualization') preloadMapVisualization()
+  if (route === '/icd11-sankey') preloadIcd11Sankey()
 }
 
 function handleVisualEntry(item: { target: string; route?: string }) {
@@ -1576,6 +1636,13 @@ onBeforeUnmount(() => {
         >
           地图可视化
         </RouterLink>
+        <RouterLink
+          to="/icd11-sankey"
+          @mouseenter="preloadIcd11Sankey"
+          @focus="preloadIcd11Sankey"
+        >
+          ICD11 桑基图
+        </RouterLink>
         <RouterLink v-if="canAccessDataEntry" to="/data-entry">数据录入</RouterLink>
         <a href="#visual">图谱分析</a>
         <a href="#methods">方法与质量</a>
@@ -1679,10 +1746,10 @@ onBeforeUnmount(() => {
       <div class="glance-inner">
         <div class="glance-heading">
           <div class="glance-title">
-            <p class="section-kicker">VISUAL ENTRY</p>
+          <p class="section-kicker">VISUAL ENTRY</p>
             <h2 id="glanceTitle">可视化与数据入口</h2>
           </div>
-          <p class="glance-lead">空间分布、标记物词云、类别走势与文献证据集中检索。</p>
+          <p class="glance-lead">空间分布、ICD11 桑基图、标记物词云、类别走势与文献证据集中检索。</p>
         </div>
         <div class="glance-grid">
           <button
@@ -1690,8 +1757,8 @@ onBeforeUnmount(() => {
             :key="item.title"
             type="button"
             class="glance-item"
-            @mouseenter="item.route === '/map-visualization' && preloadMapVisualization()"
-            @focus="item.route === '/map-visualization' && preloadMapVisualization()"
+            @mouseenter="preloadVisualRoute(item.route)"
+            @focus="preloadVisualRoute(item.route)"
             @click="handleVisualEntry(item)"
           >
             <span class="glance-icon" :class="item.icon" aria-hidden="true"></span>
@@ -1718,19 +1785,19 @@ onBeforeUnmount(() => {
           </div>
           <div class="dossier-guide" aria-label="数据说明导览">
             <article>
-              <span>开放字段</span>
-              <strong>字段可检索</strong>
-              <p>目标物质、标记物、空间覆盖和文献证据面向访客开放。</p>
+              <span>可检索内容</span>
+              <strong>查字段与对象</strong>
+              <p>访客可检索目标物质、标记物、地区覆盖和文献证据字段。</p>
             </article>
             <article>
-              <span>权限边界</span>
-              <strong>下载受控</strong>
-              <p>完整数据包导出前需要登录，并记录筛选条件与用途。</p>
+              <span>使用边界</span>
+              <strong>分级开放使用</strong>
+              <p>检索开放，完整下载需登录；数据录入和维护仅限操作员。</p>
             </article>
             <article>
               <span>证据追踪</span>
-              <strong>来源可回溯</strong>
-              <p>保留 DOI、年份、期刊和字段版本，便于复核与更新。</p>
+              <strong>来源与版本可查</strong>
+              <p>保留 DOI、年份、期刊、地区覆盖和字段版本用于复核。</p>
             </article>
           </div>
         </div>
@@ -1738,7 +1805,7 @@ onBeforeUnmount(() => {
         <div class="dossier-body">
           <article class="metadata-panel field-panel">
             <header>
-              <span>数据说明</span>
+              <span>字段结构</span>
               <strong>开放检索字段</strong>
             </header>
             <div class="field-table" role="table" aria-label="开放检索字段">
@@ -1850,19 +1917,22 @@ onBeforeUnmount(() => {
             <section class="biomarker-bar-section" aria-label="目标物质类别 DOI 去重累计研究数">
               <div class="frequency-chart-shell">
                 <div class="frequency-chart-toolbar" aria-label="目标物质类别图表控制">
-                  <div class="biomarker-filter-control" role="group" aria-label="目标范围筛选">
+                  <label class="biomarker-filter-control" aria-label="目标范围筛选">
                     <span>范围</span>
-                    <button
-                      v-for="option in TARGET_GROUP_OPTIONS"
-                      :key="option.mode"
-                      type="button"
-                      :class="{ active: selectedTargetGroup === option.mode }"
-                      :aria-pressed="selectedTargetGroup === option.mode"
-                      @click="selectTargetGroup(option.mode)"
+                    <select
+                      :value="selectedTargetCategory"
+                      :title="selectedTargetCategoryOption.name"
+                      @change="selectTargetCategory"
                     >
-                      {{ option.label }}
-                    </button>
-                  </div>
+                      <option
+                        v-for="option in targetCategoryOptions"
+                        :key="option.value"
+                        :value="option.value"
+                      >
+                        {{ formatTargetCategoryOption(option) }}
+                      </option>
+                    </select>
+                  </label>
                   <div class="biomarker-sort-control" role="group" aria-label="排序方式">
                     <span>排序</span>
                     <button
@@ -1956,14 +2026,13 @@ onBeforeUnmount(() => {
                       :key="item.name"
                       class="detail-column-bar"
                       :style="{ '--detail-bar-height': item.barHeight, '--detail-color': item.tone }"
-                      :title="`${item.name} · DOI 去重研究数 ${formatNumber(item.frequency)}`"
                       :aria-label="`${item.name}，DOI 去重研究数 ${formatNumber(item.frequency)}`"
                     >
                       <strong>{{ formatNumber(item.frequency) }}</strong>
                       <div>
                         <i></i>
                       </div>
-                      <span>{{ shortBiomarkerName(item.name) }}</span>
+                      <span :title="item.name">{{ shortBiomarkerName(item.name) }}</span>
                     </article>
                   </div>
                 </div>
@@ -2790,6 +2859,8 @@ a {
 }
 
 .hero-section {
+  position: relative;
+  isolation: isolate;
   display: grid;
   grid-template-columns: minmax(320px, 0.86fr) minmax(520px, 1.14fr);
   align-items: center;
@@ -2797,9 +2868,24 @@ a {
   min-height: clamp(560px, calc(78vh - 74px), 700px);
   padding: clamp(28px, 3.8vw, 50px) clamp(20px, 5vw, 70px) clamp(24px, 3vw, 38px);
   border-bottom: 1px solid rgba(104, 135, 154, 0.24);
+  overflow: hidden;
+}
+
+.hero-section::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    linear-gradient(90deg, rgba(244, 248, 251, 0.96) 0%, rgba(244, 248, 251, 0.78) 44%, rgba(244, 248, 251, 0.54) 100%),
+    url('/home-overview-bg.png') right center / min(980px, 62vw) auto no-repeat;
+  content: '';
+  opacity: 0.92;
+  pointer-events: none;
 }
 
 .hero-copy {
+  position: relative;
+  z-index: 1;
   max-width: 660px;
 }
 
@@ -2868,13 +2954,18 @@ a {
 }
 
 .insight-board {
+  position: relative;
+  z-index: 1;
   min-height: 398px;
   display: grid;
   align-content: stretch;
+  overflow: hidden;
   border: 1px solid rgba(109, 139, 158, 0.22);
   border-radius: 8px;
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(241, 248, 250, 0.94)), #ffffff;
+    linear-gradient(135deg, rgba(255, 255, 255, 0.86), rgba(244, 250, 251, 0.78)),
+    #ffffff;
+  backdrop-filter: blur(2px);
   box-shadow: 0 18px 48px rgba(37, 73, 96, 0.12);
 }
 
@@ -2913,7 +3004,8 @@ a {
   padding: 15px 16px;
   border: 1px solid rgba(118, 147, 164, 0.18);
   border-radius: 8px;
-  background: #ffffff;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(2px);
   text-align: left;
   cursor: pointer;
   transition:
@@ -2977,7 +3069,7 @@ a {
 .metric-card.active {
   transform: translateY(-2px);
   border-color: rgba(14, 143, 119, 0.36);
-  background: linear-gradient(180deg, #ffffff, #f6fbfd);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(246, 251, 253, 0.94));
   box-shadow: 0 18px 46px rgba(29, 83, 115, 0.18);
 }
 
@@ -2997,8 +3089,9 @@ a {
   border: 1px solid rgba(14, 143, 119, 0.18);
   border-radius: 8px;
   background:
-    linear-gradient(90deg, rgba(14, 143, 119, 0.1), rgba(15, 101, 145, 0.06)),
+    linear-gradient(90deg, rgba(14, 143, 119, 0.12), rgba(15, 101, 145, 0.08)),
     #f7fbfc;
+  backdrop-filter: blur(2px);
 }
 
 .overview-focus span,
@@ -3050,6 +3143,7 @@ a {
   background: #eef8f6;
   cursor: pointer;
   font-weight: 900;
+  backdrop-filter: blur(2px);
 }
 
 .glance-section {
@@ -3100,7 +3194,7 @@ a {
 
 .glance-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -3173,6 +3267,10 @@ a {
 
 .glance-icon.map::before {
   content: '◎';
+}
+
+.glance-icon.sankey::before {
+  content: 'S';
 }
 
 .glance-icon.cloud::before {
@@ -3310,7 +3408,8 @@ a {
 .dossier-guide article {
   display: grid;
   align-content: start;
-  gap: 8px;
+  grid-template-rows: auto auto 1fr;
+  gap: 9px;
   min-height: 118px;
   padding: 16px;
   border: 1px solid rgba(109, 139, 158, 0.16);
@@ -3322,6 +3421,9 @@ a {
 
 .dossier-guide span {
   width: fit-content;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
   padding: 5px 8px;
   border-radius: 999px;
   color: #0b6f5f;
@@ -3376,7 +3478,7 @@ a {
 .dossier-body {
   display: grid;
   grid-template-columns: minmax(560px, 1.18fr) minmax(380px, 0.82fr);
-  align-items: start;
+  align-items: stretch;
   gap: 18px;
 }
 
@@ -3441,7 +3543,12 @@ a {
   display: grid;
   align-content: start;
   gap: 0;
+  height: 100%;
   overflow: hidden;
+}
+
+.access-panel {
+  grid-template-rows: auto 1fr auto;
 }
 
 .metadata-panel header,
@@ -3458,6 +3565,7 @@ a {
 
 .metadata-panel header {
   margin-bottom: 0;
+  min-height: 88px;
   padding: 18px 20px 16px;
   border-bottom: 1px solid rgba(109, 139, 158, 0.16);
   background:
@@ -3495,6 +3603,10 @@ a {
   gap: 0;
 }
 
+.permission-table {
+  align-content: start;
+}
+
 .factor-list {
   gap: 8px;
 }
@@ -3515,7 +3627,7 @@ a {
 
 .field-table-head,
 .field-table article {
-  grid-template-columns: minmax(150px, 0.3fr) minmax(0, 1fr) minmax(150px, auto);
+  grid-template-columns: minmax(138px, 0.28fr) minmax(0, 1fr) minmax(128px, 0.34fr);
 }
 
 .field-table-head {
@@ -3570,13 +3682,14 @@ a {
 
 .field-table em {
   justify-self: end;
-  max-width: 220px;
+  max-width: 100%;
   padding: 5px 9px;
   border-radius: 6px;
   background: #edf4f7;
   color: #496171;
   font-weight: 800;
   text-align: right;
+  white-space: normal;
 }
 
 .permission-table article {
@@ -3591,6 +3704,10 @@ a {
   border-top: 1px solid rgba(109, 139, 158, 0.14);
   border-radius: 0;
   background: #ffffff;
+}
+
+.permission-table article:first-child {
+  border-top: 0;
 }
 
 .permission-table article::before {
@@ -3854,6 +3971,7 @@ a {
 
 .biomarker-filter-control,
 .biomarker-sort-control {
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -3872,6 +3990,21 @@ a {
   font-weight: 900;
   letter-spacing: 0;
   white-space: nowrap;
+}
+
+.biomarker-filter-control select {
+  width: min(360px, 38vw);
+  max-width: 100%;
+  height: 28px;
+  padding: 0 30px 0 10px;
+  border: 1px solid rgba(109, 139, 158, 0.2);
+  border-radius: 999px;
+  color: #173247;
+  background: #f8fbfc;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
 }
 
 .biomarker-filter-control button,
@@ -5261,6 +5394,14 @@ a {
   .biomarker-sort-control {
     max-width: 100%;
     overflow-x: auto;
+  }
+
+  .biomarker-filter-control {
+    width: 100%;
+  }
+
+  .biomarker-filter-control select {
+    width: min(320px, 100%);
   }
 
   .biomarker-filter-control button,
