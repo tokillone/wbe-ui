@@ -132,7 +132,7 @@ const FALLBACK_MAX_ZOOM = 6.8
 const GLOBE_MIN_ZOOM = 2.64
 const GLOBE_INITIAL_ZOOM = 2.66
 const FLAT_BACKGROUND_COLOR = '#d8e8ef'
-const GLOBE_BACKGROUND_COLOR = '#263945'
+const GLOBE_BACKGROUND_COLOR = '#1f313c'
 const VECTOR_REGION_FADE_START_ZOOM = 4.65
 const VECTOR_REGION_FADE_END_ZOOM = 5.25
 const PMTILES_MAGIC = 'PMTiles'
@@ -181,16 +181,16 @@ const BOUNDARY_NOISE_AREA_THRESHOLDS: Record<BoundaryName, number> = {
   chinaCities: 0.08,
 }
 const MAP_HIGHLIGHT_STYLE = {
-  dataFill: '#7287d8',
-  dataLine: '#8b96b6',
-  hoverFill: '#5f79d9',
-  hoverLine: '#4059b8',
-  selectedFill: '#4f63c8',
-  selectedLine: '#2e3f8f',
-  selectedHalo: '#b9c6f6',
-  bubble: '#6a79d3',
-  bubbleHover: '#4f8fd8',
-  bubbleSelected: '#445ac2',
+  dataFill: '#6f83c9',
+  dataLine: '#8794b6',
+  hoverFill: '#5277c9',
+  hoverLine: '#2f5f9d',
+  selectedFill: '#3f55aa',
+  selectedLine: '#263a83',
+  selectedHalo: '#aebeed',
+  bubble: '#6277c7',
+  bubbleHover: '#3d8dbd',
+  bubbleSelected: '#354f9d',
   bubbleSelectedOuter: '#ffffff',
 } as const
 const CONTINENT_LABELS = [
@@ -232,10 +232,10 @@ const UI_TEXT = {
     filterTitle: '筛选条件',
     filterSummaryEmpty: '等待后端筛选项',
     targetClass: '目标类别',
-    allTargetClasses: '全部目标类别',
-    allCategories: '全部目标物质类别',
-    category: '目标物质类别',
-    subcategory: '目标物质子类',
+    allTargetClasses: '全部',
+    allCategories: '全部',
+    category: '物质类别',
+    subcategory: '物质子类',
     biomarker: 'biomarker',
     year: '年份',
     refresh: '刷新',
@@ -281,9 +281,9 @@ const UI_TEXT = {
     noSourceRecords: '暂无来源记录',
     sourcePending: '来源待补充',
     loadingDetail: '正在加载详情',
-    allBiomarkers: '全部生物标记物',
-    allSubcategories: '全部小类',
-    allYears: '全部年份',
+    allBiomarkers: '全部',
+    allSubcategories: '全部',
+    allYears: '全部',
     unspecifiedYear: '未标注年份',
     cityPrecision: '城市级位置',
     adminPrecision: '省州级位置',
@@ -324,11 +324,11 @@ const UI_TEXT = {
       'Coverage: the world basemap includes countries and selected admin-1 areas; China includes city boundaries. PNDL points only show mappable backend records.',
     filterTitle: 'Filters',
     filterSummaryEmpty: 'Waiting for backend filters',
-    targetClass: '目标类别',
-    allTargetClasses: 'All target groups',
-    allCategories: 'All substance categories',
-    category: '目标物质类别',
-    subcategory: '目标物质子类',
+    targetClass: 'Target class',
+    allTargetClasses: 'All',
+    allCategories: 'All',
+    category: 'Substance category',
+    subcategory: 'Substance subclass',
     biomarker: 'biomarker',
     year: 'Year',
     refresh: 'Refresh',
@@ -376,9 +376,9 @@ const UI_TEXT = {
     noSourceRecords: 'No source records',
     sourcePending: 'Source pending',
     loadingDetail: 'Loading detail',
-    allBiomarkers: 'All biomarkers',
-    allSubcategories: 'All subcategories',
-    allYears: 'All years',
+    allBiomarkers: 'All',
+    allSubcategories: 'All',
+    allYears: 'All',
     unspecifiedYear: 'Unspecified year',
     cityPrecision: 'City-level location',
     adminPrecision: 'Admin-1 location',
@@ -397,7 +397,6 @@ const mapContainer = ref<HTMLElement | null>(null)
 const filters = ref<MapFilterResponse | null>(null)
 const stats = ref<MapStatsResponse | null>(null)
 const selectedDetail = ref<MapDetailResponse | null>(null)
-const compactDetailAnchor = ref<{ x: number; y: number } | null>(null)
 const mapError = ref('')
 const filterError = ref('')
 const detailError = ref('')
@@ -526,30 +525,6 @@ const detailSubtitle = computed(() => selectedDetail.value?.subtitle || filterSu
 const detailSources = computed(
   () => selectedDetail.value?.sourceRecords ?? selectedDetail.value?.sources ?? [],
 )
-const compactDetailStyle = computed<Record<string, string>>(() => {
-  const emptyStyle: Record<string, string> = {}
-  if (!compactDetailAnchor.value || typeof window === 'undefined') return emptyStyle
-  if (window.innerWidth < 760) return emptyStyle
-  const container = mapContainer.value
-  const width = window.innerWidth >= 900 ? 374 : Math.min(window.innerWidth - 24, 374)
-  const height = window.innerWidth >= 900 ? 430 : 320
-  const stageWidth = container?.clientWidth ?? window.innerWidth
-  const stageHeight = container?.clientHeight ?? window.innerHeight
-  const padding = 18
-  const rightReserve = window.innerWidth >= 900 ? 74 : padding
-  const left = clampNumber(
-    compactDetailAnchor.value.x + 18,
-    padding,
-    stageWidth - width - rightReserve,
-  )
-  const top = clampNumber(compactDetailAnchor.value.y - 34, padding, stageHeight - height - padding)
-  return {
-    left: `${left}px`,
-    top: `${top}px`,
-    right: 'auto',
-    width: `${width}px`,
-  }
-})
 const hasEmptyFilterData = computed(
   () =>
     Boolean(filters.value) &&
@@ -1196,8 +1171,15 @@ function vectorBasemapLayers(layers: unknown[], mode: MapMode) {
           },
         }
       }
+      const layout = shouldNormalizeVectorLabel(layer.id)
+        ? {
+            ...(layer.layout ?? {}),
+            'text-field': vectorLocalizedNameExpression(),
+          }
+        : layer.layout
       return {
         ...layer,
+        layout,
         paint: {
           ...(layer.paint ?? {}),
           'text-color': vectorTextColor(layer.id),
@@ -1216,6 +1198,36 @@ function vectorBasemapLayers(layers: unknown[], mode: MapMode) {
 
 function isLowValueWaterLabelLayer(layerId: string) {
   return /ocean|marine|sea|bay|water_name|water-label|water_label/i.test(layerId)
+}
+
+function shouldNormalizeVectorLabel(layerId: string) {
+  return /^(places_|pois$|roads_labels_|earth_label_islands|water_waterway_label|water_label_lakes)/i.test(
+    layerId,
+  )
+}
+
+function vectorLocalizedNameExpression() {
+  if (locale.value === 'en') {
+    return [
+      'coalesce',
+      ['get', 'name:en'],
+      ['get', 'name_en'],
+      ['get', 'name:latin'],
+      ['get', 'pgf:name'],
+      ['get', 'name'],
+    ]
+  }
+  return [
+    'coalesce',
+    ['get', 'name:zh'],
+    ['get', 'name_zh'],
+    ['get', 'name:zh-Hans'],
+    ['get', 'name:en'],
+    ['get', 'name_en'],
+    ['get', 'name:latin'],
+    ['get', 'pgf:name'],
+    ['get', 'name'],
+  ]
 }
 
 function styleVectorBasemapLayer(layer: {
@@ -2603,27 +2615,12 @@ function scheduleClusterDetailOpen(feature: GeoJsonFeature) {
   }, 260)
 }
 
-function setCompactDetailAnchor(feature: GeoJsonFeature) {
-  if (!map) {
-    compactDetailAnchor.value = null
-    return
-  }
-  const center = pointCoordinates(feature)
-  if (!center) {
-    compactDetailAnchor.value = null
-    return
-  }
-  const point = map.project(center as LngLatLike)
-  compactDetailAnchor.value = { x: point.x, y: point.y }
-}
-
 async function openFeatureDetail(feature: GeoJsonFeature) {
   const props = feature.properties as Record<string, string>
   const level = props.level ?? props.boundaryLevel
   const geoKey = props.geoKey
   if (!level || !geoKey || props.pndlGeomean == null) return
   hideTooltip()
-  setCompactDetailAnchor(feature)
   detailController?.abort()
   detailController = new AbortController()
   selectedDetail.value = null
@@ -2652,7 +2649,6 @@ async function openClusterDetail(feature: GeoJsonFeature) {
   const clusterId = Number(feature.properties.cluster_id)
   if (Number.isNaN(clusterId)) return
   hideTooltip()
-  setCompactDetailAnchor(feature)
   const center = pointCoordinates(feature)
   if (center) {
     map.stop()
@@ -3062,13 +3058,50 @@ function regionFeatureKey(feature?: GeoJsonFeature | null) {
 
 function buildTooltipHtml(props: Record<string, unknown>) {
   if (isClusterFeature(props)) {
-    return `<strong>${ui.value.clusterTitle}</strong><br>${ui.value.clusterCount}：${formatNumber(Number(props.point_count ?? 0))}<br>${ui.value.clusterHint}`
+    const count = formatNumber(Number(props.point_count ?? 0))
+    return `
+      <div class="map-tooltip-card">
+        <div class="map-tooltip-kicker">${escapeHtml(ui.value.clusterTitle)}</div>
+        <strong>${escapeHtml(ui.value.clusterCount)} ${count}</strong>
+        <div class="map-tooltip-grid single">
+          <span>${escapeHtml(ui.value.clusterHint)}</span>
+        </div>
+      </div>
+    `
   }
   const title = escapeHtml(String(props.displayName ?? ui.value.unnamedRegion))
   if (props.pndlGeomean == null) {
-    return `<strong>${title}</strong><br>${ui.value.noPndlForSelection}`
+    return `
+      <div class="map-tooltip-card muted">
+        <strong>${title}</strong>
+        <span>${escapeHtml(ui.value.noPndlForSelection)}</span>
+      </div>
+    `
   }
-  return `<strong>${title}</strong><br>${escapeHtml(String(props.locationPrecision ?? ui.value.locationPrecision))}<br>${ui.value.biomarker}：${escapeHtml(displayOptionLabel(String(props.biomarkerLabel ?? selectedBiomarkerLabel.value)))}<br>${ui.value.pndlGeomean}：${formatCompact(Number(props.pndlGeomean))}<br>${ui.value.records}：${formatNumber(Number(props.recordCount ?? 0))}<br>${ui.value.literature}：${formatNumber(Number(props.doiCount ?? 0))}`
+  const precision = escapeHtml(String(props.locationPrecision ?? ui.value.locationPrecision))
+  const biomarker = escapeHtml(
+    displayOptionLabel(String(props.biomarkerLabel ?? selectedBiomarkerLabel.value)),
+  )
+  const geomean = formatCompact(Number(props.pndlGeomean))
+  const records = formatNumber(Number(props.recordCount ?? 0))
+  const doi = formatNumber(Number(props.doiCount ?? 0))
+  const points = formatNumber(Number(props.pointCount ?? 1))
+  return `
+    <div class="map-tooltip-card">
+      <div class="map-tooltip-kicker">${precision}</div>
+      <strong>${title}</strong>
+      <div class="map-tooltip-sub">${escapeHtml(ui.value.biomarker)}：${biomarker}</div>
+      <div class="map-tooltip-primary">
+        <span>${escapeHtml(ui.value.pndlGeomean)}</span>
+        <b>${geomean}</b>
+      </div>
+      <div class="map-tooltip-grid">
+        <span>${escapeHtml(ui.value.records)} <b>${records}</b></span>
+        <span>${escapeHtml(ui.value.literature)} <b>${doi}</b></span>
+        <span>${escapeHtml(ui.value.clusterCount)} <b>${points}</b></span>
+      </div>
+    </div>
+  `
 }
 
 function closeDetail() {
@@ -3076,7 +3109,6 @@ function closeDetail() {
   detailController = null
   isLoadingDetail.value = false
   detailMode.value = 'none'
-  compactDetailAnchor.value = null
 }
 
 function openFullDetail() {
@@ -3915,7 +3947,6 @@ function escapeHtml(value: string) {
       <aside
         class="detail-drawer"
         :class="{ open: isCompactDetailOpen }"
-        :style="compactDetailStyle"
         :aria-hidden="!isCompactDetailOpen"
         aria-live="polite"
       >
@@ -4557,15 +4588,15 @@ function escapeHtml(value: string) {
 }
 
 .map-stage.globe {
-  background: linear-gradient(180deg, #223540, #2c4350);
+  background: linear-gradient(180deg, #1d303a, #243946);
 }
 
 .map-stage.globe.ambience::before {
   background:
-    linear-gradient(120deg, transparent 0 37%, rgba(82, 157, 156, 0.08) 45%, transparent 54%),
-    radial-gradient(circle at 18% 30%, rgba(116, 185, 181, 0.12) 0 2px, transparent 3px),
-    radial-gradient(circle at 72% 68%, rgba(127, 139, 222, 0.08) 0 2px, transparent 3px),
-    repeating-linear-gradient(145deg, rgba(236, 252, 251, 0.052) 0 1px, transparent 1px 54px);
+    linear-gradient(120deg, transparent 0 37%, rgba(86, 143, 158, 0.06) 45%, transparent 54%),
+    radial-gradient(circle at 18% 30%, rgba(126, 181, 183, 0.08) 0 2px, transparent 3px),
+    radial-gradient(circle at 72% 68%, rgba(104, 126, 190, 0.06) 0 2px, transparent 3px),
+    repeating-linear-gradient(145deg, rgba(219, 244, 246, 0.04) 0 1px, transparent 1px 54px);
   background-size:
     720px 720px,
     420px 420px,
@@ -4975,36 +5006,45 @@ function escapeHtml(value: string) {
 
 .detail-drawer {
   position: absolute;
-  top: 86px;
-  right: 18px;
+  top: 106px;
+  right: 22px;
   bottom: auto;
   z-index: 8;
   box-sizing: border-box;
-  width: min(374px, calc(50vw - 28px));
-  max-height: min(540px, calc(100% - 36px));
+  width: min(410px, calc(50vw - 30px));
+  max-height: min(620px, calc(100% - 130px));
   display: grid;
   align-content: start;
   gap: 12px;
-  padding: 16px;
-  border: 1px solid rgba(106, 126, 150, 0.18);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.97);
-  box-shadow: 0 18px 48px rgba(19, 46, 63, 0.18);
+  padding: 17px;
+  border: 1px solid rgba(106, 126, 150, 0.16);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 22px 58px rgba(19, 46, 63, 0.2);
   overflow: auto;
   opacity: 0;
   pointer-events: none;
-  transform: translateY(10px) scale(0.985);
-  transform-origin: top center;
+  transform: translateX(calc(100% + 28px)) scale(0.985);
+  transform-origin: top right;
   transition:
     transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1),
     opacity 0.22s ease;
   backdrop-filter: blur(18px);
 }
 
+.detail-drawer::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  border-radius: 12px 12px 0 0;
+  background: linear-gradient(90deg, #3f55aa, #3d8dbd);
+  content: '';
+}
+
 .detail-drawer.open {
   opacity: 1;
   pointer-events: auto;
-  transform: translateY(0) scale(1);
+  transform: translateX(0) scale(1);
 }
 
 .detail-drawer header {
@@ -5012,7 +5052,7 @@ function escapeHtml(value: string) {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding-bottom: 10px;
+  padding: 2px 0 11px;
   border-bottom: 1px solid rgba(91, 117, 132, 0.12);
 }
 
@@ -5057,7 +5097,7 @@ function escapeHtml(value: string) {
 }
 
 .detail-drawer h2 {
-  font-size: 22px;
+  font-size: 23px;
   color: #173247;
 }
 
@@ -5462,13 +5502,101 @@ function escapeHtml(value: string) {
 }
 
 :deep(.maplibregl-popup-content) {
-  border-radius: 8px;
+  padding: 0;
+  border-radius: 10px;
   color: #173247;
+  background: transparent;
   box-shadow: 0 18px 45px rgba(19, 46, 63, 0.18);
+  overflow: hidden;
 }
 
 :deep(.maplibregl-popup-content strong) {
-  color: #312e81;
+  color: #173247;
+}
+
+:deep(.maplibregl-popup-tip) {
+  border-top-color: rgba(255, 255, 255, 0.96);
+  border-bottom-color: rgba(255, 255, 255, 0.96);
+}
+
+:deep(.map-tooltip-card) {
+  min-width: 218px;
+  max-width: 286px;
+  display: grid;
+  gap: 8px;
+  padding: 13px 14px;
+  border: 1px solid rgba(106, 126, 150, 0.14);
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(14px);
+}
+
+:deep(.map-tooltip-card.muted) {
+  gap: 5px;
+}
+
+:deep(.map-tooltip-card > strong) {
+  color: #173247;
+  font-size: 16px;
+  line-height: 1.18;
+}
+
+:deep(.map-tooltip-kicker),
+:deep(.map-tooltip-sub),
+:deep(.map-tooltip-card.muted span) {
+  color: #607386;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.25;
+}
+
+:deep(.map-tooltip-kicker) {
+  color: #3f55aa;
+}
+
+:deep(.map-tooltip-primary) {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(111, 131, 201, 0.13), rgba(61, 141, 189, 0.1));
+  color: #607386;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+:deep(.map-tooltip-primary b) {
+  color: #23386f;
+  font-size: 19px;
+}
+
+:deep(.map-tooltip-grid) {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+:deep(.map-tooltip-grid.single) {
+  grid-template-columns: 1fr;
+}
+
+:deep(.map-tooltip-grid span) {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(106, 126, 150, 0.12);
+  border-radius: 8px;
+  color: #718294;
+  background: rgba(247, 250, 252, 0.88);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+:deep(.map-tooltip-grid b) {
+  color: #173247;
+  font-size: 14px;
 }
 
 @keyframes mapHeaderIn {
