@@ -133,6 +133,30 @@ export interface MapPndlRankingItem {
   selected?: boolean | null
 }
 
+export interface MapPndlComparison {
+  key: string
+  label: string
+  scopeLevel: string
+  unit?: string | null
+  note?: string | null
+  selectedRegionId?: string | null
+  highlightSelected?: boolean | null
+  rows: MapPndlRankingItem[]
+}
+
+export interface MapTrendPoint {
+  year: number
+  value?: number | null
+  recordCount?: number | null
+}
+
+export interface MapTrendSeries {
+  metricKey: string
+  label: string
+  unit?: string | null
+  points: MapTrendPoint[]
+}
+
 export interface MapBreakdownItem {
   label: string
   recordCount: number
@@ -153,6 +177,8 @@ export interface MapDetailResponse {
   summaryCards?: MapSummaryCard[] | null
   topBiomarkers?: MapTopBiomarker[] | null
   pndlRanking?: MapPndlRankingItem[] | null
+  pndlComparisons?: MapPndlComparison[] | null
+  trendSeries?: MapTrendSeries[] | null
   categoryBreakdown?: MapBreakdownItem[] | null
   sources: MapSourceRecord[]
   sourceRecords?: MapSourceRecord[] | null

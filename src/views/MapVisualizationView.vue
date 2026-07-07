@@ -19,6 +19,7 @@ import type {
   MapFilterSelection,
   MapRegionStat,
   MapStatsResponse,
+  MapTopBiomarker,
 } from '../types/map'
 
 import type {
@@ -33,6 +34,7 @@ import type {
 
 type MapMode = 'globe' | 'flat'
 type DetailMode = 'none' | 'compact' | 'full'
+type DetailOrigin = 'none' | 'region' | 'cluster'
 type BasemapMode = 'vector' | 'geojson'
 type RegionSourceMode = 'vector' | 'geojson'
 type BoundaryName = 'countries' | 'admin1' | 'chinaProvinces' | 'chinaCities'
@@ -124,7 +126,7 @@ const REGION_HOVER_PRIORITY_LAYERS = [
 ] as const
 const POINT_INTERACTIVE_LAYERS = ['pndl-clusters', 'pndl-bubbles'] as const
 const ALL_INTERACTIVE_LAYERS = [...REGION_INTERACTIVE_LAYERS, ...POINT_INTERACTIVE_LAYERS] as const
-const FLAT_CENTER: [number, number] = [18, 24]
+const FLAT_CENTER: [number, number] = [104, 35]
 const FLAT_INITIAL_ZOOM = 1.75
 const FLAT_MIN_ZOOM = 1.25
 const VECTOR_MAX_ZOOM = 8.3
@@ -240,6 +242,7 @@ const UI_TEXT = {
     year: '年份',
     refresh: '刷新',
     refreshing: '刷新中',
+    resetFilters: '重置',
     collapseFilters: '收起筛选条件',
     expandFilters: '展开筛选条件',
     loadingFilters: '正在加载筛选项',
@@ -248,6 +251,13 @@ const UI_TEXT = {
     filterLoadFailed: '筛选项加载失败',
     statsLoadFailed: '地图统计加载失败',
     detailLoadFailed: '详情加载失败',
+    detailExploreTitle: 'biomarker 探索',
+    detailExploreNote: '点击有 PNDL 区域的 biomarker 后，会同步筛选条件并刷新地图；当前区域保持选中高亮。',
+    detailExploreEmpty: '当前筛选下该区域没有可展示的 biomarker。',
+    pndlRegionAvailable: '有 PNDL 区域',
+    pndlRegionUnavailable: '暂无 PNDL',
+    clickExploreHint: '单击探索 biomarker · 双击查看详情',
+    clusterClickHint: '单击探索聚合 · 双击查看详情',
     boundaryLoadFailed: '部分地图边界加载失败，已保留可用图层',
     boundaryLoading: '正在加载地图细节',
     noFilterData: '地图筛选项为空，请确认聚合表已刷新并包含可映射 PNDL 数据。',
@@ -266,6 +276,11 @@ const UI_TEXT = {
     fullDetailTitle: '完整详情',
     summaryOverview: '概览统计',
     pndlRanking: 'PNDL 排行',
+    pndlComparison: 'PNDL 区域对比',
+    pndlChartNeedsBiomarker:
+      'PNDL 对比需要先选择具体 biomarker，避免把不同物质的负荷水平混在一起比较。',
+    pndlChartNoData: '当前筛选下没有可用于对比的 PNDL 数据。',
+    clusterOverview: '聚合位置概览',
     categoryBreakdown: '目标类别构成',
     topBiomarkers: 'Top biomarker',
     locationsInCluster: '聚合位置',
@@ -291,8 +306,10 @@ const UI_TEXT = {
     unnamedRegion: '未命名区域',
     clusterTitle: 'PNDL 位置聚合',
     clusterCount: '合并位置',
-    clusterHint: '双击放大查看',
+    clusterHint: '双击查看详情',
     noPndlForSelection: '当前筛选无 PNDL 数据',
+    points: '点位',
+    cities: '城市',
     records: '记录数',
     literature: '文献数',
   },
@@ -333,6 +350,7 @@ const UI_TEXT = {
     year: 'Year',
     refresh: 'Refresh',
     refreshing: 'Refreshing',
+    resetFilters: 'Reset',
     collapseFilters: 'Collapse filters',
     expandFilters: 'Expand filters',
     loadingFilters: 'Loading filters',
@@ -341,6 +359,14 @@ const UI_TEXT = {
     filterLoadFailed: 'Failed to load filters',
     statsLoadFailed: 'Failed to load map statistics',
     detailLoadFailed: 'Failed to load detail',
+    detailExploreTitle: 'biomarker explorer',
+    detailExploreNote:
+      'Choose a biomarker with PNDL coverage to update filters and refresh the map; the current region remains selected.',
+    detailExploreEmpty: 'No biomarker is available for this region under the current filters.',
+    pndlRegionAvailable: 'PNDL available',
+    pndlRegionUnavailable: 'No PNDL',
+    clickExploreHint: 'Click to explore biomarker · double-click for full detail',
+    clusterClickHint: 'Click to explore cluster · double-click for full detail',
     boundaryLoadFailed: 'Some boundaries failed to load; available layers remain visible',
     boundaryLoading: 'Loading map detail',
     noFilterData:
@@ -361,6 +387,11 @@ const UI_TEXT = {
     fullDetailTitle: 'Full detail',
     summaryOverview: 'Overview',
     pndlRanking: 'PNDL ranking',
+    pndlComparison: 'PNDL comparison',
+    pndlChartNeedsBiomarker:
+      'Choose one biomarker first so PNDL values are not mixed across substances.',
+    pndlChartNoData: 'No PNDL data is available for comparison under the current filters.',
+    clusterOverview: 'Cluster overview',
     categoryBreakdown: 'Category breakdown',
     topBiomarkers: 'Top biomarker',
     locationsInCluster: 'Cluster locations',
@@ -386,8 +417,10 @@ const UI_TEXT = {
     unnamedRegion: 'Unnamed region',
     clusterTitle: 'PNDL location cluster',
     clusterCount: 'Merged locations',
-    clusterHint: 'Double-click to zoom in',
+    clusterHint: 'Double-click for details',
     noPndlForSelection: 'No PNDL data for the current filters',
+    points: 'Sites',
+    cities: 'Cities',
     records: 'Records',
     literature: 'Literature',
   },
@@ -397,6 +430,7 @@ const mapContainer = ref<HTMLElement | null>(null)
 const filters = ref<MapFilterResponse | null>(null)
 const stats = ref<MapStatsResponse | null>(null)
 const selectedDetail = ref<MapDetailResponse | null>(null)
+const activePndlComparisonKey = ref('')
 const mapError = ref('')
 const filterError = ref('')
 const detailError = ref('')
@@ -408,6 +442,8 @@ const mapReady = ref(false)
 const boundaryVersion = ref(0)
 const globeAvailable = ref(false)
 const detailMode = ref<DetailMode>('none')
+const detailOrigin = ref<DetailOrigin>('none')
+const fullDetailShouldRestoreCompact = ref(false)
 const isFilterOpen = ref(true)
 const isLayerPanelOpen = ref(false)
 const isLanguageMenuOpen = ref(false)
@@ -458,6 +494,7 @@ let pointLayerEventsBound = false
 let regionLayerEventsBound = false
 let isBasemapFallbackInProgress = false
 let projectionSwitchInProgress = false
+let preserveSelectionOnNextSelectionChange = false
 const boundaryCache = new Map<BoundaryName, FeatureCollection>()
 const cleanedBoundaryCache = new Map<BoundaryName, FeatureCollection>()
 
@@ -465,6 +502,9 @@ const ui = computed(() => UI_TEXT[locale.value])
 const isCompactDetailOpen = computed(() => detailMode.value === 'compact')
 const isFullDetailOpen = computed(() => detailMode.value === 'full')
 const isDetailOpen = computed(() => detailMode.value !== 'none')
+const isClusterDetail = computed(
+  () => detailOrigin.value === 'cluster' || Boolean(selectedDetail.value?.cluster),
+)
 const currentTargetClasses = computed(() => filters.value?.targetClasses ?? [])
 const currentCategories = computed(() => {
   if (!filters.value) return []
@@ -522,8 +562,67 @@ const detailTitle = computed(
   () => selectedDetail.value?.title || detailRegion.value?.displayName || ui.value.detail,
 )
 const detailSubtitle = computed(() => selectedDetail.value?.subtitle || filterSummary.value)
-const detailSources = computed(
-  () => selectedDetail.value?.sourceRecords ?? selectedDetail.value?.sources ?? [],
+const compactSummaryCards = computed(() => selectedDetail.value?.summaryCards?.slice(0, 4) ?? [])
+const compactBiomarkers = computed(() => selectedDetail.value?.topBiomarkers ?? [])
+const fullDetailSummaryCards = computed(() => selectedDetail.value?.summaryCards ?? [])
+const pndlComparisons = computed(() => selectedDetail.value?.pndlComparisons ?? [])
+const activePndlComparison = computed(() => {
+  const comparisons = pndlComparisons.value
+  if (!comparisons.length) return null
+  return (
+    comparisons.find((item) => item.key === activePndlComparisonKey.value) ?? comparisons[0]
+  )
+})
+const pndlChartRows = computed(
+  () => activePndlComparison.value?.rows ?? selectedDetail.value?.pndlRanking ?? [],
+)
+const canRenderPndlChart = computed(
+  () => selection.biomarkerKey !== ALL_BIOMARKER_KEY && pndlChartRows.value.length > 0,
+)
+const pndlChartMax = computed(() =>
+  Math.max(
+    ...pndlChartRows.value
+      .map((item) => Number(item.pndlGeomeanMgD1000inh ?? 0))
+      .filter((value) => Number.isFinite(value) && value > 0),
+    0,
+  ),
+)
+const pndlChartTitle = computed(() =>
+  activePndlComparison.value?.label ||
+  (isClusterDetail.value ? ui.value.clusterOverview : ui.value.pndlComparison),
+)
+const trendSeries = computed(() => selectedDetail.value?.trendSeries ?? [])
+const activeTrendSeries = computed(() => trendSeries.value[0] ?? null)
+const canRenderTrendChart = computed(
+  () =>
+    selection.biomarkerKey !== ALL_BIOMARKER_KEY &&
+    (activeTrendSeries.value?.points?.length ?? 0) >= 2,
+)
+const trendChartPoints = computed(() => {
+  const points = activeTrendSeries.value?.points ?? []
+  const values = points
+    .map((point) => Number(point.value ?? 0))
+    .filter((value) => Number.isFinite(value) && value > 0)
+  if (points.length < 2 || !values.length) return []
+  const max = Math.max(...values)
+  const min = Math.min(...values)
+  const range = max - min || max || 1
+  const width = 680
+  const height = 210
+  return points.map((point, index) => {
+    const value = Number(point.value ?? 0)
+    const x = points.length === 1 ? width / 2 : (index / (points.length - 1)) * width
+    const y = height - ((value - min) / range) * (height - 28) - 14
+    return {
+      ...point,
+      x,
+      y,
+      label: formatCompact(value),
+    }
+  })
+})
+const trendPolyline = computed(() =>
+  trendChartPoints.value.map((point) => `${point.x},${point.y}`).join(' '),
 )
 const compactDetailCallout = computed(() => {
   if (!selectedDetail.value) return ''
@@ -640,13 +739,18 @@ watch(
 watch(
   () => ({ ...selection }),
   () => {
-    closeDetail()
-    selectedDetail.value = null
-    clearSelectedPoint()
-    setSelectedRegion(null)
+    const preserveSelection = preserveSelectionOnNextSelectionChange
+    preserveSelectionOnNextSelectionChange = false
+    closeDetail({ clearSelection: !preserveSelection })
     if (selection.category) scheduleStatsFetch()
   },
   { deep: true },
+)
+watch(
+  () => selectedDetail.value?.pndlComparisons,
+  (comparisons) => {
+    activePndlComparisonKey.value = comparisons?.[0]?.key ?? ''
+  },
 )
 watch(
   viewLayers,
@@ -2592,7 +2696,6 @@ function handlePointClick(event: MapLayerMouseEvent) {
   }
   setSelectedPoint(feature)
   selectMatchingBoundaryForPoint(feature)
-  focusFeature(feature, event)
   scheduleDetailOpen(feature)
 }
 
@@ -2600,20 +2703,16 @@ function handleRegionClick(event: MapLayerMouseEvent) {
   closeSearch()
   if (pointFeaturesAtPoint(event.point).length) return
   const feature = bestRegionFeatureAtPoint(event.point)
-  if (!feature?.properties || !map || !hoverPopup) return
+  if (!feature?.properties) return
   setSelectedRegion(feature)
-  focusFeature(feature, event)
-  if (regionTooltipTimer) window.clearTimeout(regionTooltipTimer)
-  hoverPopup.setLngLat(event.lngLat).setHTML(buildTooltipHtml(feature.properties)).addTo(map)
-  regionTooltipTimer = window.setTimeout(() => {
-    hoverPopup?.remove()
-    regionTooltipTimer = undefined
-  }, 1800)
+  clearSelectedPoint()
+  scheduleDetailOpen(feature)
 }
 
 function scheduleDetailOpen(feature: GeoJsonFeature) {
   if (clickTimer) window.clearTimeout(clickTimer)
   clickTimer = window.setTimeout(() => {
+    clickTimer = undefined
     void openFeatureDetail(feature)
   }, 260)
 }
@@ -2621,30 +2720,31 @@ function scheduleDetailOpen(feature: GeoJsonFeature) {
 function scheduleClusterDetailOpen(feature: GeoJsonFeature) {
   if (clickTimer) window.clearTimeout(clickTimer)
   clickTimer = window.setTimeout(() => {
+    clickTimer = undefined
     void openClusterDetail(feature)
   }, 260)
 }
 
-async function openFeatureDetail(feature: GeoJsonFeature) {
-  const props = feature.properties as Record<string, string>
-  const level = props.level ?? props.boundaryLevel
-  const geoKey = props.geoKey
-  if (!level || !geoKey || props.pndlGeomean == null) return
+async function openFeatureDetail(feature: GeoJsonFeature, mode: DetailMode = 'compact') {
+  const target = detailTargetFromFeature(feature)
+  if (!target) return
   hideTooltip()
   detailController?.abort()
   detailController = new AbortController()
   selectedDetail.value = null
   isLoadingDetail.value = true
-  detailMode.value = 'none'
+  detailMode.value = mode === 'compact' ? 'compact' : 'none'
+  detailOrigin.value = 'region'
+  fullDetailShouldRestoreCompact.value = false
   detailError.value = ''
   try {
     selectedDetail.value = await fetchMapDetail(
-      level,
-      geoKey,
+      target.level,
+      target.geoKey,
       { ...selection },
       detailController.signal,
     )
-    detailMode.value = 'compact'
+    detailMode.value = mode
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     detailError.value = error instanceof Error ? error.message : ui.value.detailLoadFailed
@@ -2654,21 +2754,18 @@ async function openFeatureDetail(feature: GeoJsonFeature) {
   }
 }
 
-async function openClusterDetail(feature: GeoJsonFeature) {
+async function openClusterDetail(feature: GeoJsonFeature, mode: DetailMode = 'compact') {
   if (!map) return
   const clusterId = Number(feature.properties.cluster_id)
   if (Number.isNaN(clusterId)) return
   hideTooltip()
-  const center = pointCoordinates(feature)
-  if (center) {
-    map.stop()
-    map.easeTo({ center, duration: 420, essential: true })
-  }
   detailController?.abort()
   detailController = new AbortController()
   selectedDetail.value = null
   isLoadingDetail.value = true
-  detailMode.value = 'none'
+  detailMode.value = mode === 'compact' ? 'compact' : 'none'
+  detailOrigin.value = 'cluster'
+  fullDetailShouldRestoreCompact.value = false
   detailError.value = ''
   try {
     const locations = await clusterLocations(clusterId, Number(feature.properties.point_count ?? 0))
@@ -2677,7 +2774,7 @@ async function openClusterDetail(feature: GeoJsonFeature) {
       locations,
       detailController.signal,
     )
-    detailMode.value = 'compact'
+    detailMode.value = mode
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     detailError.value = error instanceof Error ? error.message : ui.value.detailLoadFailed
@@ -2710,6 +2807,7 @@ async function clusterLocations(
 function handleFeatureDoubleClick(event: MapLayerMouseEvent) {
   event.preventDefault()
   if (clickTimer) window.clearTimeout(clickTimer)
+  clickTimer = undefined
   const firstFeature = event.features?.[0] as GeoJsonFeature | undefined
   if (isRegionFeature(firstFeature) && pointFeaturesAtPoint(event.point).length) return
   const feature = isRegionFeature(firstFeature)
@@ -2717,81 +2815,17 @@ function handleFeatureDoubleClick(event: MapLayerMouseEvent) {
     : firstFeature
   if (!feature?.properties) return
   if (isClusterFeature(feature.properties)) {
-    void focusCluster(feature)
+    void openClusterDetail(feature, 'full')
     return
   }
-  focusFeature(feature, event)
-}
-
-async function focusCluster(feature: GeoJsonFeature) {
-  if (!map) return
-  const clusterId = Number(feature.properties.cluster_id)
-  const center = pointCoordinates(feature)
-  if (!center || Number.isNaN(clusterId)) return
-  map.stop()
-  const source = map.getSource('map-points') as ClusterGeoJSONSource | undefined
-  const expansionZoom = (await source?.getClusterExpansionZoom?.(clusterId)) ?? map.getZoom() + 1.5
-  map.easeTo({
-    center,
-    zoom: clampZoom(expansionZoom + 0.25),
-    duration: 650,
-    essential: true,
-  })
-}
-
-function focusFeature(feature: GeoJsonFeature, event: MapLayerMouseEvent) {
-  if (!map) return
-  map.stop()
-  const center = pointCoordinates(feature)
-  if (center) {
-    const level = String(feature.properties.level ?? 'city')
-    const targetZoom = level === 'city' ? 7.2 : level === 'admin1' ? 5.1 : 3.15
-    const currentZoom = map.getZoom()
-    const nextZoom = clampZoom(currentZoom < targetZoom ? targetZoom : currentZoom)
-    map.easeTo({
-      center,
-      zoom: nextZoom,
-      duration: nextZoom > currentZoom + 0.05 ? 720 : 520,
-      essential: true,
-    })
-    return
+  if (isRegionFeature(feature)) {
+    setSelectedRegion(feature)
+    clearSelectedPoint()
+  } else {
+    setSelectedPoint(feature)
+    selectMatchingBoundaryForPoint(feature)
   }
-  const bbox = bboxFromFeatureProperties(feature.properties) ?? featureBbox(feature.geometry)
-  if (bbox) {
-    map.fitBounds(
-      [
-        [bbox[0], bbox[1]],
-        [bbox[2], bbox[3]],
-      ] as LngLatBoundsLike,
-      {
-        padding: {
-          top: 120,
-          right: window.innerWidth >= 900 ? 360 : 44,
-          bottom: window.innerWidth >= 760 ? 90 : 180,
-          left: 44,
-        },
-        duration: 720,
-        maxZoom: clampZoom(7.5),
-      },
-    )
-    return
-  }
-  map.easeTo({
-    center: event.lngLat,
-    zoom: clampZoom(Math.max(map.getZoom(), 4)),
-    duration: 650,
-    essential: true,
-  })
-}
-
-function bboxFromFeatureProperties(props: Record<string, unknown>) {
-  const bbox = [
-    Number(props.bbox_w ?? props.bboxW),
-    Number(props.bbox_s ?? props.bboxS),
-    Number(props.bbox_e ?? props.bboxE),
-    Number(props.bbox_n ?? props.bboxN),
-  ] as [number, number, number, number]
-  return bbox.every(Number.isFinite) && bbox[0] < bbox[2] && bbox[1] < bbox[3] ? bbox : null
+  void openFeatureDetail(feature, 'full')
 }
 
 function handlePointMouseMove(event: MapLayerMouseEvent) {
@@ -3071,11 +3105,9 @@ function buildTooltipHtml(props: Record<string, unknown>) {
     const count = formatNumber(Number(props.point_count ?? 0))
     return `
       <div class="map-tooltip-card">
-        <div class="map-tooltip-kicker">${escapeHtml(ui.value.clusterTitle)}</div>
-        <strong>${escapeHtml(ui.value.clusterCount)} ${count}</strong>
-        <div class="map-tooltip-grid single">
-          <span>${escapeHtml(ui.value.clusterHint)}</span>
-        </div>
+        <div class="map-tooltip-title">${escapeHtml(ui.value.clusterTitle)}</div>
+        <div class="map-tooltip-sub">${escapeHtml(ui.value.clusterCount)} ${count}</div>
+        <div class="map-tooltip-hint">${escapeHtml(ui.value.clusterClickHint)}</div>
       </div>
     `
   }
@@ -3096,42 +3128,96 @@ function buildTooltipHtml(props: Record<string, unknown>) {
   const records = formatNumber(Number(props.recordCount ?? 0))
   const doi = formatNumber(Number(props.doiCount ?? 0))
   const points = formatNumber(Number(props.pointCount ?? 1))
+  const cities = formatNumber(Number(props.cityCount ?? 0))
   return `
     <div class="map-tooltip-card">
-      <div class="map-tooltip-kicker">${precision}</div>
-      <strong>${title}</strong>
-      <div class="map-tooltip-sub">${escapeHtml(ui.value.biomarker)}：${biomarker}</div>
-      <div class="map-tooltip-primary">
-        <span>${escapeHtml(ui.value.pndlGeomean)}</span>
-        <b>${geomean}</b>
-      </div>
+      <div class="map-tooltip-title">${title}</div>
+      <div class="map-tooltip-sub">${precision} · ${escapeHtml(displayOptionLabel(String(props.yearLabel ?? selection.year)))}</div>
       <div class="map-tooltip-grid">
-        <span>${escapeHtml(ui.value.records)} <b>${records}</b></span>
-        <span>${escapeHtml(ui.value.literature)} <b>${doi}</b></span>
-        <span>${escapeHtml(ui.value.clusterCount)} <b>${points}</b></span>
+        <div class="map-tooltip-metric"><span>${escapeHtml(ui.value.points)}</span><b>${points}</b></div>
+        <div class="map-tooltip-metric"><span>${escapeHtml(ui.value.literature)}</span><b>${doi}</b></div>
+        <div class="map-tooltip-metric"><span>${escapeHtml(ui.value.records)}</span><b>${records}</b></div>
       </div>
+      <div class="map-tooltip-extra">
+        <div>${escapeHtml(ui.value.biomarker)}：<b>${biomarker}</b></div>
+        <div>${escapeHtml(ui.value.cities)}：<b>${cities}</b></div>
+      </div>
+      <div class="map-tooltip-heat"><span>${escapeHtml(ui.value.pndlGeomean)}</span><b>${geomean} mg/day/1000 inh</b></div>
+      <div class="map-tooltip-hint">${escapeHtml(ui.value.clickExploreHint)}</div>
     </div>
   `
 }
 
-function closeDetail() {
+function closeDetail(options: { clearSelection?: boolean } = {}) {
+  const { clearSelection = true } = options
+  if (clickTimer) {
+    window.clearTimeout(clickTimer)
+    clickTimer = undefined
+  }
   detailController?.abort()
   detailController = null
   isLoadingDetail.value = false
+  selectedDetail.value = null
+  detailError.value = ''
   detailMode.value = 'none'
+  detailOrigin.value = 'none'
+  fullDetailShouldRestoreCompact.value = false
+  if (clearSelection) {
+    clearSelectedPoint()
+    setSelectedRegion(null)
+  }
 }
 
 function openFullDetail() {
   if (!selectedDetail.value || isLoadingDetail.value) return
+  fullDetailShouldRestoreCompact.value = true
   detailMode.value = 'full'
 }
 
 function closeFullDetail() {
-  if (!selectedDetail.value) {
-    detailMode.value = 'none'
+  if (fullDetailShouldRestoreCompact.value && selectedDetail.value) {
+    fullDetailShouldRestoreCompact.value = false
+    detailMode.value = 'compact'
     return
   }
-  detailMode.value = 'compact'
+  closeDetail()
+}
+
+function canApplyDetailBiomarker(item: MapTopBiomarker) {
+  return Boolean(item.hasPndl && item.biomarkerKey)
+}
+
+function detailBiomarkerPill(item: MapTopBiomarker) {
+  return canApplyDetailBiomarker(item) ? ui.value.pndlRegionAvailable : ui.value.pndlRegionUnavailable
+}
+
+function detailBiomarkerMeta(item: MapTopBiomarker) {
+  const path = [displayOptionLabel(item.category), displayOptionLabel(item.subcategory)]
+    .filter(Boolean)
+    .join(' / ')
+  const counts = [
+    `${ui.value.records} ${formatNumber(item.recordCount)}`,
+    `${ui.value.literature} ${formatNumber(item.doiCount)}`,
+    `${ui.value.points} ${formatNumber(item.pointCount)}`,
+  ].join(' · ')
+  return path ? `${path} · ${counts}` : counts
+}
+
+function pndlChartPercent(value?: number | null) {
+  const numericValue = Number(value ?? 0)
+  if (!Number.isFinite(numericValue) || numericValue <= 0 || pndlChartMax.value <= 0) return 0
+  return Math.max(4, Math.min(100, (numericValue / pndlChartMax.value) * 100))
+}
+
+function applyDetailBiomarker(item: MapTopBiomarker) {
+  if (!canApplyDetailBiomarker(item)) return
+  preserveSelectionOnNextSelectionChange = true
+  const nextCategory = item.category || selection.category || ALL_CATEGORY_LABEL
+  const nextSubcategory = item.subcategory || ALL_SUBCATEGORY_LABEL
+  closeDetail({ clearSelection: false })
+  selection.category = nextCategory
+  selection.subcategory = nextSubcategory
+  selection.biomarkerKey = item.biomarkerKey
 }
 
 function handleMapKeydown(event: KeyboardEvent) {
@@ -3158,13 +3244,12 @@ function resetMapView() {
   closeSearch()
   isLayerPanelOpen.value = false
   map.stop()
-  const center = map.getCenter()
   const targetZoom =
     mapMode.value === 'globe'
       ? Math.max(GLOBE_INITIAL_ZOOM, getGlobeSafeZoom())
       : Math.max(FLAT_INITIAL_ZOOM, FLAT_MIN_ZOOM + 0.2)
   map.easeTo({
-    center,
+    center: FLAT_CENTER,
     zoom: clampZoom(targetZoom),
     bearing: 0,
     pitch: 0,
@@ -3426,6 +3511,14 @@ function refreshStats() {
   scheduleStatsFetch(0)
 }
 
+function resetFilters() {
+  closeSearch()
+  isLayerPanelOpen.value = false
+  closeDetail()
+  Object.assign(selection, { ...DEFAULT_SELECTION })
+  scheduleStatsFetch(0)
+}
+
 function readInitialLocale(): Locale {
   if (typeof window === 'undefined') return 'zh'
   return window.localStorage.getItem(MAP_LOCALE_STORAGE_KEY) === 'en' ? 'en' : 'zh'
@@ -3452,12 +3545,26 @@ function displayOptionLabel(value?: string | null) {
   }
   if (normalized === '全部 biomarker') return ui.value.allBiomarkers
   if (normalized === '全部目标物质类别') return ui.value.allCategories
+  if (normalized === '全部小类') return ui.value.allSubcategories
+  if (normalized === '全部年份') return ui.value.allYears
   if (normalized === 'ALL') return ui.value.allTargetClasses
   return normalized
 }
 
 function isClusterFeature(props: Record<string, unknown>) {
   return Boolean(props.cluster || props.point_count)
+}
+
+function detailTargetFromFeature(feature: GeoJsonFeature) {
+  const props = feature.properties ?? {}
+  const level = normalizeMapLevel(props.level ?? props.boundaryLevel ?? props.sourceLevel)
+  const geoKey = String(props.geoKey ?? props.geo_key ?? props.sourceGeoKey ?? '')
+  return level && geoKey ? { level, geoKey } : null
+}
+
+function normalizeMapLevel(value: unknown): MapRegionStat['level'] | '' {
+  if (value === 'country' || value === 'admin1' || value === 'city') return value
+  return ''
 }
 
 function pointCoordinates(feature: GeoJsonFeature): [number, number] | null {
@@ -3926,9 +4033,14 @@ function escapeHtml(value: string) {
             </select>
           </label>
 
-          <button type="submit" :disabled="isLoadingStats">
-            {{ isLoadingStats ? ui.refreshing : ui.refresh }}
-          </button>
+          <div class="filter-actions">
+            <button class="filter-reset-button" type="button" @click="resetFilters">
+              {{ ui.resetFilters }}
+            </button>
+            <button class="filter-refresh-button" type="submit" :disabled="isLoadingStats">
+              {{ isLoadingStats ? ui.refreshing : ui.refresh }}
+            </button>
+          </div>
         </form>
         <button
           class="filter-toggle"
@@ -3961,7 +4073,11 @@ function escapeHtml(value: string) {
         aria-live="polite"
       >
         <header>
-          <span>{{ selectedDetail?.cluster ? ui.clusterTitle : ui.detail }}</span>
+          <div>
+            <span>{{ selectedDetail?.cluster ? ui.clusterTitle : ui.detailExploreTitle }}</span>
+            <h2 v-if="selectedDetail">{{ detailTitle }}</h2>
+            <p v-if="selectedDetail">{{ detailSubtitle }}</p>
+          </div>
           <div class="detail-actions">
             <button
               v-if="selectedDetail && !isLoadingDetail"
@@ -3973,88 +4089,56 @@ function escapeHtml(value: string) {
               <span aria-hidden="true">↗</span>
               {{ ui.fullDetail }}
             </button>
-            <button type="button" :aria-label="ui.closeDetail" @click.stop="closeDetail">×</button>
+            <button type="button" :aria-label="ui.closeDetail" @click.stop="() => closeDetail()">
+              ×
+            </button>
           </div>
         </header>
 
-        <template v-if="selectedDetail">
-          <h2>{{ detailTitle }}</h2>
-          <p class="detail-subtitle">{{ detailSubtitle }}</p>
+        <template v-if="isLoadingDetail">
+          <div class="detail-loading-card">
+            <strong>{{ ui.loadingDetail }}</strong>
+            <span>{{ filterSummary }}</span>
+          </div>
+        </template>
+
+        <template v-else-if="selectedDetail">
           <p v-if="compactDetailCallout" class="detail-callout">{{ compactDetailCallout }}</p>
-          <div v-if="selectedDetail.summaryCards?.length" class="detail-summary-grid compact">
-            <article v-for="card in selectedDetail.summaryCards.slice(0, 6)" :key="card.label">
+          <div v-if="compactSummaryCards.length" class="detail-summary-grid compact">
+            <article v-for="card in compactSummaryCards" :key="card.label">
               <span>{{ card.label }}</span>
               <strong>{{ card.value }}</strong>
               <small v-if="card.note">{{ card.note }}</small>
             </article>
           </div>
 
-          <dl class="detail-metrics">
-            <div>
-              <dt>{{ ui.locationPrecision }}</dt>
-              <dd>
-                {{ detailRegion ? locationPrecisionLabel(detailRegion.level) : ui.clusterCount }}
-              </dd>
-            </div>
-            <div v-if="detailRegion">
-              <dt>{{ ui.pndlGeomean }}</dt>
-              <dd>{{ formatCompact(detailRegion.pndlGeomeanMgD1000inh) }}</dd>
-            </div>
-            <div v-if="detailRegion">
-              <dt>{{ ui.pndlMean }}</dt>
-              <dd>{{ formatCompact(detailRegion.pndlMeanMgD1000inh) }}</dd>
-            </div>
-            <div v-if="detailRegion">
-              <dt>{{ ui.range }}</dt>
-              <dd>
-                {{ formatCompact(detailRegion.pndlMinMgD1000inh) }} -
-                {{ formatCompact(detailRegion.pndlMaxMgD1000inh) }}
-              </dd>
-            </div>
-            <div v-if="detailRegion">
-              <dt>{{ ui.recordsAndDoi }}</dt>
-              <dd>
-                {{ formatNumber(detailRegion.recordCount) }} /
-                {{ formatNumber(detailRegion.doiCount) }}
-              </dd>
-            </div>
-            <div v-if="detailRegion">
-              <dt>{{ ui.source }}</dt>
-              <dd>{{ detailRegion.pndlSources || ui.noData }}</dd>
-            </div>
-          </dl>
-
-          <section v-if="selectedDetail.topBiomarkers?.length" class="detail-mini-section">
-            <h3>{{ ui.topBiomarkers }}</h3>
-            <ol>
-              <li v-for="item in selectedDetail.topBiomarkers.slice(0, 5)" :key="item.biomarkerKey">
-                <strong>{{ item.biomarkerLabel }}</strong>
-                <span>{{ formatNumber(item.recordCount) }} {{ ui.records }}</span>
-              </li>
-            </ol>
-          </section>
-
-          <section class="source-list">
-            <h3>{{ ui.sourceRecords }}</h3>
-            <article
-              v-for="(source, index) in detailSources.slice(0, 6)"
-              :key="`${source.measurementId}-${index}`"
-            >
-              <strong>{{ source.biomarkerName || source.drugName }}</strong>
-              <span>{{ source.country }} {{ source.province }} {{ source.city }}</span>
-              <em
-                >{{ formatCompact(source.pndlMgD1000inh) }} mg/day/1000 inh ·
-                {{ source.pndlSource }}</em
+          <section class="region-explorer-section">
+            <h3>{{ ui.detailExploreTitle }}</h3>
+            <div v-if="compactBiomarkers.length" class="region-biomarker-list">
+              <button
+                v-for="item in compactBiomarkers.slice(0, 12)"
+                :key="item.biomarkerKey"
+                class="region-biomarker-action"
+                type="button"
+                :disabled="!canApplyDetailBiomarker(item)"
+                @click.stop="applyDetailBiomarker(item)"
               >
-              <small>{{ source.doi || source.sourceWorkbook || ui.sourcePending }}</small>
-            </article>
-            <p v-if="!detailSources.length">{{ ui.noSourceRecords }}</p>
+                <span class="region-biomarker-name">
+                  <strong>{{ item.biomarkerLabel }}</strong>
+                  <i :class="{ muted: !canApplyDetailBiomarker(item) }">
+                    {{ detailBiomarkerPill(item) }}
+                  </i>
+                </span>
+                <small>{{ detailBiomarkerMeta(item) }}</small>
+              </button>
+            </div>
+            <p v-else class="drawer-message">{{ ui.detailExploreEmpty }}</p>
+            <p class="region-explorer-note">{{ ui.detailExploreNote }}</p>
           </section>
+
         </template>
 
-        <p v-else class="drawer-message">
-          {{ detailError || selectedDetail ? ui.emptyBackendDetail : filterSummary }}
-        </p>
+        <p v-else-if="!detailError" class="drawer-message">{{ ui.emptyBackendDetail }}</p>
         <p v-if="detailError" class="drawer-message error">{{ detailError }}</p>
       </aside>
 
@@ -4078,40 +4162,130 @@ function escapeHtml(value: string) {
             </header>
 
             <div v-if="selectedDetail" class="full-detail-content">
+              <section class="detail-callout-section">
+                <p class="detail-callout">
+                  {{
+                    isClusterDetail
+                      ? compactDetailCallout
+                      : `${detailSubtitle} · ${filterSummary}`
+                  }}
+                </p>
+              </section>
+
+              <section class="pndl-chart-section">
+                <div class="section-title-row">
+                  <div>
+                    <h3>{{ ui.pndlComparison }}</h3>
+                    <span>{{ pndlChartTitle }} · {{ selectedBiomarkerLabel }}</span>
+                  </div>
+                  <div v-if="pndlComparisons.length > 1" class="pndl-modebar">
+                    <button
+                      v-for="mode in pndlComparisons"
+                      :key="mode.key"
+                      type="button"
+                      :class="{ active: activePndlComparison?.key === mode.key }"
+                      @click="activePndlComparisonKey = mode.key"
+                    >
+                      {{ mode.label }}
+                    </button>
+                  </div>
+                </div>
+                <div v-if="canRenderPndlChart" class="pndl-column-wrap">
+                  <div class="pndl-column-axis">
+                    <span>{{ formatCompact(pndlChartMax) }}</span>
+                    <i>PNDL</i>
+                    <span>0</span>
+                  </div>
+                  <div class="pndl-column-chart">
+                    <article
+                      v-for="item in pndlChartRows"
+                      :key="`${item.level}-${item.geoKey}`"
+                      class="pndl-column-item"
+                      :class="{ selected: item.selected }"
+                    >
+                      <div class="pndl-column-barbox">
+                        <i
+                          class="pndl-column-bar"
+                          :style="{ height: `${pndlChartPercent(item.pndlGeomeanMgD1000inh)}%` }"
+                        ></i>
+                      </div>
+                      <strong>{{ item.displayName }}</strong>
+                      <span>{{ formatCompact(item.pndlGeomeanMgD1000inh) }}</span>
+                    </article>
+                  </div>
+                </div>
+                <div v-if="canRenderPndlChart" class="pndl-ranking-table">
+                  <div class="pndl-ranking-row head">
+                    <span>{{ ui.pndlRanking }}</span>
+                    <span>{{ ui.pndlGeomean }}</span>
+                    <span>{{ ui.records }}</span>
+                    <span>{{ ui.literature }}</span>
+                    <span>{{ ui.points }}</span>
+                    <span>{{ ui.year }}</span>
+                  </div>
+                  <div
+                    v-for="item in pndlChartRows"
+                    :key="`rank-${item.level}-${item.geoKey}`"
+                    class="pndl-ranking-row"
+                    :class="{ selected: item.selected }"
+                  >
+                    <strong>{{ item.rank }}. {{ item.displayName }}</strong>
+                    <span>{{ formatCompact(item.pndlGeomeanMgD1000inh) }}</span>
+                    <span>{{ formatNumber(item.recordCount) }}</span>
+                    <span>{{ formatNumber(item.doiCount) }}</span>
+                    <span>{{ formatNumber(item.pointCount) }}</span>
+                    <span>{{ formatNumber(item.yearCount) }}</span>
+                  </div>
+                </div>
+                <p v-else class="pndl-status-card">
+                  {{
+                    selection.biomarkerKey === ALL_BIOMARKER_KEY
+                      ? ui.pndlChartNeedsBiomarker
+                      : ui.pndlChartNoData
+                  }}
+                </p>
+              </section>
+
+              <section class="trend-chart-section">
+                <div class="section-title-row">
+                  <div>
+                    <h3>{{ activeTrendSeries?.label || 'PNDL年度趋势' }}</h3>
+                    <span>{{ selectedBiomarkerLabel }}</span>
+                  </div>
+                </div>
+                <div v-if="canRenderTrendChart" class="trend-chart-card">
+                  <svg viewBox="-24 -18 728 258" role="img" aria-label="PNDL年度趋势">
+                    <line x1="0" y1="210" x2="680" y2="210" class="trend-axis"></line>
+                    <line x1="0" y1="0" x2="0" y2="210" class="trend-axis"></line>
+                    <polyline :points="trendPolyline" class="trend-line"></polyline>
+                    <g
+                      v-for="point in trendChartPoints"
+                      :key="point.year"
+                      class="trend-point"
+                    >
+                      <circle :cx="point.x" :cy="point.y" r="5"></circle>
+                      <text :x="point.x" :y="point.y - 12">{{ point.label }}</text>
+                      <text :x="point.x" y="236">{{ point.year }}</text>
+                    </g>
+                  </svg>
+                </div>
+                <p v-else class="pndl-status-card">
+                  {{
+                    selection.biomarkerKey === ALL_BIOMARKER_KEY
+                      ? ui.pndlChartNeedsBiomarker
+                      : '选择具体 biomarker 且存在多年份数据后展示年度趋势。'
+                  }}
+                </p>
+              </section>
+
               <section>
-                <h3>{{ ui.summaryOverview }}</h3>
+                <h3>{{ isClusterDetail ? ui.clusterOverview : ui.summaryOverview }}</h3>
                 <div class="detail-summary-grid">
-                  <article v-for="card in selectedDetail.summaryCards ?? []" :key="card.label">
+                  <article v-for="card in fullDetailSummaryCards" :key="card.label">
                     <span>{{ card.label }}</span>
                     <strong>{{ card.value }}</strong>
                     <small v-if="card.note">{{ card.note }}</small>
                   </article>
-                </div>
-              </section>
-
-              <section v-if="selectedDetail.pndlRanking?.length">
-                <h3>{{ ui.pndlRanking }}</h3>
-                <div class="detail-table">
-                  <div class="detail-table-row head">
-                    <span>#</span>
-                    <span>{{ ui.locationPrecision }}</span>
-                    <span>{{ ui.pndlGeomean }}</span>
-                    <span>{{ ui.recordsAndDoi }}</span>
-                  </div>
-                  <div
-                    v-for="item in selectedDetail.pndlRanking"
-                    :key="`${item.level}-${item.geoKey}`"
-                    class="detail-table-row"
-                    :class="{ selected: item.selected }"
-                  >
-                    <span>{{ item.rank }}</span>
-                    <strong>{{ item.displayName }}</strong>
-                    <span>{{ formatCompact(item.pndlGeomeanMgD1000inh) }}</span>
-                    <span
-                      >{{ formatNumber(item.recordCount) }} /
-                      {{ formatNumber(item.doiCount) }}</span
-                    >
-                  </div>
                 </div>
               </section>
 
@@ -4160,27 +4334,6 @@ function escapeHtml(value: string) {
                 </div>
               </section>
 
-              <section>
-                <h3>{{ ui.sourceRecords }}</h3>
-                <div class="source-table">
-                  <article
-                    v-for="(source, index) in detailSources"
-                    :key="`${source.measurementId}-${index}`"
-                  >
-                    <strong>{{ source.biomarkerName || source.drugName }}</strong>
-                    <span
-                      >{{ source.country }} {{ source.province }} {{ source.city }}
-                      {{ source.plantName }}</span
-                    >
-                    <em
-                      >{{ formatCompact(source.pndlMgD1000inh) }} mg/day/1000 inh ·
-                      {{ source.pndlSource }}</em
-                    >
-                    <small>{{ source.doi || source.sourceWorkbook || ui.sourcePending }}</small>
-                  </article>
-                  <p v-if="!detailSources.length">{{ ui.noSourceRecords }}</p>
-                </div>
-              </section>
             </div>
           </aside>
         </div>
@@ -4565,6 +4718,7 @@ function escapeHtml(value: string) {
   --detail-panel-width: min(420px, calc(50vw - 30px));
   --detail-panel-right: 22px;
   --detail-panel-gap: 18px;
+  --map-control-size: 36px;
   background: #dcecf5;
   transition: background 0.28s ease;
 }
@@ -4635,8 +4789,8 @@ function escapeHtml(value: string) {
 
 .map-tool-stack {
   position: absolute;
-  top: 110px;
-  right: 28px;
+  top: calc(18px + (var(--map-control-size) * 2) + 7px);
+  right: 18px;
   z-index: 5;
   display: grid;
   gap: 7px;
@@ -4650,8 +4804,8 @@ function escapeHtml(value: string) {
 }
 
 .map-tool-button {
-  width: 32px;
-  height: 32px;
+  width: var(--map-control-size);
+  height: var(--map-control-size);
   display: grid;
   place-items: center;
   padding: 0;
@@ -4913,15 +5067,48 @@ function escapeHtml(value: string) {
   white-space: nowrap;
 }
 
-.floating-filters button {
+.filter-actions {
+  display: grid;
+  grid-template-columns: 0.72fr 1fr;
+  gap: 9px;
+}
+
+.floating-filters .filter-reset-button,
+.floating-filters .filter-refresh-button {
   align-self: end;
   height: 40px;
-  border: 0;
   border-radius: 8px;
-  color: #ffffff;
-  background: #173247;
   font-weight: 900;
   cursor: pointer;
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.floating-filters .filter-reset-button {
+  border: 1px solid rgba(91, 117, 132, 0.24);
+  color: #476172;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.floating-filters .filter-reset-button:hover {
+  border-color: rgba(53, 79, 157, 0.28);
+  color: #253f88;
+  background: #f5f8ff;
+}
+
+.floating-filters .filter-refresh-button {
+  border: 0;
+  color: #ffffff;
+  background: linear-gradient(135deg, #266f82, #344f9d);
+  box-shadow: 0 10px 22px rgba(52, 79, 157, 0.18);
+}
+
+.floating-filters .filter-refresh-button:hover:not(:disabled) {
+  background: linear-gradient(135deg, #237f8d, #3f55aa);
+  box-shadow: 0 12px 28px rgba(52, 79, 157, 0.22);
 }
 
 .floating-filters button:disabled {
@@ -5081,13 +5268,43 @@ function escapeHtml(value: string) {
   backdrop-filter: blur(16px);
 }
 
+.detail-drawer header > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.detail-drawer header h2,
+.detail-drawer header p {
+  margin: 0;
+}
+
+.detail-drawer header h2 {
+  overflow: hidden;
+  color: #173247;
+  font-size: 18px;
+  line-height: 1.18;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-drawer header p {
+  overflow: hidden;
+  color: #617386;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .detail-actions {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.detail-drawer button {
+.detail-actions button {
   position: relative;
   z-index: 2;
   width: 34px;
@@ -5119,11 +5336,6 @@ function escapeHtml(value: string) {
 .detail-drawer h2,
 .source-list h3 {
   margin: 0;
-}
-
-.detail-drawer h2 {
-  font-size: 23px;
-  color: #173247;
 }
 
 .detail-subtitle {
@@ -5176,6 +5388,354 @@ function escapeHtml(value: string) {
   margin-top: 4px;
   color: #173247;
   font-size: 18px;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.section-title-row span {
+  display: block;
+  margin-top: 4px;
+  color: #637789;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.pndl-modebar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.pndl-modebar button {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid rgba(91, 117, 132, 0.2);
+  border-radius: 7px;
+  color: #516579;
+  background: #ffffff;
+  font-weight: 900;
+  cursor: pointer;
+  transition:
+    color 0.16s ease,
+    border-color 0.16s ease,
+    background 0.16s ease;
+}
+
+.pndl-modebar button.active,
+.pndl-modebar button:hover {
+  color: #2f4bb8;
+  border-color: rgba(69, 91, 205, 0.5);
+  background: rgba(90, 115, 221, 0.08);
+}
+
+.pndl-chart-section {
+  display: grid;
+  gap: 10px;
+}
+
+.pndl-column-wrap {
+  min-height: 246px;
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(91, 117, 132, 0.14);
+  border-radius: 9px;
+  background: linear-gradient(180deg, #f8fbff, #ffffff);
+}
+
+.pndl-column-axis {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  align-items: center;
+  justify-items: end;
+  color: #647789;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.pndl-column-axis i {
+  writing-mode: vertical-rl;
+  color: #344f9d;
+  font-style: normal;
+  letter-spacing: 0.06em;
+}
+
+.pndl-column-chart {
+  min-width: 0;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(54px, 72px);
+  align-items: end;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 4px 2px 2px;
+}
+
+.pndl-column-item {
+  min-height: 208px;
+  display: grid;
+  grid-template-rows: minmax(132px, 1fr) auto auto;
+  gap: 6px;
+  align-items: end;
+  color: #526778;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.pndl-column-barbox {
+  position: relative;
+  width: 100%;
+  height: 138px;
+  display: flex;
+  align-items: end;
+  justify-content: center;
+  border-bottom: 1px solid rgba(91, 117, 132, 0.16);
+}
+
+.pndl-column-bar {
+  width: 72%;
+  min-height: 4px;
+  border-radius: 8px 8px 3px 3px;
+  background: linear-gradient(180deg, rgba(87, 111, 207, 0.82), rgba(111, 131, 201, 0.42));
+  box-shadow: inset 0 0 0 1px rgba(52, 79, 157, 0.24);
+}
+
+.pndl-column-item.selected .pndl-column-bar {
+  background: linear-gradient(180deg, rgba(58, 80, 190, 0.96), rgba(69, 116, 186, 0.64));
+  box-shadow:
+    inset 0 0 0 1px rgba(38, 58, 131, 0.4),
+    0 0 0 3px rgba(79, 98, 198, 0.12);
+}
+
+.pndl-column-item strong {
+  overflow: hidden;
+  max-width: 100%;
+  color: #173247;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pndl-column-item span {
+  color: #344f9d;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.pndl-status-card {
+  margin: 0;
+  padding: 18px;
+  border: 1px dashed rgba(91, 117, 132, 0.22);
+  border-radius: 9px;
+  color: #647789;
+  background: #f8fafc;
+  font-weight: 850;
+  line-height: 1.6;
+}
+
+.pndl-ranking-table {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid rgba(91, 117, 132, 0.14);
+  border-radius: 8px;
+}
+
+.pndl-ranking-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.5fr) repeat(5, minmax(74px, 0.6fr));
+  gap: 10px;
+  align-items: center;
+  min-height: 38px;
+  padding: 8px 12px;
+  border-top: 1px solid rgba(91, 117, 132, 0.1);
+  color: #526778;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.pndl-ranking-row:first-child {
+  border-top: 0;
+}
+
+.pndl-ranking-row.head {
+  color: #637789;
+  background: #f3f7f9;
+  font-size: 11px;
+  text-transform: none;
+}
+
+.pndl-ranking-row.selected {
+  background: rgba(70, 92, 201, 0.08);
+}
+
+.pndl-ranking-row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #173247;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trend-chart-section {
+  display: grid;
+  gap: 10px;
+}
+
+.trend-chart-card {
+  min-height: 230px;
+  padding: 12px 14px;
+  border: 1px solid rgba(91, 117, 132, 0.14);
+  border-radius: 9px;
+  background: linear-gradient(180deg, #f8fbff, #ffffff);
+}
+
+.trend-chart-card svg {
+  width: 100%;
+  height: 240px;
+  overflow: visible;
+}
+
+.trend-axis {
+  stroke: rgba(91, 117, 132, 0.26);
+  stroke-width: 1;
+}
+
+.trend-line {
+  fill: none;
+  stroke: #3d5dcb;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 4;
+}
+
+.trend-point circle {
+  fill: #ffffff;
+  stroke: #3d5dcb;
+  stroke-width: 3;
+}
+
+.trend-point text {
+  fill: #526778;
+  font-size: 12px;
+  font-weight: 900;
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: #ffffff;
+  stroke-width: 3px;
+}
+
+.detail-loading-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid rgba(91, 117, 132, 0.14);
+  border-radius: 8px;
+  color: #607386;
+  background: #f8fafc;
+  font-weight: 850;
+}
+
+.detail-loading-card strong {
+  color: #173247;
+  font-size: 15px;
+}
+
+.region-explorer-section {
+  display: grid;
+  gap: 10px;
+}
+
+.region-explorer-section h3 {
+  margin: 0;
+  color: #173247;
+  font-size: 15px;
+}
+
+.region-biomarker-list {
+  display: grid;
+  gap: 7px;
+}
+
+.region-biomarker-action {
+  width: 100%;
+  min-height: 58px;
+  display: grid;
+  gap: 5px;
+  padding: 8px 9px;
+  border: 1px solid #dbeafe;
+  border-radius: 7px;
+  color: #173247;
+  background: #ffffff;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease,
+    transform 0.18s ease;
+}
+
+.region-biomarker-action:hover:not(:disabled) {
+  border-color: #4a65c7;
+  background: #f1f6ff;
+  transform: translateY(-1px);
+}
+
+.region-biomarker-action:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+  border-color: #e2e8f0;
+  background: #f8fafc;
+}
+
+.region-biomarker-name {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.region-biomarker-name strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #173247;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.region-biomarker-name i {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #243f9f;
+  background: #dbeafe;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.region-biomarker-name i.muted {
+  color: #647789;
+  background: #f1f5f9;
+}
+
+.region-biomarker-action small,
+.region-explorer-note {
+  color: #647789;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.region-explorer-note {
+  margin: 0;
 }
 
 .detail-metrics {
@@ -5531,8 +6091,8 @@ function escapeHtml(value: string) {
 }
 
 :deep(.maplibregl-ctrl-group button) {
-  width: 36px;
-  height: 36px;
+  width: var(--map-control-size);
+  height: var(--map-control-size);
 }
 
 :deep(.maplibregl-ctrl-group button:hover) {
@@ -5560,81 +6120,110 @@ function escapeHtml(value: string) {
 :deep(.map-tooltip-card) {
   min-width: 218px;
   max-width: 286px;
-  display: grid;
-  gap: 8px;
-  padding: 13px 14px;
+  overflow: hidden;
   border: 1px solid rgba(106, 126, 150, 0.14);
+  border-radius: 10px;
   background: rgba(255, 255, 255, 0.96);
   backdrop-filter: blur(14px);
 }
 
 :deep(.map-tooltip-card.muted) {
+  display: grid;
   gap: 5px;
+  padding: 10px 12px;
 }
 
-:deep(.map-tooltip-card > strong) {
+:deep(.map-tooltip-title) {
+  padding: 9px 10px 4px;
   color: #173247;
-  font-size: 16px;
+  font-size: 14px;
+  font-weight: 950;
   line-height: 1.18;
 }
 
-:deep(.map-tooltip-kicker),
 :deep(.map-tooltip-sub),
 :deep(.map-tooltip-card.muted span) {
+  padding: 0 10px 7px;
   color: #607386;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 850;
   line-height: 1.25;
-}
-
-:deep(.map-tooltip-kicker) {
-  color: #3f55aa;
-}
-
-:deep(.map-tooltip-primary) {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, rgba(111, 131, 201, 0.13), rgba(61, 141, 189, 0.1));
-  color: #607386;
-  font-size: 12px;
-  font-weight: 850;
-}
-
-:deep(.map-tooltip-primary b) {
-  color: #23386f;
-  font-size: 19px;
 }
 
 :deep(.map-tooltip-grid) {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 7px;
+  border-top: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
 }
 
-:deep(.map-tooltip-grid.single) {
-  grid-template-columns: 1fr;
-}
-
-:deep(.map-tooltip-grid span) {
-  display: grid;
-  gap: 2px;
+:deep(.map-tooltip-metric) {
   min-width: 0;
   padding: 7px 8px;
-  border: 1px solid rgba(106, 126, 150, 0.12);
-  border-radius: 8px;
-  color: #718294;
-  background: rgba(247, 250, 252, 0.88);
+  border-right: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+:deep(.map-tooltip-metric:last-child) {
+  border-right: 0;
+}
+
+:deep(.map-tooltip-metric span) {
+  display: block;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+:deep(.map-tooltip-metric b) {
+  display: block;
+  margin-top: 2px;
+  color: #173247;
+  font-size: 14px;
+}
+
+:deep(.map-tooltip-extra) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 7px 10px;
+  color: #475569;
   font-size: 11px;
   font-weight: 850;
 }
 
-:deep(.map-tooltip-grid b) {
+:deep(.map-tooltip-extra b) {
   color: #173247;
-  font-size: 14px;
+}
+
+:deep(.map-tooltip-heat) {
+  margin: 0 10px 8px;
+  padding: 7px 8px;
+  border: 1px solid #dbeafe;
+  border-radius: 7px;
+  color: #23386f;
+  background: #eff6ff;
+  font-weight: 850;
+}
+
+:deep(.map-tooltip-heat span) {
+  display: block;
+  color: #3f55aa;
+  font-size: 10px;
+}
+
+:deep(.map-tooltip-heat b) {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+}
+
+:deep(.map-tooltip-hint) {
+  padding: 7px 10px 8px;
+  border-top: 1px solid #e2e8f0;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 850;
 }
 
 @keyframes mapHeaderIn {
@@ -5764,12 +6353,12 @@ function escapeHtml(value: string) {
   }
 
   .map-tool-stack {
-    top: 104px;
-    right: 22px;
+    top: calc(12px + (var(--map-control-size) * 2) + 7px);
+    right: 12px;
   }
 
   .detail-open .map-tool-stack {
-    right: 22px;
+    right: 12px;
     z-index: 9;
   }
 
@@ -5778,7 +6367,7 @@ function escapeHtml(value: string) {
   }
 
   .filters-closed .map-tool-stack {
-    top: 104px;
+    top: calc(12px + (var(--map-control-size) * 2) + 7px);
   }
 
   .map-message {
