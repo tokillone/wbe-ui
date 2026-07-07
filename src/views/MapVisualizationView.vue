@@ -12,6 +12,7 @@ import {
   fetchMapStats,
 } from '../services/map'
 import type {
+  MapBiomarkerOption,
   MapClusterLocationRequest,
   MapDetailResponse,
   MapFilterResponse,
@@ -103,6 +104,11 @@ const DEFAULT_SELECTION: MapFilterSelection = {
   biomarkerKey: 'ALL',
   year: '全部年份',
 }
+const ALL_CATEGORY_LABEL = DEFAULT_SELECTION.category
+const ALL_SUBCATEGORY_LABEL = DEFAULT_SELECTION.subcategory
+const ALL_BIOMARKER_KEY = DEFAULT_SELECTION.biomarkerKey
+const ALL_BIOMARKER_LABEL = '全部 biomarker'
+const ALL_YEAR_LABEL = DEFAULT_SELECTION.year
 const REGION_INTERACTIVE_LAYERS = [
   'country-hit',
   'admin1-hit',
@@ -464,24 +470,36 @@ const currentTargetClasses = computed(() => filters.value?.targetClasses ?? [])
 const currentCategories = computed(() => {
   if (!filters.value) return []
   if (selection.targetClass && selection.targetClass !== 'ALL') {
-    return filters.value.categoriesByTargetClass?.[selection.targetClass] ?? []
+    return withAllCategory(filters.value.categoriesByTargetClass?.[selection.targetClass])
   }
-  return filters.value.categories
+  return withAllCategory(filters.value.categories)
 })
 const currentSubcategories = computed(() =>
-  filters.value?.subcategoriesByCategory[selection.category] ?? [],
+  selection.category === ALL_CATEGORY_LABEL
+    ? withFallbackOption(filters.value?.subcategoriesByCategory[selection.category], ALL_SUBCATEGORY_LABEL)
+    : (filters.value?.subcategoriesByCategory[selection.category] ?? []),
 )
 const currentBiomarkers = computed(
-  () =>
-    filters.value?.biomarkersByCategorySubcategory[
-      buildSelectionKey(selection.category, selection.subcategory)
-    ] ?? [],
+  () => {
+    const items =
+      filters.value?.biomarkersByCategorySubcategory[
+        buildSelectionKey(selection.category, selection.subcategory)
+      ] ?? []
+    return selection.category === ALL_CATEGORY_LABEL && selection.subcategory === ALL_SUBCATEGORY_LABEL
+      ? withAllBiomarker(items)
+      : items
+  },
 )
 const currentYears = computed(
-  () =>
-    filters.value?.yearsBySelection[
-      buildSelectionKey(selection.category, selection.subcategory, selection.biomarkerKey)
-    ] ?? [],
+  () => {
+    const years =
+      filters.value?.yearsBySelection[
+        buildSelectionKey(selection.category, selection.subcategory, selection.biomarkerKey)
+      ] ?? []
+    return selection.category === ALL_CATEGORY_LABEL && selection.subcategory === ALL_SUBCATEGORY_LABEL
+      ? withFallbackOption(years, ALL_YEAR_LABEL)
+      : years
+  },
 )
 const selectedBiomarkerLabel = computed(
   () =>
@@ -506,9 +524,6 @@ const detailTitle = computed(
 const detailSubtitle = computed(() => selectedDetail.value?.subtitle || filterSummary.value)
 const detailSources = computed(
   () => selectedDetail.value?.sourceRecords ?? selectedDetail.value?.sources ?? [],
-)
-const basemapFallbackMessage = computed(() =>
-  mapReady.value && basemapMode === 'geojson' ? ui.value.backendBasemapFallback : '',
 )
 const hasEmptyFilterData = computed(
   () =>
@@ -541,9 +556,6 @@ const activeMapMessage = computed(() => {
   }
   if (hasNoStatsData.value) {
     return { type: 'notice', text: stats.value?.diagnostics?.message || ui.value.noStatsData }
-  }
-  if (basemapFallbackMessage.value) {
-    return { type: 'notice', text: basemapFallbackMessage.value }
   }
   return null
 })
@@ -681,12 +693,37 @@ async function loadFilters() {
       ...DEFAULT_SELECTION,
       ...(result.defaultSelection ?? {}),
       targetClass: result.defaultSelection?.targetClass ?? 'ALL',
+      category: ALL_CATEGORY_LABEL,
+      subcategory: ALL_SUBCATEGORY_LABEL,
+      biomarkerKey: ALL_BIOMARKER_KEY,
     })
   } catch (error) {
     filterError.value = error instanceof Error ? error.message : ui.value.filterLoadFailed
   } finally {
     isLoadingFilters.value = false
   }
+}
+
+function withFallbackOption(items: string[] | undefined, option: string) {
+  const values = (items ?? []).filter(Boolean)
+  return values.includes(option) ? values : [option, ...values]
+}
+
+function withAllCategory(categories?: string[]) {
+  return withFallbackOption(categories, ALL_CATEGORY_LABEL)
+}
+
+function withAllBiomarker(items: MapBiomarkerOption[]) {
+  return items.some((item) => item.key === ALL_BIOMARKER_KEY)
+    ? items
+    : [
+        {
+          key: ALL_BIOMARKER_KEY,
+          label: ALL_BIOMARKER_LABEL,
+          cas: null,
+        },
+        ...items,
+      ]
 }
 
 async function initMap() {
@@ -822,30 +859,27 @@ async function registerPmtilesProtocol(module: MapLibreModule) {
 
 async function canLoadVectorBasemapAssets(pmtilesUrl: string) {
   if (!(await canLoadPmtilesArchive(pmtilesUrl))) return false
-  const glyphUrl = glyphProbeUrl(BASEMAP_GLYPHS_URL)
+  const glyphUrls = glyphProbeUrls(BASEMAP_GLYPHS_URL)
   const spriteUrl = spriteProbeUrl(BASEMAP_SPRITE_URL)
-  if (!glyphUrl || !spriteUrl) return false
+  if (!glyphUrls.length || !spriteUrl) return false
   const [glyphsAvailable, spriteAvailable] = await Promise.all([
-    canLoadStaticAsset(glyphUrl),
+    canLoadAnyStaticAsset(glyphUrls),
     canLoadStaticAsset(spriteUrl),
   ])
   return glyphsAvailable && spriteAvailable
 }
 
 async function canLoadPmtilesArchive(url: string) {
-  let headRejected = false
   try {
     const head = await fetch(url, { method: 'HEAD', cache: 'no-store' })
     if (head.ok) {
       const contentLength = Number(head.headers.get('content-length') ?? '0')
       if (contentLength > 0 && contentLength < PMTILES_MAGIC.length) return false
-    } else if (head.status !== 405) {
-      headRejected = true
     }
   } catch {
-    headRejected = true
+    // Some static hosts/proxies reject HEAD for large PMTiles files. The range
+    // GET below is the source of truth, so do not fail early here.
   }
-  if (headRejected) return false
 
   try {
     const prefix = await fetchResponsePrefix(url, PMTILES_MAGIC.length)
@@ -871,12 +905,14 @@ async function fetchResponsePrefix(url: string, length: number) {
   return new TextDecoder().decode(new Uint8Array(buffer).slice(0, length))
 }
 
-function glyphProbeUrl(template: string) {
+function glyphProbeUrls(template: string) {
   const trimmed = template.trim()
-  if (!trimmed) return ''
-  return trimmed
+  if (!trimmed) return []
+  const raw = trimmed.replace('{fontstack}', 'Noto Sans Regular').replace('{range}', '0-255')
+  const encoded = trimmed
     .replace('{fontstack}', encodeURIComponent('Noto Sans Regular'))
     .replace('{range}', '0-255')
+  return Array.from(new Set([raw, encoded]))
 }
 
 function spriteProbeUrl(template: string) {
@@ -889,9 +925,8 @@ async function canLoadStaticAsset(url: string) {
   try {
     const head = await fetch(url, { method: 'HEAD', cache: 'no-store' })
     if (head.ok) return true
-    if (head.status !== 405) return false
   } catch {
-    return false
+    // Fall through to GET for hosts that do not support HEAD reliably.
   }
 
   try {
@@ -901,6 +936,13 @@ async function canLoadStaticAsset(url: string) {
   } catch {
     return false
   }
+}
+
+async function canLoadAnyStaticAsset(urls: string[]) {
+  for (const url of urls) {
+    if (await canLoadStaticAsset(url)) return true
+  }
+  return false
 }
 
 function handleMapRuntimeError(event: unknown) {
@@ -916,6 +958,7 @@ function handleMapRuntimeError(event: unknown) {
     return
   }
   if (basemapMode !== 'vector' || isBasemapFallbackInProgress) return
+  if (/glyph|sprite|font/i.test(message)) return
   if (sourceId && sourceId !== 'protomaps') return
   if (message && /map-points|pndl/i.test(message)) return
   if (!message && !sourceId && !payload.tile) return
@@ -2452,13 +2495,15 @@ async function openFeatureDetail(feature: GeoJsonFeature) {
   detailController = new AbortController()
   selectedDetail.value = null
   isLoadingDetail.value = true
-  detailMode.value = 'compact'
+  detailMode.value = 'none'
   detailError.value = ''
   try {
     selectedDetail.value = await fetchMapDetail(level, geoKey, { ...selection }, detailController.signal)
+    detailMode.value = 'compact'
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     detailError.value = error instanceof Error ? error.message : ui.value.detailLoadFailed
+    detailMode.value = 'compact'
   } finally {
     isLoadingDetail.value = false
   }
@@ -2478,7 +2523,7 @@ async function openClusterDetail(feature: GeoJsonFeature) {
   detailController = new AbortController()
   selectedDetail.value = null
   isLoadingDetail.value = true
-  detailMode.value = 'compact'
+  detailMode.value = 'none'
   detailError.value = ''
   try {
     const locations = await clusterLocations(clusterId, Number(feature.properties.point_count ?? 0))
@@ -2487,9 +2532,11 @@ async function openClusterDetail(feature: GeoJsonFeature) {
       locations,
       detailController.signal,
     )
+    detailMode.value = 'compact'
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     detailError.value = error instanceof Error ? error.message : ui.value.detailLoadFailed
+    detailMode.value = 'compact'
   } finally {
     isLoadingDetail.value = false
   }
@@ -3787,29 +3834,29 @@ function escapeHtml(value: string) {
           </section>
         </template>
 
-        <p v-else-if="isLoadingDetail" class="drawer-message">{{ ui.loadingDetail }}</p>
         <p v-else class="drawer-message">
           {{ detailError || selectedDetail ? ui.emptyBackendDetail : filterSummary }}
         </p>
         <p v-if="detailError" class="drawer-message error">{{ detailError }}</p>
       </aside>
 
-      <aside
-        class="full-detail-panel"
-        :class="{ open: isFullDetailOpen }"
-        :aria-hidden="!isFullDetailOpen"
+      <div
+        v-if="isFullDetailOpen"
+        class="full-detail-backdrop"
         aria-live="polite"
+        @click.self="closeFullDetail"
       >
-        <header>
-          <div>
-            <span>{{ ui.fullDetailTitle }}</span>
-            <h2>{{ detailTitle }}</h2>
-            <p>{{ detailSubtitle }}</p>
-          </div>
-          <button type="button" :aria-label="ui.closeFullDetail" @click.stop="closeFullDetail">×</button>
-        </header>
+        <aside class="full-detail-panel open" aria-modal="true" role="dialog" @click.stop>
+          <header>
+            <div>
+              <span>{{ ui.fullDetailTitle }}</span>
+              <h2>{{ detailTitle }}</h2>
+              <p>{{ detailSubtitle }}</p>
+            </div>
+            <button type="button" :aria-label="ui.closeFullDetail" @click.stop="closeFullDetail">×</button>
+          </header>
 
-        <div v-if="selectedDetail" class="full-detail-content">
+          <div v-if="selectedDetail" class="full-detail-content">
           <section>
             <h3>{{ ui.summaryOverview }}</h3>
             <div class="detail-summary-grid">
@@ -3898,8 +3945,9 @@ function escapeHtml(value: string) {
               <p v-if="!detailSources.length">{{ ui.noSourceRecords }}</p>
             </div>
           </section>
-        </div>
-      </aside>
+          </div>
+        </aside>
+      </div>
     </section>
   </main>
 </template>
@@ -4922,14 +4970,22 @@ function escapeHtml(value: string) {
   margin-left: 6px;
 }
 
-.full-detail-panel {
+.full-detail-backdrop {
   position: absolute;
-  top: 18px;
-  right: 18px;
-  z-index: 10;
+  inset: 0;
+  z-index: 12;
+  display: grid;
+  place-items: center;
+  padding: 42px;
+  background: rgba(9, 28, 44, 0.22);
+  backdrop-filter: blur(3px);
+  animation: detail-backdrop-in 0.2s ease both;
+}
+
+.full-detail-panel {
   width: min(960px, calc(100vw - 80px));
   max-width: calc(100% - 44px);
-  height: calc(100% - 36px);
+  height: min(760px, calc(100vh - 112px));
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
@@ -4938,9 +4994,9 @@ function escapeHtml(value: string) {
   background: rgba(255, 255, 255, 0.97);
   box-shadow: 0 28px 76px rgba(19, 46, 63, 0.24);
   opacity: 0;
-  pointer-events: none;
-  transform: translateX(26px) scale(0.992);
-  transform-origin: right center;
+  pointer-events: auto;
+  transform: translateY(10px) scale(0.985);
+  transform-origin: center;
   transition:
     transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1),
     opacity 0.22s ease;
@@ -4949,8 +5005,16 @@ function escapeHtml(value: string) {
 
 .full-detail-panel.open {
   opacity: 1;
-  pointer-events: auto;
-  transform: translateX(0) scale(1);
+  transform: translateY(0) scale(1);
+}
+
+@keyframes detail-backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .full-detail-panel header {
@@ -5362,15 +5426,16 @@ function escapeHtml(value: string) {
     transform: translateY(0) scale(1);
   }
 
+  .full-detail-backdrop {
+    padding: 12px;
+    place-items: end center;
+  }
+
   .full-detail-panel {
-    top: auto;
-    left: 10px;
-    right: 10px;
-    bottom: 10px;
-    width: auto;
+    width: 100%;
     max-width: none;
-    height: min(78vh, calc(100% - 22px));
-    transform: translateY(calc(100% + 24px)) scale(0.992);
+    height: min(78vh, calc(100vh - 24px));
+    transform: translateY(18px) scale(0.992);
     transform-origin: bottom center;
   }
 
