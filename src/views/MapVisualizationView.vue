@@ -525,6 +525,16 @@ const detailSubtitle = computed(() => selectedDetail.value?.subtitle || filterSu
 const detailSources = computed(
   () => selectedDetail.value?.sourceRecords ?? selectedDetail.value?.sources ?? [],
 )
+const compactDetailCallout = computed(() => {
+  if (!selectedDetail.value) return ''
+  if (selectedDetail.value.cluster) {
+    const locationCount =
+      selectedDetail.value.locations?.length ?? detailRegion.value?.pointCount ?? 0
+    return `${formatNumber(locationCount)} ${ui.value.clusterCount} · ${ui.value.records} ${formatNumber(detailRegion.value?.recordCount)} · ${ui.value.literature} ${formatNumber(detailRegion.value?.doiCount)}`
+  }
+  if (!detailRegion.value) return detailSubtitle.value
+  return `${locationPrecisionLabel(detailRegion.value.level)} · ${ui.value.pndlGeomean} ${formatCompact(detailRegion.value.pndlGeomeanMgD1000inh)} · ${ui.value.records} ${formatNumber(detailRegion.value.recordCount)}`
+})
 const hasEmptyFilterData = computed(
   () =>
     Boolean(filters.value) &&
@@ -3970,6 +3980,7 @@ function escapeHtml(value: string) {
         <template v-if="selectedDetail">
           <h2>{{ detailTitle }}</h2>
           <p class="detail-subtitle">{{ detailSubtitle }}</p>
+          <p v-if="compactDetailCallout" class="detail-callout">{{ compactDetailCallout }}</p>
           <div v-if="selectedDetail.summaryCards?.length" class="detail-summary-grid compact">
             <article v-for="card in selectedDetail.summaryCards.slice(0, 6)" :key="card.label">
               <span>{{ card.label }}</span>
@@ -4551,6 +4562,9 @@ function escapeHtml(value: string) {
   position: relative;
   min-height: calc(100vh - 70px);
   overflow: hidden;
+  --detail-panel-width: min(420px, calc(50vw - 30px));
+  --detail-panel-right: 22px;
+  --detail-panel-gap: 18px;
   background: #dcecf5;
   transition: background 0.28s ease;
 }
@@ -4631,7 +4645,8 @@ function escapeHtml(value: string) {
 }
 
 .detail-open .map-tool-stack {
-  right: 28px;
+  right: calc(var(--detail-panel-right) + var(--detail-panel-width) + var(--detail-panel-gap));
+  z-index: 9;
 }
 
 .map-tool-button {
@@ -4916,8 +4931,8 @@ function escapeHtml(value: string) {
 
 .map-message {
   position: absolute;
-  top: 98px;
-  left: 50%;
+  top: 18px;
+  left: 374px;
   z-index: 3;
   margin: 0;
   padding: 10px 13px;
@@ -4925,7 +4940,9 @@ function escapeHtml(value: string) {
   color: #173247;
   background: rgba(255, 255, 255, 0.94);
   box-shadow: 0 14px 35px rgba(19, 46, 63, 0.14);
-  transform: translateX(-50%);
+  max-width: min(360px, calc(100% - 410px));
+  transform: none;
+  backdrop-filter: blur(12px);
 }
 
 .map-message.error,
@@ -4934,8 +4951,9 @@ function escapeHtml(value: string) {
 }
 
 .map-message.notice {
-  color: #715017;
-  background: rgba(255, 248, 223, 0.96);
+  border-left: 3px solid rgba(111, 131, 201, 0.62);
+  color: #4d5d77;
+  background: rgba(255, 255, 255, 0.88);
 }
 
 .map-message.loading {
@@ -5001,18 +5019,19 @@ function escapeHtml(value: string) {
 }
 
 .detail-open .map-status-chip {
-  right: 18px;
+  right: calc(var(--detail-panel-right) + var(--detail-panel-width) + var(--detail-panel-gap));
+  max-width: min(360px, calc(100% - var(--detail-panel-width) - 92px));
 }
 
 .detail-drawer {
   position: absolute;
-  top: 106px;
-  right: 22px;
-  bottom: auto;
+  top: 18px;
+  right: var(--detail-panel-right);
+  bottom: 18px;
   z-index: 8;
   box-sizing: border-box;
-  width: min(410px, calc(50vw - 30px));
-  max-height: min(620px, calc(100% - 130px));
+  width: var(--detail-panel-width);
+  max-height: none;
   display: grid;
   align-content: start;
   gap: 12px;
@@ -5048,12 +5067,18 @@ function escapeHtml(value: string) {
 }
 
 .detail-drawer header {
+  position: sticky;
+  top: -17px;
+  z-index: 4;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 2px 0 11px;
+  margin: -17px -17px 0;
+  padding: 17px 17px 12px;
   border-bottom: 1px solid rgba(91, 117, 132, 0.12);
+  background: rgba(255, 255, 255, 0.97);
+  backdrop-filter: blur(16px);
 }
 
 .detail-actions {
@@ -5106,6 +5131,18 @@ function escapeHtml(value: string) {
   color: #617386;
   font-size: 13px;
   font-weight: 800;
+}
+
+.detail-callout {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 4px solid #3f55aa;
+  border-radius: 7px;
+  color: #334155;
+  background: #f1f7fd;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.55;
 }
 
 .detail-summary-grid {
@@ -5482,7 +5519,8 @@ function escapeHtml(value: string) {
 }
 
 .detail-open :deep(.maplibregl-ctrl-top-right) {
-  right: min(428px, 50vw);
+  right: calc(var(--detail-panel-right) + var(--detail-panel-width) + var(--detail-panel-gap));
+  z-index: 9;
 }
 
 :deep(.maplibregl-ctrl-group) {
@@ -5730,12 +5768,22 @@ function escapeHtml(value: string) {
     right: 22px;
   }
 
+  .detail-open .map-tool-stack {
+    right: 22px;
+    z-index: 9;
+  }
+
+  .detail-open :deep(.maplibregl-ctrl-top-right) {
+    right: 18px;
+  }
+
   .filters-closed .map-tool-stack {
     top: 104px;
   }
 
   .map-message {
     top: 18px;
+    left: 12px;
     max-width: calc(100% - 112px);
   }
 
