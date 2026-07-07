@@ -101,7 +101,59 @@ export interface MapSourceRecord {
   pndlSource?: string | null
 }
 
+export interface MapSummaryCard {
+  label: string
+  value: string
+  note?: string | null
+}
+
+export interface MapTopBiomarker {
+  biomarkerKey: string
+  biomarkerLabel: string
+  biomarkerCas?: string | null
+  category?: string | null
+  subcategory?: string | null
+  recordCount?: number | null
+  doiCount?: number | null
+  pointCount?: number | null
+  hasPndl?: boolean | null
+}
+
+export interface MapPndlRankingItem {
+  rank: number
+  level: MapRegionStat['level']
+  geoKey: string
+  displayName: string
+  pndlGeomeanMgD1000inh?: number | null
+  recordCount?: number | null
+  doiCount?: number | null
+  pointCount?: number | null
+  yearCount?: number | null
+  pndlSources?: string | null
+  selected?: boolean | null
+}
+
+export interface MapBreakdownItem {
+  label: string
+  recordCount: number
+  percentage?: number | null
+}
+
+export interface MapClusterLocationRequest {
+  level: MapRegionStat['level']
+  geoKey: string
+}
+
 export interface MapDetailResponse {
+  title?: string | null
+  subtitle?: string | null
+  cluster?: boolean | null
   region: MapRegionStat | null
+  locations?: MapRegionStat[] | null
+  summaryCards?: MapSummaryCard[] | null
+  topBiomarkers?: MapTopBiomarker[] | null
+  pndlRanking?: MapPndlRankingItem[] | null
+  categoryBreakdown?: MapBreakdownItem[] | null
   sources: MapSourceRecord[]
+  sourceRecords?: MapSourceRecord[] | null
 }
