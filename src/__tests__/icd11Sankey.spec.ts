@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { fetchIcd11SankeyCategories, fetchIcd11SankeyGraph } from '../services/icd11Sankey'
-import { level2DrugShares, sankeyHoverTargetKey, smartSankeyLimit } from '../utils/icd11SankeyDisplay'
+import {
+  relationPieSectionsForNode,
+  relationShareItems,
+  sankeyHoverTargetKey,
+  smartSankeyLimit,
+} from '../utils/icd11SankeyDisplay'
 import type { Icd11SankeyPath } from '../types/icd11Sankey'
 
 describe('icd11Sankey service', () => {
@@ -76,28 +81,43 @@ describe('icd11Sankey display helpers', () => {
     expect(smartSankeyLimit(3)).toBeNull()
   })
 
-  it('aggregates Level2 drug shares for the pie chart', () => {
+  it('aggregates relation shares for pie charts', () => {
     const paths: Icd11SankeyPath[] = [
-      path('p1', '内分泌疾病', '二甲双胍', 10),
-      path('p2', '内分泌疾病', '二甲双胍', 3),
-      path('p3', '内分泌疾病', '格列齐特', 7),
+      path('p1', '内分泌疾病', '二甲双胍', '二甲双胍', 10),
+      path('p2', '内分泌疾病', '二甲双胍', '二甲双胍', 3),
+      path('p3', '胃或十二指肠溃疡', '格列齐特', '格列齐特', 7),
     ]
 
-    const shares = level2DrugShares(paths)
+    const level2Shares = relationShareItems(paths, (item) => item.level2)
+    const drugShares = relationShareItems(paths, (item) => item.drug)
+    const biomarkerShares = relationShareItems(paths, (item) => item.biomarker)
 
-    expect(shares).toHaveLength(2)
-    expect(shares[0]).toMatchObject({
+    expect(level2Shares).toHaveLength(2)
+    expect(level2Shares[0]).toMatchObject({
+      name: '内分泌疾病',
+      value: 13,
+      share: 0.65,
+      pathIds: ['p1', 'p2'],
+    })
+    expect(level2Shares[1]).toMatchObject({
+      name: '胃或十二指肠溃疡',
+      value: 7,
+      share: 0.35,
+      pathIds: ['p3'],
+    })
+    expect(drugShares[0]).toMatchObject({
       name: '二甲双胍',
       value: 13,
       share: 0.65,
       pathIds: ['p1', 'p2'],
     })
-    expect(shares[1]).toMatchObject({
+    expect(drugShares[1]).toMatchObject({
       name: '格列齐特',
       value: 7,
       share: 0.35,
       pathIds: ['p3'],
     })
+    expect(biomarkerShares.map((item) => item.name)).toEqual(['二甲双胍', '格列齐特'])
   })
 
   it('deduplicates hover target keys regardless of path order', () => {
@@ -105,18 +125,56 @@ describe('icd11Sankey display helpers', () => {
       sankeyHoverTargetKey('edge:a', ['p1', 'p2']),
     )
   })
+
+  it('builds pie sections based on locked node kind', () => {
+    const paths: Icd11SankeyPath[] = [
+      path('p1', '内分泌疾病', '二甲双胍', '二甲双胍', 10),
+      path('p2', '胃或十二指肠溃疡', '二甲双胍', '乳酸', 3),
+      path('p3', '内分泌疾病', '二甲双胍', '二甲双胍', 2),
+    ]
+
+    const level1Sections = relationPieSectionsForNode('level1', paths)
+    const level2Sections = relationPieSectionsForNode('level2', paths)
+    const drugSections = relationPieSectionsForNode('drug', paths)
+    const biomarkerSections = relationPieSectionsForNode('biomarker', paths)
+
+    expect(level1Sections.map((section) => section.id)).toEqual(['level1-level2'])
+    expect(level2Sections.map((section) => section.id)).toEqual(['level2-drug'])
+    expect(drugSections.map((section) => section.id)).toEqual(['drug-level2', 'drug-biomarker'])
+    expect(biomarkerSections).toEqual([])
+    const drugLevel2Section = drugSections[0]
+    const drugBiomarkerSection = drugSections[1]
+    expect(drugLevel2Section).toBeDefined()
+    expect(drugBiomarkerSection).toBeDefined()
+    expect(drugLevel2Section?.items[0]).toMatchObject({
+      name: '内分泌疾病',
+      value: 12,
+      pathIds: ['p1', 'p3'],
+    })
+    expect(drugBiomarkerSection?.items[0]).toMatchObject({
+      name: '二甲双胍',
+      value: 12,
+      pathIds: ['p1', 'p3'],
+    })
+  })
 })
 
-function path(pathId: string, level2: string, drug: string, weight: number): Icd11SankeyPath {
+function path(
+  pathId: string,
+  level2: string,
+  drug: string,
+  biomarker: string,
+  weight: number,
+): Icd11SankeyPath {
   return {
     pathId,
     level1: '内分泌、营养或代谢疾病',
     level2,
     drug,
-    biomarker: drug,
+    biomarker,
     biomarkerAliases: [],
     weight,
     share: 0,
-    nodeIds: ['level1', 'level2', `drug::${drug}`, `biomarker::${drug}`],
+    nodeIds: ['level1', 'level2', `drug::${drug}`, `biomarker::${biomarker}`],
   }
 }
