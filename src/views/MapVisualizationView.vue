@@ -455,6 +455,7 @@ const locale = ref<Locale>(readInitialLocale())
 const loadingBoundaryNames = ref<BoundaryName[]>([])
 const selectedRegionFeature = ref<GeoJsonFeature | null>(null)
 const selectedPointKey = ref('')
+const pinnedBiomarkerOption = ref<MapBiomarkerOption | null>(null)
 const mapStatus = ref<MapStatus>({
   latitude: FLAT_CENTER[1],
   longitude: FLAT_CENTER[0],
@@ -523,7 +524,12 @@ const currentBiomarkers = computed(() => {
     filters.value?.biomarkersByCategorySubcategory[
       buildSelectionKey(selection.category, selection.subcategory)
     ] ?? []
-  return withAllBiomarker(items)
+  const normalizedItems = withAllBiomarker(items)
+  const pinned = pinnedBiomarkerOption.value
+  if (pinned && selection.biomarkerKey === pinned.key && !normalizedItems.some((item) => item.key === pinned.key)) {
+    return [...normalizedItems, pinned]
+  }
+  return normalizedItems
 })
 const currentYears = computed(() => {
   const years =
@@ -536,7 +542,10 @@ const selectedBiomarkerLabel = computed(
   () =>
     displayOptionLabel(
       currentBiomarkers.value.find((item) => item.key === selection.biomarkerKey)?.label,
-    ) ?? ui.value.allBiomarkers,
+    ) ||
+    (selection.biomarkerKey === ALL_BIOMARKER_KEY
+      ? ui.value.allBiomarkers
+      : selection.biomarkerKey),
 )
 const filterSummary = computed(() => {
   const parts = [
@@ -572,6 +581,9 @@ const pndlRankingRows = computed(() => pndlChartRows.value.slice(0, 30))
 const hasSpecificBiomarker = computed(() => selection.biomarkerKey !== ALL_BIOMARKER_KEY)
 const canRenderPndlChart = computed(
   () => hasSpecificBiomarker.value && pndlChartRows.value.length > 0,
+)
+const canShowPndlComparisonSection = computed(
+  () => hasSpecificBiomarker.value && pndlComparisons.value.length > 0 && canRenderPndlChart.value,
 )
 const pndlChartPositiveValues = computed(() =>
   pndlChartDisplayRows.value
@@ -742,6 +754,7 @@ watch(
   () => ({ ...selection }),
   () => {
     if (programmaticSelectionUpdateInProgress) return
+    pinnedBiomarkerOption.value = null
     const preserveSelection = preserveSelectionOnNextSelectionChange
     preserveSelectionOnNextSelectionChange = false
     closeDetail({ clearSelection: !preserveSelection })
@@ -3239,6 +3252,11 @@ async function applyDetailBiomarker(item: MapTopBiomarker) {
   if (!canApplyDetailBiomarker(item)) return
   const nextCategory = item.category || selection.category || ALL_CATEGORY_LABEL
   const nextSubcategory = item.subcategory || ALL_SUBCATEGORY_LABEL
+  pinnedBiomarkerOption.value = {
+    key: item.biomarkerKey,
+    label: item.biomarkerLabel || item.biomarkerKey,
+    cas: item.biomarkerCas,
+  }
   programmaticSelectionUpdateInProgress = true
   preserveSelectionOnNextSelectionChange = true
   closeDetail({ clearSelection: false })
@@ -3549,6 +3567,7 @@ function refreshStats() {
 function resetFilters() {
   closeSearch()
   isLayerPanelOpen.value = false
+  pinnedBiomarkerOption.value = null
   closeDetail()
   Object.assign(selection, { ...DEFAULT_SELECTION })
   scheduleStatsFetch(0)
@@ -4207,7 +4226,7 @@ function escapeHtml(value: string) {
                 </p>
               </section>
 
-              <section v-if="hasSpecificBiomarker" class="pndl-chart-section">
+              <section v-if="canShowPndlComparisonSection" class="pndl-chart-section">
                 <div class="section-title-row">
                   <div>
                     <h3>{{ ui.pndlComparison }}</h3>
@@ -4272,17 +4291,16 @@ function escapeHtml(value: string) {
                     <span>{{ formatNumber(item.yearCount) }}</span>
                   </div>
                 </div>
-                <p v-else class="pndl-status-card">{{ ui.pndlChartNoData }}</p>
               </section>
 
-              <section v-if="hasSpecificBiomarker" class="trend-chart-section">
+              <section v-if="canRenderTrendChart" class="trend-chart-section">
                 <div class="section-title-row">
                   <div>
                     <h3>{{ activeTrendSeries?.label || 'PNDL年度趋势' }}</h3>
                     <span>{{ selectedBiomarkerLabel }}</span>
                   </div>
                 </div>
-                <div v-if="canRenderTrendChart" class="trend-chart-card">
+                <div class="trend-chart-card">
                   <svg viewBox="-24 -18 728 258" role="img" aria-label="PNDL年度趋势">
                     <line x1="0" y1="210" x2="680" y2="210" class="trend-axis"></line>
                     <line x1="0" y1="0" x2="0" y2="210" class="trend-axis"></line>
@@ -4298,9 +4316,6 @@ function escapeHtml(value: string) {
                     </g>
                   </svg>
                 </div>
-                <p v-else class="pndl-status-card">
-                  选择具体 biomarker 且存在多年份数据后展示年度趋势。
-                </p>
               </section>
 
               <section>
