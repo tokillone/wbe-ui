@@ -17,6 +17,7 @@ import type {
   MapDetailResponse,
   MapFilterResponse,
   MapFilterSelection,
+  MapPndlRankingItem,
   MapRegionStat,
   MapStatsResponse,
   MapTopBiomarker,
@@ -495,6 +496,7 @@ let regionLayerEventsBound = false
 let isBasemapFallbackInProgress = false
 let projectionSwitchInProgress = false
 let preserveSelectionOnNextSelectionChange = false
+let programmaticSelectionUpdateInProgress = false
 const boundaryCache = new Map<BoundaryName, FeatureCollection>()
 const cleanedBoundaryCache = new Map<BoundaryName, FeatureCollection>()
 
@@ -514,32 +516,21 @@ const currentCategories = computed(() => {
   return withAllCategory(filters.value.categories)
 })
 const currentSubcategories = computed(() =>
-  selection.category === ALL_CATEGORY_LABEL
-    ? withFallbackOption(
-        filters.value?.subcategoriesByCategory[selection.category],
-        ALL_SUBCATEGORY_LABEL,
-      )
-    : (filters.value?.subcategoriesByCategory[selection.category] ?? []),
+  withFallbackOption(filters.value?.subcategoriesByCategory[selection.category], ALL_SUBCATEGORY_LABEL),
 )
 const currentBiomarkers = computed(() => {
   const items =
     filters.value?.biomarkersByCategorySubcategory[
       buildSelectionKey(selection.category, selection.subcategory)
     ] ?? []
-  return selection.category === ALL_CATEGORY_LABEL &&
-    selection.subcategory === ALL_SUBCATEGORY_LABEL
-    ? withAllBiomarker(items)
-    : items
+  return withAllBiomarker(items)
 })
 const currentYears = computed(() => {
   const years =
     filters.value?.yearsBySelection[
       buildSelectionKey(selection.category, selection.subcategory, selection.biomarkerKey)
     ] ?? []
-  return selection.category === ALL_CATEGORY_LABEL &&
-    selection.subcategory === ALL_SUBCATEGORY_LABEL
-    ? withFallbackOption(years, ALL_YEAR_LABEL)
-    : years
+  return withFallbackOption(years, ALL_YEAR_LABEL)
 })
 const selectedBiomarkerLabel = computed(
   () =>
@@ -576,16 +567,24 @@ const activePndlComparison = computed(() => {
 const pndlChartRows = computed(
   () => activePndlComparison.value?.rows ?? selectedDetail.value?.pndlRanking ?? [],
 )
+const pndlChartDisplayRows = computed(() => selectPndlChartDisplayRows(pndlChartRows.value))
+const pndlRankingRows = computed(() => pndlChartRows.value.slice(0, 30))
+const hasSpecificBiomarker = computed(() => selection.biomarkerKey !== ALL_BIOMARKER_KEY)
 const canRenderPndlChart = computed(
-  () => selection.biomarkerKey !== ALL_BIOMARKER_KEY && pndlChartRows.value.length > 0,
+  () => hasSpecificBiomarker.value && pndlChartRows.value.length > 0,
 )
-const pndlChartMax = computed(() =>
-  Math.max(
-    ...pndlChartRows.value
-      .map((item) => Number(item.pndlGeomeanMgD1000inh ?? 0))
-      .filter((value) => Number.isFinite(value) && value > 0),
-    0,
-  ),
+const pndlChartPositiveValues = computed(() =>
+  pndlChartDisplayRows.value
+    .map((item) => Number(item.pndlGeomeanMgD1000inh ?? 0))
+    .filter((value) => Number.isFinite(value) && value > 0),
+)
+const pndlChartMax = computed(() => Math.max(...pndlChartPositiveValues.value, 0))
+const pndlChartMin = computed(() => Math.min(...pndlChartPositiveValues.value, pndlChartMax.value))
+const pndlChartUsesLogScale = computed(
+  () => pndlChartMin.value > 0 && pndlChartMax.value / pndlChartMin.value > 100,
+)
+const pndlChartBottomLabel = computed(() =>
+  pndlChartUsesLogScale.value ? formatCompact(pndlChartMin.value) : '0',
 )
 const pndlChartTitle = computed(() =>
   activePndlComparison.value?.label ||
@@ -595,8 +594,7 @@ const trendSeries = computed(() => selectedDetail.value?.trendSeries ?? [])
 const activeTrendSeries = computed(() => trendSeries.value[0] ?? null)
 const canRenderTrendChart = computed(
   () =>
-    selection.biomarkerKey !== ALL_BIOMARKER_KEY &&
-    (activeTrendSeries.value?.points?.length ?? 0) >= 2,
+    hasSpecificBiomarker.value && (activeTrendSeries.value?.points?.length ?? 0) >= 2,
 )
 const trendChartPoints = computed(() => {
   const points = activeTrendSeries.value?.points ?? []
@@ -705,6 +703,7 @@ watch(locale, (value) => {
 watch(
   () => selection.targetClass,
   () => {
+    if (programmaticSelectionUpdateInProgress) return
     const categories = currentCategories.value
     const nextCategory = categories.includes(ALL_CATEGORY_LABEL)
       ? ALL_CATEGORY_LABEL
@@ -715,6 +714,7 @@ watch(
 watch(
   () => selection.category,
   () => {
+    if (programmaticSelectionUpdateInProgress) return
     const nextSubcategory = currentSubcategories.value[0] ?? '全部小类'
     if (selection.subcategory !== nextSubcategory) selection.subcategory = nextSubcategory
   },
@@ -722,6 +722,7 @@ watch(
 watch(
   () => selection.subcategory,
   () => {
+    if (programmaticSelectionUpdateInProgress) return
     const allBiomarkers = currentBiomarkers.value
     const nextBiomarker =
       allBiomarkers.find((item) => item.key === 'ALL')?.key ?? allBiomarkers[0]?.key ?? 'ALL'
@@ -731,6 +732,7 @@ watch(
 watch(
   () => selection.biomarkerKey,
   () => {
+    if (programmaticSelectionUpdateInProgress) return
     const nextYear =
       currentYears.value.find((item) => item === '全部年份') ?? currentYears.value[0] ?? '全部年份'
     if (selection.year !== nextYear) selection.year = nextYear
@@ -739,6 +741,7 @@ watch(
 watch(
   () => ({ ...selection }),
   () => {
+    if (programmaticSelectionUpdateInProgress) return
     const preserveSelection = preserveSelectionOnNextSelectionChange
     preserveSelectionOnNextSelectionChange = false
     closeDetail({ clearSelection: !preserveSelection })
@@ -3203,21 +3206,53 @@ function detailBiomarkerMeta(item: MapTopBiomarker) {
   return path ? `${path} · ${counts}` : counts
 }
 
+function pndlRankingKey(item: MapPndlRankingItem) {
+  return `${item.level}|${item.geoKey}`
+}
+
+function selectPndlChartDisplayRows(rows: MapPndlRankingItem[]) {
+  if (rows.length <= 15) return rows
+  const selectedIndex = rows.findIndex((item) => item.selected)
+  const selectedWindow =
+    selectedIndex >= 0
+      ? rows.slice(Math.max(0, selectedIndex - 2), Math.min(rows.length, selectedIndex + 3))
+      : []
+  const byKey = new Map<string, MapPndlRankingItem>()
+  ;[...rows.slice(0, 15), ...selectedWindow].forEach((item) => {
+    byKey.set(pndlRankingKey(item), item)
+  })
+  return Array.from(byKey.values()).sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0))
+}
+
 function pndlChartPercent(value?: number | null) {
   const numericValue = Number(value ?? 0)
   if (!Number.isFinite(numericValue) || numericValue <= 0 || pndlChartMax.value <= 0) return 0
+  if (pndlChartUsesLogScale.value && pndlChartMin.value > 0) {
+    const numerator = Math.log10(numericValue / pndlChartMin.value + 1)
+    const denominator = Math.log10(pndlChartMax.value / pndlChartMin.value + 1)
+    return Math.max(6, Math.min(100, (numerator / denominator) * 100))
+  }
   return Math.max(4, Math.min(100, (numericValue / pndlChartMax.value) * 100))
 }
 
-function applyDetailBiomarker(item: MapTopBiomarker) {
+async function applyDetailBiomarker(item: MapTopBiomarker) {
   if (!canApplyDetailBiomarker(item)) return
-  preserveSelectionOnNextSelectionChange = true
   const nextCategory = item.category || selection.category || ALL_CATEGORY_LABEL
   const nextSubcategory = item.subcategory || ALL_SUBCATEGORY_LABEL
+  programmaticSelectionUpdateInProgress = true
+  preserveSelectionOnNextSelectionChange = true
   closeDetail({ clearSelection: false })
-  selection.category = nextCategory
-  selection.subcategory = nextSubcategory
-  selection.biomarkerKey = item.biomarkerKey
+  Object.assign(selection, {
+    targetClass: selection.targetClass || DEFAULT_SELECTION.targetClass,
+    category: nextCategory,
+    subcategory: nextSubcategory,
+    biomarkerKey: item.biomarkerKey,
+    year: ALL_YEAR_LABEL,
+  })
+  await nextTick()
+  programmaticSelectionUpdateInProgress = false
+  preserveSelectionOnNextSelectionChange = false
+  scheduleStatsFetch(0)
 }
 
 function handleMapKeydown(event: KeyboardEvent) {
@@ -4172,7 +4207,7 @@ function escapeHtml(value: string) {
                 </p>
               </section>
 
-              <section class="pndl-chart-section">
+              <section v-if="hasSpecificBiomarker" class="pndl-chart-section">
                 <div class="section-title-row">
                   <div>
                     <h3>{{ ui.pndlComparison }}</h3>
@@ -4194,11 +4229,11 @@ function escapeHtml(value: string) {
                   <div class="pndl-column-axis">
                     <span>{{ formatCompact(pndlChartMax) }}</span>
                     <i>PNDL</i>
-                    <span>0</span>
+                    <span>{{ pndlChartBottomLabel }}</span>
                   </div>
                   <div class="pndl-column-chart">
                     <article
-                      v-for="item in pndlChartRows"
+                      v-for="item in pndlChartDisplayRows"
                       :key="`${item.level}-${item.geoKey}`"
                       class="pndl-column-item"
                       :class="{ selected: item.selected }"
@@ -4224,7 +4259,7 @@ function escapeHtml(value: string) {
                     <span>{{ ui.year }}</span>
                   </div>
                   <div
-                    v-for="item in pndlChartRows"
+                    v-for="item in pndlRankingRows"
                     :key="`rank-${item.level}-${item.geoKey}`"
                     class="pndl-ranking-row"
                     :class="{ selected: item.selected }"
@@ -4237,16 +4272,10 @@ function escapeHtml(value: string) {
                     <span>{{ formatNumber(item.yearCount) }}</span>
                   </div>
                 </div>
-                <p v-else class="pndl-status-card">
-                  {{
-                    selection.biomarkerKey === ALL_BIOMARKER_KEY
-                      ? ui.pndlChartNeedsBiomarker
-                      : ui.pndlChartNoData
-                  }}
-                </p>
+                <p v-else class="pndl-status-card">{{ ui.pndlChartNoData }}</p>
               </section>
 
-              <section class="trend-chart-section">
+              <section v-if="hasSpecificBiomarker" class="trend-chart-section">
                 <div class="section-title-row">
                   <div>
                     <h3>{{ activeTrendSeries?.label || 'PNDL年度趋势' }}</h3>
@@ -4270,11 +4299,7 @@ function escapeHtml(value: string) {
                   </svg>
                 </div>
                 <p v-else class="pndl-status-card">
-                  {{
-                    selection.biomarkerKey === ALL_BIOMARKER_KEY
-                      ? ui.pndlChartNeedsBiomarker
-                      : '选择具体 biomarker 且存在多年份数据后展示年度趋势。'
-                  }}
+                  选择具体 biomarker 且存在多年份数据后展示年度趋势。
                 </p>
               </section>
 
@@ -4719,8 +4744,17 @@ function escapeHtml(value: string) {
   --detail-panel-right: 22px;
   --detail-panel-gap: 18px;
   --map-control-size: 36px;
+  --map-control-top: 18px;
+  --map-control-right: 18px;
+  --map-control-gap: 7px;
   background: #dcecf5;
   transition: background 0.28s ease;
+}
+
+.map-stage.detail-open {
+  --map-control-right: calc(
+    var(--detail-panel-right) + var(--detail-panel-width) + var(--detail-panel-gap)
+  );
 }
 
 .map-stage::before {
@@ -4789,21 +4823,21 @@ function escapeHtml(value: string) {
 
 .map-tool-stack {
   position: absolute;
-  top: calc(18px + (var(--map-control-size) * 2) + 7px);
-  right: 18px;
+  top: calc(var(--map-control-top) + (var(--map-control-size) * 2) + var(--map-control-gap));
+  right: var(--map-control-right);
   z-index: 5;
   display: grid;
-  gap: 7px;
+  gap: var(--map-control-gap);
   transition: right 0.24s ease;
   animation: mapOverlayIn 0.26s ease 0.14s both;
 }
 
 .detail-open .map-tool-stack {
-  right: calc(var(--detail-panel-right) + var(--detail-panel-width) + var(--detail-panel-gap));
   z-index: 9;
 }
 
 .map-tool-button {
+  box-sizing: border-box;
   width: var(--map-control-size);
   height: var(--map-control-size);
   display: grid;
@@ -6073,17 +6107,21 @@ function escapeHtml(value: string) {
 }
 
 :deep(.maplibregl-ctrl-top-right) {
-  top: 18px;
-  right: 18px;
+  top: var(--map-control-top);
+  right: var(--map-control-right);
   transition: right 0.24s ease;
 }
 
 .detail-open :deep(.maplibregl-ctrl-top-right) {
-  right: calc(var(--detail-panel-right) + var(--detail-panel-width) + var(--detail-panel-gap));
   z-index: 9;
 }
 
+:deep(.maplibregl-ctrl-top-right .maplibregl-ctrl) {
+  margin: 0;
+}
+
 :deep(.maplibregl-ctrl-group) {
+  width: var(--map-control-size);
   border-radius: 8px;
   overflow: hidden;
   background: #ffffff;
@@ -6091,6 +6129,7 @@ function escapeHtml(value: string) {
 }
 
 :deep(.maplibregl-ctrl-group button) {
+  box-sizing: border-box;
   width: var(--map-control-size);
   height: var(--map-control-size);
 }
@@ -6336,6 +6375,12 @@ function escapeHtml(value: string) {
 
   .map-stage {
     min-height: calc(100vh - 106px);
+    --map-control-top: 12px;
+    --map-control-right: 12px;
+  }
+
+  .map-stage.detail-open {
+    --map-control-right: 12px;
   }
 
   .filter-shell {
@@ -6353,21 +6398,20 @@ function escapeHtml(value: string) {
   }
 
   .map-tool-stack {
-    top: calc(12px + (var(--map-control-size) * 2) + 7px);
-    right: 12px;
+    top: calc(var(--map-control-top) + (var(--map-control-size) * 2) + var(--map-control-gap));
+    right: var(--map-control-right);
   }
 
   .detail-open .map-tool-stack {
-    right: 12px;
     z-index: 9;
   }
 
   .detail-open :deep(.maplibregl-ctrl-top-right) {
-    right: 18px;
+    right: var(--map-control-right);
   }
 
   .filters-closed .map-tool-stack {
-    top: calc(12px + (var(--map-control-size) * 2) + 7px);
+    top: calc(var(--map-control-top) + (var(--map-control-size) * 2) + var(--map-control-gap));
   }
 
   .map-message {
