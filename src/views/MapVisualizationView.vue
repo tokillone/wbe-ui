@@ -36,9 +36,14 @@ import type {
   Popup,
 } from 'maplibre-gl'
 import {
+  canExploreBiomarker,
+  compactExplorerSummaryCards,
   displayLevelForZoom,
   overviewSummaryCards,
+  resolveStableHeatRange,
+  selectRowsForDisplayLevel,
   selectionYearRange,
+  sortBiomarkersByLiterature,
   temperatureBandIndex,
   visibleLevelsForZoom,
 } from '../utils/mapVisualization'
@@ -182,8 +187,8 @@ const VECTOR_MAX_ZOOM = 10
 const FALLBACK_MAX_ZOOM = 9.2
 const GLOBE_MIN_ZOOM = 2.64
 const GLOBE_INITIAL_ZOOM = 2.66
-const FLAT_BACKGROUND_COLOR = '#d9dde0'
-const GLOBE_BACKGROUND_COLOR = '#d5dadd'
+const FLAT_BACKGROUND_COLOR = '#f1f2f2'
+const GLOBE_BACKGROUND_COLOR = '#eceeee'
 const LEVEL_FADE_COUNTRY_START = 4
 const LEVEL_FADE_COUNTRY_END = 4.4
 const LEVEL_FADE_CITY_START = 5.9
@@ -252,19 +257,22 @@ const BOUNDARY_NOISE_AREA_THRESHOLDS: Record<BoundaryName, number> = {
   chinaCities: 0.08,
 }
 const MAP_HIGHLIGHT_STYLE = {
-  dataFill: '#e8b45c',
-  dataLine: '#93551b',
-  hoverFill: '#e8b45c',
-  hoverLine: '#71390f',
-  selectedFill: '#ffc96b',
-  selectedLine: '#7c2d12',
+  dataFill: '#eef0f0',
+  dataLine: '#7b858b',
+  hoverFill: '#eef0f0',
+  hoverLine: '#3e5967',
+  selectedFill: '#eef0f0',
+  selectedLine: '#173f55',
   selectedHalo: '#ffffff',
-  bubble: '#fbbf24',
-  bubbleHover: '#fb923c',
-  bubbleSelected: '#ef7d22',
+  bubble: '#f3cc7a',
+  bubbleHover: '#edb956',
+  bubbleSelected: '#e6a43c',
+  bubbleLine: '#9b7432',
+  bubbleHoverLine: '#82591e',
+  bubbleSelectedLine: '#694313',
   bubbleSelectedOuter: '#ffffff',
 } as const
-const MAP_HEAT_COLORS = ['#fff7ec', '#fee8c8', '#fdd49e', '#fdbb84', '#fc8d59', '#ef6548', '#b30000'] as const
+const MAP_HEAT_COLORS = ['#2c7bb6', '#00a6ca', '#00ccbc', '#ffff8c', '#fdae61', '#f46d43', '#d73027'] as const
 const BUBBLE_IMAGE_BUCKETS: Record<MapDisplayLevel, readonly number[]> = {
   country: [24, 34, 46, 60, 74],
   admin1: [16, 22, 30, 40, 52],
@@ -388,7 +396,7 @@ const UI_TEXT = {
     statsLoadFailed: '地图统计加载失败',
     detailLoadFailed: '详情加载失败',
     detailExploreTitle: '生物标记物探索',
-    detailExploreNote: '点击有 PNDL 区域的生物标记物后，会同步筛选条件并刷新地图；当前区域保持选中高亮。',
+    detailExploreNote: '点击生物标记物会同步筛选条件并刷新地图；无 PNDL 时仍展示数据覆盖轮廓和气泡。',
     detailExploreEmpty: '当前筛选下该区域没有可展示的生物标记物。',
     pndlRegionAvailable: '有 PNDL 区域',
     pndlRegionUnavailable: '暂无 PNDL',
@@ -447,7 +455,7 @@ const UI_TEXT = {
     heatLegendLow: '低',
     heatLegendMedium: '中',
     heatLegendHigh: '高',
-    heatLegendNote: '颜色由浅黄到深红表示 PNDL 由低到高；气泡数字表示点位数。',
+    heatLegendNote: '颜色由蓝到红表示 PNDL 由低到高；气泡数字表示点位数。',
     heatLegendUnit: 'mg/day/1000 inh',
     pndlTrend: 'PNDL 年度趋势',
     annualTrends: '年度趋势',
@@ -509,7 +517,7 @@ const UI_TEXT = {
     detailLoadFailed: 'Failed to load detail',
     detailExploreTitle: 'biomarker explorer',
     detailExploreNote:
-      'Choose a biomarker with PNDL coverage to update filters and refresh the map; the current region remains selected.',
+      'Selecting a biomarker updates the filters and map. Biomarkers without PNDL still show coverage outlines and bubbles.',
     detailExploreEmpty: 'No biomarker is available for this region under the current filters.',
     pndlRegionAvailable: 'PNDL available',
     pndlRegionUnavailable: 'No PNDL',
@@ -570,7 +578,7 @@ const UI_TEXT = {
     heatLegendLow: 'Low',
     heatLegendMedium: 'Medium',
     heatLegendHigh: 'High',
-    heatLegendNote: 'Colors run from pale yellow to deep red as PNDL rises; bubbles show site count.',
+    heatLegendNote: 'Colors run from blue to red as PNDL rises; bubbles show site count.',
     heatLegendUnit: 'mg/day/1000 inh',
     pndlTrend: 'PNDL yearly trend',
     annualTrends: 'Yearly trends',
@@ -834,8 +842,12 @@ const detailSubtitle = computed(() => {
       : ''
   return [prefix, filterSummary.value].filter(Boolean).join(' · ') || filterSummary.value
 })
-const compactSummaryCards = computed(() => selectedDetail.value?.summaryCards?.slice(0, 4) ?? [])
-const compactBiomarkers = computed(() => selectedDetail.value?.topBiomarkers ?? [])
+const compactSummaryCards = computed(() =>
+  compactExplorerSummaryCards(selectedDetail.value?.summaryCards ?? []),
+)
+const compactBiomarkers = computed(() =>
+  sortBiomarkersByLiterature(selectedDetail.value?.topBiomarkers ?? []).slice(0, 20),
+)
 const hasSpecificBiomarker = computed(() => selection.biomarkerKey !== ALL_BIOMARKER_KEY)
 const availableYearRange = computed(() => selectionYearRange(currentYears.value))
 const fullDetailSummaryCards = computed(() =>
@@ -904,19 +916,22 @@ const renderableTrendSeries = computed(() =>
 const canRenderTrendChart = computed(
   () => renderableTrendSeries.value.length > 0,
 )
-const regionHeatValues = computed(() =>
-  displayMapRegionRows()
+const allLevelHeatValues = computed(() =>
+  (stats.value?.regions ?? [])
     .map((row) => Number(row.pndlMedianMgD1000inh ?? 0))
     .filter((value) => Number.isFinite(value) && value > 0),
 )
-const regionHeatMin = computed(() =>
-  regionHeatValues.value.length ? Math.min(...regionHeatValues.value) : 0,
+const stableHeatRange = computed(() =>
+  resolveStableHeatRange(
+    stats.value?.legend.min,
+    stats.value?.legend.max,
+    allLevelHeatValues.value,
+  ),
 )
-const regionHeatMax = computed(() =>
-  regionHeatValues.value.length ? Math.max(...regionHeatValues.value) : 0,
-)
+const regionHeatMin = computed(() => stableHeatRange.value.min)
+const regionHeatMax = computed(() => stableHeatRange.value.max)
 const canShowHeatLegend = computed(
-  () => hasSpecificBiomarker.value && regionHeatValues.value.length > 0,
+  () => hasSpecificBiomarker.value && regionHeatMax.value > 0,
 )
 const heatLegendGradient = computed(
   () =>
@@ -997,10 +1012,10 @@ const compactDetailCallout = computed(() => {
   if (selectedDetail.value.cluster) {
     const locationCount =
       selectedDetail.value.locations?.length ?? detailRegion.value?.pointCount ?? 0
-    return `${formatNumber(locationCount)} ${ui.value.clusterCount} · ${ui.value.records} ${formatNumber(detailRegion.value?.recordCount)} · ${ui.value.literature} ${formatNumber(detailRegion.value?.doiCount)}`
+    return `${formatNumber(locationCount)} ${ui.value.clusterCount} · ${ui.value.literature} ${formatNumber(detailRegion.value?.doiCount)}`
   }
   if (!detailRegion.value) return detailSubtitle.value
-  return `${locationPrecisionLabel(detailRegion.value.level)} · ${ui.value.pndlMedian} ${formatCompact(detailRegion.value.pndlMedianMgD1000inh)} · ${ui.value.records} ${formatNumber(detailRegion.value.recordCount)}`
+  return locationPrecisionLabel(detailRegion.value.level)
 })
 const hasEmptyFilterData = computed(
   () =>
@@ -1799,11 +1814,17 @@ function vectorBasemapLayers(layers: unknown[], mode: MapMode) {
       ]
     }
     if (layer.type === 'symbol' && layer.layout?.['text-field']) {
-      if (locale.value === 'zh' || isLowValueWaterLabelLayer(layer.id)) return []
-      const layout = {
+      if (
+        isLowValueWaterLabelLayer(layer.id) ||
+        (locale.value === 'zh' && /^places_(country|region)$/i.test(layer.id))
+      ) {
+        return []
+      }
+      const layout: Record<string, unknown> = {
         ...(layer.layout ?? {}),
         'text-field': vectorLocalizedNameExpression(),
       }
+      delete layout['icon-image']
       const zoomRange = vectorLabelZoomRange(layer.id)
       return [
         {
@@ -1860,6 +1881,10 @@ function vectorLocalizedNameExpression() {
     ['get', 'name_zh'],
     ['get', 'name:zh-Hans'],
     ['get', 'name_zh-Hans'],
+    ['get', 'name:en'],
+    ['get', 'name_en'],
+    ['get', 'name:latin'],
+    ['get', 'pgf:name'],
     '',
   ]
 }
@@ -1872,42 +1897,33 @@ function styleVectorBasemapLayer(layer: {
 }) {
   const paint = { ...(layer.paint ?? {}) }
   if (layer.id === 'boundaries_country') {
-    paint['line-color'] = '#9fb0ba'
+    paint['line-color'] = '#a4aaad'
     paint['line-width'] = ['interpolate', ['linear'], ['zoom'], 0, 0.32, 5, 0.42, 8, 0.5]
-    paint['line-opacity'] = [
-      'interpolate',
-      ['linear'],
-      ['zoom'],
-      0,
-      0.18,
-      COUNTRY_BOUNDARY_FADE_START,
-      0.26,
-      COUNTRY_BOUNDARY_FADE_END,
-      0,
-    ]
+    // The controlled country boundary source below is cleaner at world scale.
+    paint['line-opacity'] = 0
     paint['line-blur'] = 0.16
   } else if (layer.id === 'boundaries') {
-    paint['line-color'] = '#b8c6cd'
-    paint['line-width'] = 0.2
-    paint['line-opacity'] = 0
+    paint['line-color'] = '#b8bdc0'
+    paint['line-width'] = ['interpolate', ['linear'], ['zoom'], 4, 0.22, 8, 0.5]
+    paint['line-opacity'] = ['interpolate', ['linear'], ['zoom'], 4, 0.06, 7, 0.24]
     paint['line-blur'] = 0.2
   } else if (layer.id === 'earth' || /landcover|landuse|park|wood|forest|grass|scrub|urban|sand|beach|glacier|natural/i.test(layer.id)) {
     paint['fill-color'] = '#fbfbfa'
     paint['fill-opacity'] = ['interpolate', ['linear'], ['zoom'], 0, 0.96, 8, 0.88]
   } else if (layer.id === 'water') {
-    paint['fill-color'] = '#d9dee1'
+    paint['fill-color'] = '#eef0f0'
   } else if (/^water_/.test(layer.id)) {
-    paint['line-color'] = '#c2c9cd'
-    paint['line-opacity'] = 0.68
+    paint['line-color'] = '#dfe2e2'
+    paint['line-opacity'] = 0.42
   } else if (/roads_.*casing/.test(layer.id)) {
-    paint['line-color'] = '#d2dbe0'
-    paint['line-opacity'] = 0.84
+    paint['line-color'] = '#c8d4da'
+    paint['line-opacity'] = 0.9
   } else if (/roads_(highway|major|bridges_major|bridges_highway)/.test(layer.id)) {
-    paint['line-color'] = '#ffffff'
-    paint['line-opacity'] = ['interpolate', ['linear'], ['zoom'], 4, 0.52, 8, 0.76]
+    paint['line-color'] = '#d5e0e5'
+    paint['line-opacity'] = ['interpolate', ['linear'], ['zoom'], 4, 0.58, 8, 0.88]
   } else if (/roads_/.test(layer.id)) {
-    paint['line-color'] = '#edf2f4'
-    paint['line-opacity'] = ['interpolate', ['linear'], ['zoom'], 5, 0.3, 9, 0.62]
+    paint['line-color'] = '#e0e8eb'
+    paint['line-opacity'] = ['interpolate', ['linear'], ['zoom'], 5, 0.38, 9, 0.72]
   } else if (/buildings/i.test(layer.id)) {
     paint['fill-color'] = '#dce4e8'
     paint['fill-opacity'] = 0.46
@@ -1928,7 +1944,10 @@ function stripVectorTextLayersForLocale() {
     if (source !== 'protomaps') return
     const hasText = Boolean(layer.layout?.['text-field'])
     if (!hasText) return
-    if (locale.value !== 'zh' && !isLowValueWaterLabelLayer(layer.id)) return
+    const shouldRemove =
+      isLowValueWaterLabelLayer(layer.id) ||
+      (locale.value === 'zh' && /^places_(country|region)$/i.test(layer.id))
+    if (!shouldRemove) return
     if (map?.getLayer(layer.id)) map.removeLayer(layer.id)
   })
 }
@@ -2034,16 +2053,16 @@ function createBubbleImage(diameter: number) {
   const center = size / 2
   const radius = (diameter * pixelRatio) / 2
   context.clearRect(0, 0, size, size)
-  context.shadowColor = 'rgba(27, 45, 56, 0.2)'
-  context.shadowBlur = 9 * pixelRatio
-  context.shadowOffsetY = 2.4 * pixelRatio
+  context.shadowColor = 'rgba(31, 45, 52, 0.14)'
+  context.shadowBlur = 7 * pixelRatio
+  context.shadowOffsetY = 1.8 * pixelRatio
   context.beginPath()
   context.arc(center, center, radius, 0, Math.PI * 2)
-  context.fillStyle = 'rgba(251, 191, 36, 0.78)'
+  context.fillStyle = 'rgba(243, 204, 122, 0.88)'
   context.fill()
   context.shadowColor = 'transparent'
   context.lineWidth = 1.25 * pixelRatio
-  context.strokeStyle = 'rgba(51, 65, 85, 0.58)'
+  context.strokeStyle = 'rgba(155, 116, 50, 0.78)'
   context.stroke()
   return context.getImageData(0, 0, size, size)
 }
@@ -2103,13 +2122,13 @@ function addMapSourcesAndLayers() {
   })
 
   if (basemapMode === 'geojson') {
-    addBaseFillLayer('country-land', 'country-boundaries', 0, 0.92, COUNTRY_BOUNDARY_FADE_END)
+    addBaseFillLayer('country-land', 'country-boundaries', 0, 0.92)
     addBaseFillLayer('admin1-land', 'admin1-boundaries', 3.2, 0)
     addBaseFillLayer('china-province-land', 'china-province-boundaries', 3.2, 0)
     addBaseFillLayer('china-city-land', 'china-city-boundaries', CITY_BOUNDARY_MIN_ZOOM, 0)
   }
   if (usesControlledLowZoomLabels()) {
-    addLabelLayer('admin1-label', 'admin1-label-points', LEVEL_FADE_COUNTRY_START, 5.8, 10, false)
+    addLabelLayer('admin1-label', 'admin1-label-points', LEVEL_FADE_COUNTRY_START, undefined, 10, false)
     addLabelLayer('china-province-label', 'china-province-label-points', LEVEL_FADE_COUNTRY_START, 5.8, 10)
     addLabelLayer('china-city-label', 'china-city-label-points', CITY_BOUNDARY_MIN_ZOOM + 0.3, undefined, 10)
     addLabelLayer('continent-label', 'continent-label-points', 0, 1.75, 16)
@@ -2221,7 +2240,7 @@ function addPndlPointLayers(level: MapDisplayLevel) {
         MAP_HIGHLIGHT_STYLE.bubbleHover,
         ['boolean', ['feature-state', 'selected'], false],
         MAP_HIGHLIGHT_STYLE.bubbleSelected,
-        ['step', pointCount, '#fff7bc', 5, '#fee391', 20, '#fec44f', 80, '#fe9929', 300, '#d95f0e'],
+        MAP_HIGHLIGHT_STYLE.bubble,
       ],
       'circle-opacity': [
         'case',
@@ -2234,10 +2253,10 @@ function addPndlPointLayers(level: MapDisplayLevel) {
       'circle-stroke-color': [
         'case',
         ['boolean', ['feature-state', 'selected'], false],
-        MAP_HIGHLIGHT_STYLE.selectedLine,
+        MAP_HIGHLIGHT_STYLE.bubbleSelectedLine,
         ['boolean', ['feature-state', 'hover'], false],
-        MAP_HIGHLIGHT_STYLE.hoverLine,
-        'rgba(51, 65, 85, 0.72)',
+        MAP_HIGHLIGHT_STYLE.bubbleHoverLine,
+        MAP_HIGHLIGHT_STYLE.bubbleLine,
       ],
       'circle-stroke-width': [
         'case',
@@ -2267,10 +2286,10 @@ function addPndlPointLayers(level: MapDisplayLevel) {
       'text-color': [
         'case',
         ['boolean', ['feature-state', 'hover'], false],
-        '#172f3c',
+        '#5c3c12',
         ['boolean', ['feature-state', 'selected'], false],
-        '#172f3c',
-        '#172f3c',
+        '#5c3c12',
+        '#4b371c',
       ],
       'text-halo-color': 'rgba(255, 255, 255, 0.92)',
       'text-halo-width': 0.85,
@@ -2302,17 +2321,17 @@ function addBaseFillLayer(
 }
 
 function addBoundaryLineLayers() {
-  addLineLayer('country-line', 'country-boundaries', '#5f8bad', 0.72, 0, 0.78)
-  addLineLayer('admin1-line', 'admin1-boundaries', '#89a9c2', 0.32, 3.4, 0.42, [
+  addLineLayer('country-line', 'country-boundaries', '#8f989d', 0.58, 0, 0.4)
+  addLineLayer('admin1-line', 'admin1-boundaries', '#aab0b3', 0.34, 3.4, 0.34, [
     '!=',
     ['get', 'country_key'],
     'china',
   ])
-  addLineLayer('china-province-line', 'china-province-boundaries', '#5f92bf', 0.54, 3.3, 0.62)
+  addLineLayer('china-province-line', 'china-province-boundaries', '#939da2', 0.44, 3.3, 0.42)
   addLineLayer(
     'china-city-line',
     'china-city-boundaries',
-    '#9cb9cf',
+    '#b5bbbe',
     0.24,
     CITY_BOUNDARY_MIN_ZOOM,
     0.36,
@@ -2333,7 +2352,6 @@ function addLineLayer(
     type: 'line',
     source,
     minzoom,
-    ...(id === 'country-line' ? { maxzoom: COUNTRY_BOUNDARY_FADE_END + 0.01 } : {}),
     ...(filter ? { filter } : {}),
     layout: {
       'line-cap': 'round',
@@ -2355,7 +2373,9 @@ function addLineLayer(
               COUNTRY_BOUNDARY_FADE_START,
               opacity,
               COUNTRY_BOUNDARY_FADE_END,
-              0,
+              ['case', ['==', ['get', 'country_key'], 'china'], 0, opacity * 0.48],
+              currentMapMaxZoom(),
+              ['case', ['==', ['get', 'country_key'], 'china'], 0, opacity * 0.48],
             ]
           : ['interpolate', ['linear'], ['zoom'], minzoom, 0.08, minzoom + 0.8, opacity],
       'line-blur': ['interpolate', ['linear'], ['zoom'], minzoom, 0.08, 8, 0.28],
@@ -2404,7 +2424,7 @@ function addRegionHighlightLayers() {
     selectedRegionFillColorExpression(),
     MAP_HIGHLIGHT_STYLE.selectedLine,
     {
-      fillOpacity: regionSourceMode === 'vector' ? 0.56 : regionOverlayOpacityExpression(0.52),
+      fillOpacity: selectedRegionFillOpacityExpression(),
       lineOpacity: regionSourceMode === 'vector' ? 0.94 : regionOverlayOpacityExpression(0.92),
       lineWidth: ['interpolate', ['linear'], ['zoom'], 0, 1.4, 8, 2.2],
       filter: regionVectorFilter(selectedRegionId() ? vectorRegionIds([selectedRegionId() as string]) : []),
@@ -2443,7 +2463,7 @@ function addCityFallbackRegionLayers() {
     'region-city-selected',
     selectedRegionFillColorExpression(),
     MAP_HIGHLIGHT_STYLE.selectedLine,
-    0.54,
+    selectedRegionFillOpacityExpression(),
     0.92,
     ['interpolate', ['linear'], ['zoom'], 5.75, 1.3, 8, 2.2],
   )
@@ -2562,27 +2582,51 @@ function addRegionOverlayLayers(
 }
 
 function regionDataFillOpacityExpression() {
-  const countryOpacity = hasSpecificBiomarker.value ? 0.78 : 0.42
-  const adminOpacity = hasSpecificBiomarker.value ? 0.8 : 0.46
-  const cityOpacity = hasSpecificBiomarker.value ? 0.82 : 0.5
+  if (!hasSpecificBiomarker.value) return 0
+  const countryOpacity = 0.78
+  const adminOpacity = 0.8
+  const cityOpacity = 0.82
   return [
     'case',
-    regionLevelEqualsExpression('city'),
-    cityOpacity,
-    regionLevelEqualsExpression('admin1'),
-    adminOpacity,
-    countryOpacity,
+    ['==', ['get', 'hasPndlValue'], true],
+    [
+      'case',
+      regionLevelEqualsExpression('city'),
+      cityOpacity,
+      regionLevelEqualsExpression('admin1'),
+      adminOpacity,
+      countryOpacity,
+    ],
+    0,
   ]
 }
 
+function selectedRegionFillOpacityExpression() {
+  if (!hasSpecificBiomarker.value) return 0
+  return ['case', ['==', ['get', 'hasPndlValue'], true], 0.54, 0]
+}
+
 function regionDataLineOpacityExpression() {
+  if (!hasSpecificBiomarker.value) {
+    return [
+      'interpolate',
+      ['linear'],
+      ['zoom'],
+      0,
+      0.08,
+      LEVEL_FADE_COUNTRY_END,
+      0.2,
+      LEVEL_FADE_CITY_END,
+      0.34,
+      currentMapMaxZoom(),
+      0.42,
+    ]
+  }
   return [
     'case',
-    regionLevelEqualsExpression('city'),
+    ['==', ['get', 'hasPndlValue'], true],
     0.34,
-    regionLevelEqualsExpression('admin1'),
-    0.3,
-    0.28,
+    0.22,
   ]
 }
 
@@ -2820,9 +2864,73 @@ function getCleanBoundaryCollection(name: BoundaryName) {
   if (cached) return cached
   const collection = boundaryCache.get(name)
   if (!collection) return null
-  const cleaned = cleanBoundaryCollection(collection, name)
+  const cleaned = normalizeBoundaryCollection(cleanBoundaryCollection(collection, name), name)
   cleanedBoundaryCache.set(name, cleaned)
   return cleaned
+}
+
+function normalizeBoundaryCollection(
+  collection: FeatureCollection,
+  name: BoundaryName,
+): FeatureCollection {
+  if (name !== 'countries') return collection
+  const chinaFeatures = collection.features.filter(
+    (feature) => canonicalCountryKey(featureGeoKey(feature, 'country')) === 'china',
+  )
+  if (chinaFeatures.length < 2) return collection
+
+  const base = [...chinaFeatures].sort(
+    (left, right) => boundaryFeatureAreaScore(right) - boundaryFeatureAreaScore(left),
+  )[0] as GeoJsonFeature
+  const polygons = chinaFeatures.flatMap((feature) => geometryPolygons(feature.geometry))
+  if (!polygons.length) return collection
+  const chinaAliases = new Set<string>(['china'])
+  chinaFeatures.forEach((feature) => {
+    const props = feature.properties
+    ;[
+      featureGeoKey(feature, 'country'),
+      props.country_key,
+      props.region_key,
+      props.name,
+      props.display_name,
+      ...(Array.isArray(props.keys) ? props.keys : []),
+    ]
+      .filter(Boolean)
+      .forEach((value) => chinaAliases.add(String(value)))
+  })
+  const mergedChina: GeoJsonFeature = {
+    ...base,
+    properties: {
+      ...base.properties,
+      country_key: 'china',
+      geo_key: 'china',
+      region_key: 'china',
+      display_name: '中国',
+      name: 'China',
+      keys: [...chinaAliases],
+    },
+    geometry: { type: 'MultiPolygon', coordinates: polygons },
+  }
+  const firstChinaIndex = collection.features.findIndex((feature) => chinaFeatures.includes(feature))
+  return {
+    type: 'FeatureCollection',
+    features: collection.features.flatMap((feature, index) => {
+      if (!chinaFeatures.includes(feature)) return [feature]
+      return index === firstChinaIndex ? [mergedChina] : []
+    }),
+  }
+}
+
+function geometryPolygons(geometry: unknown) {
+  if (!geometry || typeof geometry !== 'object') return []
+  const typedGeometry = geometry as { type?: string; coordinates?: unknown }
+  if (typedGeometry.type === 'Polygon' && Array.isArray(typedGeometry.coordinates)) {
+    return [typedGeometry.coordinates]
+  }
+  if (typedGeometry.type === 'MultiPolygon' && Array.isArray(typedGeometry.coordinates)) {
+    return typedGeometry.coordinates.filter((polygon) => Array.isArray(polygon))
+  }
+  return []
 }
 
 function getBoundaryFeatureIndex(name: BoundaryName) {
@@ -3033,6 +3141,11 @@ function updateSelectedRegionPaintStyles() {
       'fill-color',
       selectedRegionFillColorExpression() as never,
     )
+    map.setPaintProperty(
+      'region-selected-fill',
+      'fill-opacity',
+      selectedRegionFillOpacityExpression() as never,
+    )
   }
   if (map?.getLayer('region-hover-fill')) {
     map.setPaintProperty(
@@ -3046,6 +3159,11 @@ function updateSelectedRegionPaintStyles() {
       'region-city-selected-fill',
       'fill-color',
       selectedRegionFillColorExpression() as never,
+    )
+    map.setPaintProperty(
+      'region-city-selected-fill',
+      'fill-opacity',
+      selectedRegionFillOpacityExpression() as never,
     )
   }
   if (map?.getLayer('region-city-hover-fill')) {
@@ -3524,18 +3642,7 @@ function displayMapRegionRows(level: MapDisplayLevel = activeMapLevel.value) {
     displayMapRowsCache.set(level, result)
     return result
   }
-  if (level === 'admin1') {
-    const adminRows = rows.filter((row) => row.level === 'admin1')
-    const result = adminRows.length ? adminRows : rows.filter((row) => row.level === 'country')
-    displayMapRowsCache.set(level, result)
-    return result
-  }
-  const cityRows = rows.filter((row) => row.level === 'city')
-  const nonChinaAdminRows = rows.filter(
-    (row) => row.level === 'admin1' && countryGroupKey(row) !== 'china',
-  )
-  const highZoomRows = [...nonChinaAdminRows, ...cityRows]
-  const result = highZoomRows.length ? highZoomRows : rows.filter((row) => row.level !== 'country')
+  const result = selectRowsForDisplayLevel(rows, level, countryGroupKey)
   displayMapRowsCache.set(level, result)
   return result
 }
@@ -3692,19 +3799,27 @@ function titleCaseGeoKey(value: string) {
 }
 
 function representativeCoordinates(row: MapRegionStat): [number, number] | null {
-  const boundaryCenter = representativeBoundaryCenter(row)
-  if (boundaryCenter && (row.level !== 'city' || row.latitude == null || row.longitude == null)) {
-    return boundaryCenter
+  const feature = findBoundaryFeature(row)
+  const suppliedPoint =
+    row.latitude != null && row.longitude != null
+      ? ([Number(row.longitude), Number(row.latitude)] as [number, number])
+      : null
+  if (
+    feature &&
+    suppliedPoint &&
+    suppliedPoint.every(Number.isFinite) &&
+    pointInGeometry(suppliedPoint, feature.geometry)
+  ) {
+    return suppliedPoint
   }
-  if (row.latitude == null || row.longitude == null) return null
-  return [Number(row.longitude), Number(row.latitude)]
+  const boundaryCenter = feature ? labelPointForGeometry(feature.geometry) : null
+  if (boundaryCenter && pointInGeometry(boundaryCenter, feature?.geometry)) return boundaryCenter
+  return suppliedPoint?.every(Number.isFinite) ? suppliedPoint : null
 }
 
 function representativeBoundaryCenter(row: MapRegionStat): [number, number] | null {
   const feature = findBoundaryFeature(row)
-  const bbox = feature ? featureBbox(feature.geometry) : null
-  if (!bbox) return null
-  return [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]
+  return feature ? labelPointForGeometry(feature.geometry) : null
 }
 
 function findBoundaryFeature(row: MapRegionStat) {
@@ -3742,6 +3857,12 @@ function statProperties(stat: MapRegionStat) {
     biomarkerLabel: stat.biomarkerLabel,
     locationPrecision: locationPrecisionLabel(stat.level),
     pndlMedian: numberOrNull(stat.pndlMedianMgD1000inh),
+    hasPndlValue: Number(stat.pndlMedianMgD1000inh ?? 0) > 0,
+    hasCoverage:
+      Number(stat.recordCount ?? 0) > 0 ||
+      Number(stat.doiCount ?? 0) > 0 ||
+      Number(stat.pointCount ?? 0) > 0 ||
+      Number(stat.biomarkerCount ?? 0) > 0,
     pndlMin: numberOrNull(stat.pndlMinMgD1000inh),
     pndlMax: numberOrNull(stat.pndlMaxMgD1000inh),
     pndlRank: valueRank(stat.pndlMedianMgD1000inh),
@@ -4139,10 +4260,7 @@ function buildSearchCandidates() {
   ;[...(stats.value?.points ?? []), ...(stats.value?.regions ?? [])].forEach((row) => {
     const label = localizedStatDisplayName(row) || singleLanguageLabel(row.displayName, locale.value)
     if (!label) return
-    const center =
-      row.longitude != null && row.latitude != null
-        ? ([Number(row.longitude), Number(row.latitude)] as [number, number])
-        : undefined
+    const center = representativeCoordinates(row) ?? undefined
     addSearchCandidate(candidates, {
       id: `stat|${row.level}|${row.geoKey}`,
       label,
@@ -4172,6 +4290,7 @@ function boundarySearchCandidates(candidates: Map<string, MapSearchResult>) {
         meta: localizedLocationMeta([locationPrecisionLabel(level), String(props.country_display ?? '')]),
         level,
         geoKey,
+        center: labelPointForGeometry(feature.geometry) ?? undefined,
         bbox: featureBbox(feature.geometry) ?? undefined,
       })
     })
@@ -5144,11 +5263,11 @@ function closeFullDetail() {
 }
 
 function canApplyDetailBiomarker(item: MapTopBiomarker) {
-  return Boolean(item.hasPndl && item.biomarkerKey)
+  return canExploreBiomarker(item)
 }
 
 function detailBiomarkerPill(item: MapTopBiomarker) {
-  return canApplyDetailBiomarker(item) ? ui.value.pndlRegionAvailable : ui.value.pndlRegionUnavailable
+  return item.hasPndl ? ui.value.pndlRegionAvailable : ui.value.pndlRegionUnavailable
 }
 
 function detailBiomarkerMeta(item: MapTopBiomarker) {
@@ -5852,6 +5971,14 @@ function localizedSummaryCardLabel(card: MapSummaryCard) {
   return localizedBackendLabel(card.label)
 }
 
+function compactSummaryCardLabel(card: MapSummaryCard) {
+  const label = String(card.label ?? '').replace(/\s+/g, '').toLowerCase()
+  if (label.includes('点位')) return locale.value === 'zh' ? '点位' : 'Sites'
+  if (label.includes('文献')) return locale.value === 'zh' ? '文献' : 'Literature'
+  if (label.includes('biomarker') || label.includes('生物标记物')) return ui.value.biomarker
+  return localizedSummaryCardLabel(card)
+}
+
 function localizedSummaryCardNote(card: MapSummaryCard) {
   return localizedBackendLabel(card.note)
 }
@@ -6493,9 +6620,8 @@ function escapeHtml(value: string) {
           <p v-if="compactDetailCallout" class="detail-callout">{{ compactDetailCallout }}</p>
           <div v-if="compactSummaryCards.length" class="detail-summary-grid compact">
             <article v-for="card in compactSummaryCards" :key="card.label">
-              <span>{{ localizedSummaryCardLabel(card) }}</span>
+              <span>{{ compactSummaryCardLabel(card) }}</span>
               <strong>{{ card.value }}</strong>
-              <small v-if="card.note">{{ localizedSummaryCardNote(card) }}</small>
             </article>
           </div>
 
@@ -6503,7 +6629,7 @@ function escapeHtml(value: string) {
             <h3>{{ ui.detailExploreTitle }}</h3>
             <div v-if="compactBiomarkers.length" class="region-biomarker-list">
               <button
-                v-for="item in compactBiomarkers.slice(0, 12)"
+                v-for="item in compactBiomarkers"
                 :key="item.biomarkerKey"
                 class="region-biomarker-action"
                 type="button"
@@ -6512,7 +6638,7 @@ function escapeHtml(value: string) {
               >
                 <span class="region-biomarker-name">
                   <strong>{{ item.biomarkerLabel }}</strong>
-                  <i :class="{ muted: !canApplyDetailBiomarker(item) }">
+                  <i :class="{ muted: !item.hasPndl }">
                     {{ detailBiomarkerPill(item) }}
                   </i>
                 </span>
@@ -7889,7 +8015,13 @@ function escapeHtml(value: string) {
 }
 
 .detail-summary-grid.compact {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  min-height: 72px;
+  overflow: hidden;
+  border: 1px solid rgba(101, 119, 151, 0.16);
+  border-radius: 7px;
+  background: linear-gradient(180deg, rgba(246, 249, 252, 0.98), rgba(255, 255, 255, 0.98));
 }
 
 .detail-summary-grid article {
@@ -7913,6 +8045,37 @@ function escapeHtml(value: string) {
   margin-top: 4px;
   color: #173247;
   font-size: 18px;
+}
+
+.detail-summary-grid.compact article {
+  box-sizing: border-box;
+  min-height: 70px;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 0;
+  border-right: 1px solid rgba(101, 119, 151, 0.14);
+  border-radius: 0;
+  background: transparent;
+}
+
+.detail-summary-grid.compact article:last-child {
+  border-right: 0;
+}
+
+.detail-summary-grid.compact span {
+  overflow: hidden;
+  font-size: 10px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-summary-grid.compact strong {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1;
 }
 
 .section-title-row {
@@ -9189,9 +9352,12 @@ function escapeHtml(value: string) {
     padding: 14px 16px 18px;
   }
 
-  .detail-summary-grid,
-  .detail-summary-grid.compact {
+  .detail-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detail-summary-grid.compact {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .physchem-grid,

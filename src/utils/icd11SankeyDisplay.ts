@@ -1,6 +1,7 @@
 import type { Icd11SankeyNode, Icd11SankeyPath } from '../types/icd11Sankey'
 
 export type Icd11SankeyDisplayMode = 'smart' | 'all' | 'top20' | 'top50' | 'top100'
+export type Level1Scope = 'selected' | 'linked'
 
 export interface RelationShareItem {
   name: string
@@ -40,6 +41,26 @@ export function sortSankeyPaths(paths: Icd11SankeyPath[]) {
   return [...paths].sort(
     (a, b) => b.weight - a.weight || pathText(a).localeCompare(pathText(b), 'zh-Hans-CN'),
   )
+}
+
+export function pathsForLevel1Context(paths: Icd11SankeyPath[], selectedLevel1: string) {
+  const primaryPaths = paths.filter((path) => path.level1 === selectedLevel1)
+  if (!primaryPaths.length) return []
+
+  const sharedNodeIds = new Set(primaryPaths.flatMap((path) => path.nodeIds.slice(1)))
+  return paths.filter(
+    (path) =>
+      path.level1 === selectedLevel1 || path.nodeIds.slice(1).some((nodeId) => sharedNodeIds.has(nodeId)),
+  )
+}
+
+export function pathsForLevel1Scope(
+  paths: Icd11SankeyPath[],
+  selectedLevel1: string,
+  scope: Level1Scope,
+) {
+  if (scope === 'selected') return paths.filter((path) => path.level1 === selectedLevel1)
+  return pathsForLevel1Context(paths, selectedLevel1)
 }
 
 export function relationShareItems(
@@ -101,6 +122,17 @@ export function relationPieSectionsForNode(
         'mapping-depth',
         paths,
         (path) => path.mappingLevel === 'Level3' ? '精确到 Level3' : '止于 Level2',
+      ),
+      relationPieSection(
+        'level2-drug',
+        '关联药物构成',
+        '同时统计直接终止于 Level2 和继续到 Level3 的路径，按药物汇总。',
+        '关联药物',
+        'Level2 关联药物构成图',
+        '占该 Level2',
+        'level2-drug',
+        paths,
+        (path) => path.drug,
       ),
       relationPieSection(
         'level2-level3',
@@ -170,8 +202,8 @@ export function relationPieSectionsForNode(
   return [
     relationPieSection(
       'biomarker-drug',
-      '上游药物占比',
-      '按当前生物标记物关联路径聚合药物，百分比基于该生物标记物的权重合计。',
+      '上游药物构成',
+      '说明哪些药物通过当前生物标记物被监测，百分比基于该节点的权重合计。',
       '上游药物',
       '生物标记物上游药物占比图',
       '占该生物标记物',
@@ -181,8 +213,8 @@ export function relationPieSectionsForNode(
     ),
     relationPieSection(
       'biomarker-disease-node',
-      '关联疾病节点',
-      '真实 Level3 与直接连接的 Level2 分开标记，不补造层级。',
+      '疾病来源构成',
+      '说明当前生物标记物对应的疾病映射来源，真实 Level3 与直接 Level2 分开标记。',
       '疾病节点',
       '生物标记物关联疾病节点占比图',
       '占该生物标记物',

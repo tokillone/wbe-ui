@@ -15,12 +15,14 @@ import type {
 } from '../types/icd11Sankey'
 import {
   displayModeLimit,
+  pathsForLevel1Scope,
   relationPieSectionsForNode,
   sankeyHoverTargetKey,
   sortSankeyPaths,
   type RelationPieSection as BaseRelationPieSection,
   type RelationShareItem,
   type Icd11SankeyDisplayMode,
+  type Level1Scope,
 } from '../utils/icd11SankeyDisplay'
 
 type DetailState =
@@ -42,6 +44,8 @@ type ChartNode = Icd11SankeyNode & {
     opacity?: number
     borderColor?: string
     borderWidth?: number
+    shadowBlur?: number
+    shadowColor?: string
   }
   emphasis?: {
     itemStyle?: {
@@ -85,6 +89,8 @@ type ChartLink = Icd11SankeyLink & {
     color: string
     opacity: number
     curveness: number
+    shadowBlur?: number
+    shadowColor?: string
   }
   emphasis?: {
     lineStyle?: {
@@ -146,8 +152,8 @@ const MIN_WEIGHT_OPTIONS = [
 const STAGE_TITLES = ['ICD11_Level1', 'ICD11_Level2', 'ICD11_Level3', '药物', '生物标记物']
 const SERIES_LEFT = 96
 const SERIES_RIGHT = 94
-const SERIES_TOP = 20
-const SERIES_BOTTOM = 118
+const SERIES_TOP = 10
+const SERIES_BOTTOM = 44
 const HEADER_HEIGHT = 70
 const HEADER_FADE_DISTANCE = 190
 const HOVER_INTENT_DELAY = 85
@@ -183,7 +189,8 @@ const isLoading = ref(false)
 const errorMessage = ref('')
 const searchQuery = ref('')
 const displayMode = ref<Icd11SankeyDisplayMode>('all')
-const selectedLevel1 = ref('ALL')
+const selectedLevel1 = ref('')
+const level1Scope = ref<Level1Scope>('linked')
 const minWeight = ref(0)
 const chartHeight = ref(760)
 const lockLabel = ref('')
@@ -243,8 +250,12 @@ const chartPanelStyle = computed(() => ({
 }))
 const level1Options = computed(() => {
   if (!graph.value) return []
-  return [...new Set(graph.value.paths.map((path) => path.level1))].sort((a, b) =>
-    a.localeCompare(b, 'zh-Hans-CN'),
+  const weights = new Map<string, number>()
+  for (const path of graph.value.paths) {
+    weights.set(path.level1, (weights.get(path.level1) ?? 0) + Number(path.weight || 0))
+  }
+  return [...weights.keys()].sort(
+    (a, b) => (weights.get(b) ?? 0) - (weights.get(a) ?? 0) || a.localeCompare(b, 'zh-Hans-CN'),
   )
 })
 const displaySummary = computed(() => (graph.value ? summarizeDisplayPaths(graph.value) : null))
@@ -255,7 +266,9 @@ const displaySummaryText = computed(() => {
     summary.candidatePathCount === summary.totalPathCount
       ? `展示 ${summary.shownPathCount}/${summary.totalPathCount} 条路径`
       : `展示 ${summary.shownPathCount}/${summary.candidatePathCount} 条候选路径，总计 ${summary.totalPathCount} 条`
-  return `${baseText} · 权重覆盖 ${formatPercent(summary.weightCoverage)} · ${summary.modeLabel}`
+  const linkedText = summary.linkedLevel1Count > 0 ? ` · 关联 ${summary.linkedLevel1Count} 个其他 Level1` : ''
+  const scopeText = level1Scope.value === 'linked' ? '含关联' : '仅当前'
+  return `${baseText} · 权重覆盖 ${formatPercent(summary.weightCoverage)}${linkedText} · ${scopeText} · ${summary.modeLabel}`
 })
 const relationPieSections = computed<RelationPieSection[]>(() => {
   if (detail.value.kind !== 'node') return []
@@ -266,7 +279,7 @@ const activePieSection = computed(
   () => relationPieSections.value.find((section) => section.id === activePieId.value) ?? null,
 )
 
-watch([searchQuery, displayMode, selectedLevel1, minWeight], () => {
+watch([searchQuery, displayMode, selectedLevel1, level1Scope, minWeight], () => {
   if (!graph.value) return
   clearLockedState()
   render()
@@ -360,11 +373,13 @@ async function loadGraph(category: string) {
 function initChart() {
   if (!chartEl.value || chart) return
   chart = init(chartEl.value, null, { renderer: 'canvas' })
-  chart.on('click', handleChartClick)
+  chart.on('click', (params) => {
+    void handleChartClick(params)
+  })
   chart.on('mouseover', handleSankeyMouseOver)
   chart.on('mouseout', scheduleRestoreHighlight)
   chart.getZr().on('click', (event) => {
-    if (!event.target) resetView()
+    if (!event.target) clearSelectionFromBlank()
   })
   chart.getZr().on('globalout', scheduleRestoreHighlight)
 }
@@ -396,16 +411,17 @@ function render(focusName: string | null = null) {
       tooltip: {
         trigger: 'item',
         confine: true,
+        backgroundColor: 'rgba(255,255,255,0.98)',
+        borderColor: 'rgba(71,102,119,0.16)',
+        borderWidth: 1,
+        borderRadius: 8,
+        padding: 0,
+        extraCssText: 'box-shadow:0 14px 34px rgba(20,47,65,0.16);overflow:hidden;',
         formatter(params: { dataType?: string; data: ChartNode | ChartLink }) {
           if (params.dataType === 'edge') {
-            const link = params.data as ChartLink
-            const mappingNote = link.edgeType === 'ICD11_Level2 → 药物'
-              ? '<br><strong>该映射终止于 Level2，未设置 Level3</strong>'
-              : ''
-            return `<b>${escapeHtml(link.edgeType)}</b><br>${escapeHtml(link.sourceLabel)} → ${escapeHtml(link.targetLabel)}<br>权重（涉及文献数）：${formatNumber(link.value)}<br>聚合路径数：${formatNumber(link.pathIds.length)}<br>颜色依据：${escapeHtml(link.level1)}${mappingNote}`
+            return sankeyLinkTooltipHtml(params.data as ChartLink)
           }
-          const node = params.data as ChartNode
-          return `<b>${escapeHtml(node.displayName)}</b><br>${escapeHtml(KIND_LABELS[node.kind])}<br>节点权重：${formatNumber(node.value)}`
+          return sankeyNodeTooltipHtml(params.data as ChartNode)
         },
       },
       series: [
@@ -420,7 +436,7 @@ function render(focusName: string | null = null) {
           nodeWidth: 14,
           nodeGap: nodeGap(baseGraph),
           nodeAlign: 'justify',
-          layoutIterations: 32,
+          layoutIterations: 0,
           draggable: false,
           emphasis: {
             focus: 'trajectory',
@@ -502,11 +518,12 @@ function buildGraphFromPaths(baseGraph: Icd11SankeyGraph, paths: Icd11SankeyPath
     target: string,
     weight: number,
     level1: string,
+    level2: string,
     edgeType: string,
     mappingLevel: Icd11SankeyPath['mappingLevel'],
     pathId: string,
   ) {
-    const key = `${source}@@${target}@@${edgeType}@@${level1}@@${mappingLevel}`
+    const key = `${source}@@${target}@@${edgeType}@@${level1}@@${level2}@@${mappingLevel}`
     const sourceLabel = nodeByName.get(source)?.displayName ?? source
     const targetLabel = nodeByName.get(target)?.displayName ?? target
     const color = baseGraph.level1Colors[level1] ?? '#8F9CAA'
@@ -517,6 +534,7 @@ function buildGraphFromPaths(baseGraph: Icd11SankeyGraph, paths: Icd11SankeyPath
         target,
         value: 0,
         level1,
+        level2,
         sourceLabel,
         targetLabel,
         edgeType,
@@ -544,6 +562,7 @@ function buildGraphFromPaths(baseGraph: Icd11SankeyGraph, paths: Icd11SankeyPath
       level2Id,
       path.weight,
       path.level1,
+      path.level2,
       'ICD11_Level1 → ICD11_Level2',
       path.mappingLevel,
       path.pathId,
@@ -554,6 +573,7 @@ function buildGraphFromPaths(baseGraph: Icd11SankeyGraph, paths: Icd11SankeyPath
         level3Id,
         path.weight,
         path.level1,
+        path.level2,
         'ICD11_Level2 → ICD11_Level3',
         path.mappingLevel,
         path.pathId,
@@ -563,6 +583,7 @@ function buildGraphFromPaths(baseGraph: Icd11SankeyGraph, paths: Icd11SankeyPath
         drugId,
         path.weight,
         path.level1,
+        path.level2,
         'ICD11_Level3 → 药物',
         path.mappingLevel,
         path.pathId,
@@ -573,6 +594,7 @@ function buildGraphFromPaths(baseGraph: Icd11SankeyGraph, paths: Icd11SankeyPath
         drugId,
         path.weight,
         path.level1,
+        path.level2,
         'ICD11_Level2 → 药物',
         path.mappingLevel,
         path.pathId,
@@ -583,15 +605,26 @@ function buildGraphFromPaths(baseGraph: Icd11SankeyGraph, paths: Icd11SankeyPath
       biomarkerId,
       path.weight,
       path.level1,
+      path.level2,
       '药物 → 生物标记物',
       path.mappingLevel,
       path.pathId,
     )
   }
 
+  const primaryNodeIds = new Set(
+    paths
+      .filter((path) => path.level1 === selectedLevel1.value)
+      .flatMap((path) => path.nodeIds),
+  )
   const nodes = baseGraph.nodes
     .filter((node) => nodeWeights.has(node.name))
     .map((node) => ({ ...node, value: nodeWeights.get(node.name) ?? node.value }))
+    .sort((a, b) => {
+      const primaryOrder = Number(primaryNodeIds.has(b.name)) - Number(primaryNodeIds.has(a.name))
+      if (primaryOrder) return primaryOrder
+      return b.value - a.value || a.displayName.localeCompare(b.displayName, 'zh-Hans-CN')
+    })
   const depthCounts = [0, 1, 2, 3, 4].map(
     (depth) => nodes.filter((node) => node.depth === depth).length,
   )
@@ -611,8 +644,8 @@ function buildGraphFromPaths(baseGraph: Icd11SankeyGraph, paths: Icd11SankeyPath
 function asChartGraph(baseGraph: Icd11SankeyGraph): ChartGraph {
   return {
     ...baseGraph,
-    nodes: baseGraph.nodes.map((node) => chartNode(node, true)),
-    links: baseGraph.links.map((link) => chartLink(link, true)),
+    nodes: baseGraph.nodes.map((node) => chartNode(node, true, false)),
+    links: baseGraph.links.map((link) => chartLink(link, true, false)),
   }
 }
 
@@ -624,13 +657,14 @@ function styledForPathIds(baseGraph: Icd11SankeyGraph, pathIds: Iterable<string>
   }
   return {
     ...baseGraph,
-    nodes: baseGraph.nodes.map((node) => chartNode(node, activeNodes.has(node.name))),
-    links: baseGraph.links.map((link) =>
-      chartLink(
-        link,
-        link.pathIds.some((pathId) => activePathIds.has(pathId)),
-      ),
-    ),
+    nodes: baseGraph.nodes.map((node) => {
+      const highlighted = activeNodes.has(node.name)
+      return chartNode(node, highlighted, highlighted)
+    }),
+    links: baseGraph.links.map((link) => {
+      const highlighted = link.pathIds.some((pathId) => activePathIds.has(pathId))
+      return chartLink(link, highlighted, highlighted)
+    }),
   }
 }
 
@@ -646,16 +680,24 @@ function styledForSearch(baseGraph: Icd11SankeyGraph, seeds: Set<string>): Chart
   return pathIds.size ? styledForPathIds(baseGraph, pathIds) : asChartGraph(baseGraph)
 }
 
-function chartNode(node: Icd11SankeyNode, active: boolean): ChartNode {
+function chartNode(node: Icd11SankeyNode, active: boolean, highlighted: boolean): ChartNode {
   const label = nodeLabel(node)
   const position = node.depth === 4 ? 'left' : 'right'
+  const isRelatedContext =
+    (node.kind === 'level1' || node.kind === 'level2') && node.level1 !== selectedLevel1.value
   return {
     ...node,
     itemStyle: {
       color: nodeDepthColor(node),
-      opacity: active ? 1 : 0.46,
-      borderColor: active ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.72)',
-      borderWidth: 1.2,
+      opacity: active ? (isRelatedContext && !highlighted ? 0.7 : 1) : 0.2,
+      borderColor: highlighted
+        ? 'rgba(255,255,255,0.98)'
+        : active
+          ? 'rgba(255,255,255,0.92)'
+          : 'rgba(255,255,255,0.54)',
+      borderWidth: highlighted ? 1.6 : 1.2,
+      shadowBlur: 0,
+      shadowColor: 'transparent',
     },
     emphasis: {
       itemStyle: {
@@ -683,27 +725,42 @@ function chartNode(node: Icd11SankeyNode, active: boolean): ChartNode {
       show: true,
       position,
       formatter: label.text,
-      color: active ? '#173247' : 'rgba(23, 50, 71, 0.58)',
+      color: highlighted
+        ? '#0b3441'
+        : active
+        ? isRelatedContext
+          ? 'rgba(23, 50, 71, 0.68)'
+          : '#173247'
+        : 'rgba(23, 50, 71, 0.58)',
       width: label.width,
       lineHeight: label.lineHeight,
       overflow: 'truncate',
       align: position === 'right' ? 'left' : 'right',
-      fontWeight: active ? 800 : 700,
-      textBorderColor: active ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.66)',
-      textBorderWidth: active ? 3 : 2,
+      fontWeight: highlighted ? 950 : active ? 800 : 700,
+      textBorderColor: highlighted
+        ? 'rgba(255,255,255,0.98)'
+        : active
+          ? 'rgba(255,255,255,0.92)'
+          : 'rgba(255,255,255,0.58)',
+      textBorderWidth: highlighted ? 4 : active ? 3 : 2,
     },
   }
 }
 
-function chartLink(link: Icd11SankeyLink, active: boolean): ChartLink {
-  const color = level1DisplayColor(link.level1, link.color)
+function chartLink(link: Icd11SankeyLink, active: boolean, highlighted: boolean): ChartLink {
+  const color = level2DisplayColor(link.level1, link.level2, link.color)
   const crossesLevel3 = link.edgeType === 'ICD11_Level2 → 药物'
+  const isRelatedContext = link.level1 !== selectedLevel1.value
+  const activeAlpha = isRelatedContext ? 0.38 : crossesLevel3 ? 0.54 : 0.62
+  const activeOpacity = isRelatedContext ? 0.56 : crossesLevel3 ? 0.72 : 0.8
   return {
     ...link,
     lineStyle: {
-      color: hexToRgba(color, active ? (crossesLevel3 ? 0.3 : 0.42) : 0.18),
-      opacity: active ? (crossesLevel3 ? 0.52 : 0.72) : 0.24,
+      color: hexToRgba(color, highlighted ? 0.9 : active ? activeAlpha : 0.06),
+      opacity: highlighted ? 0.98 : active ? activeOpacity : 0.08,
       curveness: 0.52,
+      shadowBlur: highlighted ? 5 : 0,
+      shadowColor: highlighted ? hexToRgba(color, 0.34) : 'transparent',
     },
     emphasis: {
       lineStyle: {
@@ -738,7 +795,11 @@ function singleLineLabel(value: string) {
 
 function nodeDepthColor(node: Icd11SankeyNode) {
   const baseColor = level1DisplayColor(node.level1, node.color)
-  const depthMix = [0, 0.07, 0.14, 0.2, 0.27][node.depth] ?? 0.16
+  if (node.kind === 'level2') return level2DisplayColor(node.level1, node.displayName, node.color)
+  if (node.kind === 'drug' || node.kind === 'biomarker') {
+    return node.kind === 'drug' ? '#2F6977' : '#526D78'
+  }
+  const depthMix = [0, 0.03, 0.08, 0.1, 0.12][node.depth] ?? 0.08
   return mixHex(baseColor, '#ffffff', depthMix)
 }
 
@@ -749,27 +810,33 @@ function sankeyLabelFontSize(baseGraph: Icd11SankeyGraph) {
   return 13
 }
 
-function handleChartClick(params: unknown) {
+async function handleChartClick(params: unknown) {
   const event = params as { dataType?: string; data?: ChartNode | ChartLink }
-  const baseGraph = activeBaseGraph.value
-  if (!baseGraph || !event.data) return
+  if (!activeBaseGraph.value || !event.data) return
   clearHoverPreview()
   if (event.dataType === 'node') {
     openDetailPanel()
     const node = event.data as ChartNode
-    currentFocus.value = node.name
+    if (node.kind === 'level1' && node.displayName !== selectedLevel1.value) {
+      selectedLevel1.value = node.displayName
+      await nextTick()
+    }
+    const baseGraph = activeBaseGraph.value
+    if (!baseGraph) return
+    const activeNode = baseGraph.nodes.find((item) => item.name === node.name) ?? node
+    currentFocus.value = activeNode.name
     lockedEdge.value = null
     lockedPathId.value = ''
     render(currentFocus.value)
-    const paths = selectedPaths(baseGraph, pathIdsForNode(baseGraph, node.name))
+    const paths = selectedPaths(baseGraph, pathIdsForNode(baseGraph, activeNode.name))
     lockLabel.value = '当前锁定节点'
-    lockText.value = node.displayName
+    lockText.value = activeNode.displayName
     detail.value = {
       kind: 'node',
-      title: node.displayName,
-      level: KIND_LABELS[node.kind],
-      nodeKind: node.kind,
-      nodeWeight: node.value,
+      title: activeNode.displayName,
+      level: KIND_LABELS[activeNode.kind],
+      nodeKind: activeNode.kind,
+      nodeWeight: activeNode.value,
       paths,
       limit: 20,
     }
@@ -1223,7 +1290,8 @@ function restoreLockedHighlight() {
 function resetView() {
   searchQuery.value = ''
   displayMode.value = 'all'
-  selectedLevel1.value = 'ALL'
+  selectedLevel1.value = defaultLevel1()
+  level1Scope.value = 'linked'
   minWeight.value = 0
   clearLockedState()
   render()
@@ -1238,10 +1306,17 @@ function clearLock() {
 function resetInteractionState() {
   searchQuery.value = ''
   displayMode.value = 'all'
-  selectedLevel1.value = 'ALL'
+  selectedLevel1.value = defaultLevel1()
+  level1Scope.value = 'linked'
   minWeight.value = 0
   clearLockedState()
   detail.value = { kind: 'category' }
+}
+
+function clearSelectionFromBlank() {
+  clearLockedState()
+  detail.value = { kind: 'category' }
+  render()
 }
 
 function clearLockedState() {
@@ -1264,12 +1339,19 @@ function displayPaths(baseGraph: Icd11SankeyGraph) {
 }
 
 function summarizeDisplayPaths(baseGraph: Icd11SankeyGraph) {
+  const contextualPaths = pathsForLevel1Scope(
+    baseGraph.paths,
+    selectedLevel1.value,
+    level1Scope.value,
+  )
   const filteredPaths = sortSankeyPaths(
-    baseGraph.paths.filter((path) => {
-      const level1Matched = selectedLevel1.value === 'ALL' || path.level1 === selectedLevel1.value
+    contextualPaths.filter((path) => {
       const weightMatched = minWeight.value <= 0 || path.weight >= minWeight.value
-      return level1Matched && weightMatched
+      return weightMatched
     }),
+  ).sort(
+    (a, b) =>
+      Number(b.level1 === selectedLevel1.value) - Number(a.level1 === selectedLevel1.value),
   )
   const limit = displayModeLimit(displayMode.value, filteredPaths.length)
   const paths = limit ? filteredPaths.slice(0, limit) : filteredPaths
@@ -1285,8 +1367,18 @@ function summarizeDisplayPaths(baseGraph: Icd11SankeyGraph) {
     candidateWeight,
     shownWeight,
     weightCoverage: candidateWeight > 0 ? shownWeight / candidateWeight : 0,
+    linkedLevel1Count:
+      level1Scope.value === 'linked'
+        ? new Set(
+            paths.filter((path) => path.level1 !== selectedLevel1.value).map((path) => path.level1),
+          ).size
+        : 0,
     modeLabel: displayModeLabel(displayMode.value, limit),
   }
+}
+
+function defaultLevel1() {
+  return level1Options.value[0] ?? ''
 }
 
 function displayModeLabel(mode: Icd11SankeyDisplayMode, limit: number | null) {
@@ -1331,9 +1423,9 @@ function setChartHeight(baseGraph: Icd11SankeyGraph) {
   const pathCount = baseGraph.paths.length
   const dense = pathCount > 200 || maxNodes > 90
   const medium = pathCount > 80 || maxNodes > 28
-  const perNode = dense ? 24 : medium ? 22 : 20
-  const extraSpace = dense ? 780 : medium ? 500 : 400
-  const maxHeight = dense ? 5200 : medium ? 3000 : 1800
+  const perNode = dense ? 16 : medium ? 17 : 16
+  const extraSpace = dense ? 240 : medium ? 200 : 160
+  const maxHeight = dense ? 3000 : medium ? 2100 : 1200
   const contentHeight = maxNodes * perNode + extraSpace
   chartHeight.value = Math.max(viewportHeight, Math.min(maxHeight, contentHeight))
   void nextTick(() => chart?.resize())
@@ -1345,9 +1437,9 @@ function nodeGap(baseGraph: Icd11SankeyGraph) {
   const dense = pathCount > 200 || maxNodes > 90
   const medium = pathCount > 80 || maxNodes > 28
   const availableHeight = Math.max(360, chartHeight.value - SERIES_TOP - SERIES_BOTTOM)
-  const density = Math.floor((availableHeight / maxNodes) * (dense ? 0.74 : medium ? 0.62 : 0.56))
-  const minGap = dense ? 13 : medium ? 10 : 8
-  const maxGap = dense ? 44 : medium ? 30 : 22
+  const density = Math.floor((availableHeight / maxNodes) * (dense ? 0.72 : medium ? 0.72 : 0.6))
+  const minGap = dense ? 11 : medium ? 12 : 8
+  const maxGap = dense ? 21 : medium ? 24 : 22
   return Math.max(minGap, Math.min(maxGap, density))
 }
 
@@ -1408,6 +1500,37 @@ function formatPercent(value: number | string | null | undefined) {
   return `${(Number(value ?? 0) * 100).toFixed(1)}%`
 }
 
+function sankeyLinkTooltipHtml(link: ChartLink) {
+  const color = level2DisplayColor(link.level1, link.level2, link.color)
+  const mappingNote =
+    link.edgeType === 'ICD11_Level2 → 药物'
+      ? '<div class="sankey-tip__note">该映射正式终止于 Level2，未设置 Level3</div>'
+      : ''
+  return `
+    <div class="sankey-tip">
+      <div class="sankey-tip__eyebrow">路径关系</div>
+      <div class="sankey-tip__title">${escapeHtml(link.sourceLabel)}<span>→</span>${escapeHtml(link.targetLabel)}</div>
+      <div class="sankey-tip__type">${escapeHtml(link.edgeType)}</div>
+      <div class="sankey-tip__metrics">
+        <div><span>权重</span><strong>${formatNumber(link.value)}</strong><small>涉及文献数</small></div>
+        <div><span>聚合路径</span><strong>${formatNumber(link.pathIds.length)}</strong><small>条</small></div>
+      </div>
+      <div class="sankey-tip__color"><i style="background:${color}"></i><span>Level2 路径色</span><strong>${escapeHtml(link.level2)}</strong></div>
+      ${mappingNote}
+    </div>`
+}
+
+function sankeyNodeTooltipHtml(node: ChartNode) {
+  return `
+    <div class="sankey-tip sankey-tip--node">
+      <div class="sankey-tip__node-main">
+        <span>${escapeHtml(KIND_LABELS[node.kind])}</span>
+        <strong>${escapeHtml(node.displayName)}</strong>
+        <div><b>${formatNumber(node.value)}</b><small>权重</small></div>
+      </div>
+    </div>`
+}
+
 function level1DisplayColor(level1: string, rawColor: string): string {
   const fallbackColor = fallbackLevel1Color(level1)
   const normalized = normalizeHexColor(rawColor)
@@ -1416,8 +1539,8 @@ function level1DisplayColor(level1: string, rawColor: string): string {
   if (!normalized || hsl.s < 0.32 || hsl.l > 0.72) return fallbackColor
   return hslToHex({
     h: hsl.h,
-    s: Math.min(0.72, hsl.s + 0.14),
-    l: Math.max(0.38, Math.min(0.55, hsl.l - 0.03)),
+    s: Math.max(0.56, Math.min(0.82, hsl.s + 0.2)),
+    l: Math.max(0.37, Math.min(0.5, hsl.l - 0.05)),
   })
 }
 
@@ -1427,6 +1550,24 @@ function fallbackLevel1Color(level1: string): string {
     hash = (hash * 31 + char.charCodeAt(0)) % 100000
   }
   return LEVEL1_FALLBACK_COLORS[hash % LEVEL1_FALLBACK_COLORS.length] ?? '#416FB8'
+}
+
+function level2DisplayColor(level1: string, level2: string, rawColor: string): string {
+  const base = level1DisplayColor(level1, rawColor)
+  const hsl = rgbToHsl(hexToRgb(base))
+  const variants = [
+    { hue: -0.075, saturation: 0.08, lightness: -0.04 },
+    { hue: -0.038, saturation: -0.02, lightness: 0.03 },
+    { hue: 0.015, saturation: 0.07, lightness: 0.06 },
+    { hue: 0.052, saturation: -0.03, lightness: -0.02 },
+    { hue: 0.09, saturation: 0.04, lightness: 0.03 },
+  ]
+  const variant = variants[stableTextHash(level2) % variants.length] ?? variants[0]!
+  return hslToHex({
+    h: (hsl.h + variant.hue + 1) % 1,
+    s: Math.max(0.54, Math.min(0.84, hsl.s + variant.saturation)),
+    l: Math.max(0.35, Math.min(0.54, hsl.l + variant.lightness)),
+  })
 }
 
 function normalizeHexColor(value: string) {
@@ -1574,12 +1715,25 @@ function exportPng() {
       <label class="control-field level-field">
         <span>ICD11_Level1</span>
         <select v-model="selectedLevel1">
-          <option value="ALL">全部</option>
           <option v-for="level1 in level1Options" :key="level1" :value="level1">
             {{ level1 }}
           </option>
         </select>
       </label>
+
+      <fieldset class="scope-field">
+        <legend>关联范围</legend>
+        <div class="scope-segmented">
+          <label>
+            <input v-model="level1Scope" type="radio" value="selected" />
+            <span>仅当前</span>
+          </label>
+          <label>
+            <input v-model="level1Scope" type="radio" value="linked" />
+            <span>含关联</span>
+          </label>
+        </div>
+      </fieldset>
 
       <label class="control-field display-field">
         <span>显示模式</span>
@@ -1606,7 +1760,11 @@ function exportPng() {
 
     <section class="sankey-main" :aria-label="selectedCategoryLabel">
       <section class="chart-panel" :style="chartPanelStyle">
-        <div class="lock-bar" aria-live="polite">
+        <div
+          class="lock-bar"
+          :class="{ 'has-lock': Boolean(lockedEdge || lockedPathId || currentFocus) }"
+          aria-live="polite"
+        >
           <strong>{{ lockLabel || '状态' }}</strong>
           <span>{{ lockText }}</span>
           <span v-if="displaySummaryText" class="filter-summary">{{ displaySummaryText }}</span>
@@ -1618,12 +1776,20 @@ function exportPng() {
             <span v-for="title in STAGE_TITLES" :key="title">{{ title }}</span>
           </div>
         </div>
-        <div ref="chartEl" class="sankey-chart" :style="{ height: `${chartHeight}px` }"></div>
+        <div class="sankey-chart-scroll">
+          <div class="sankey-chart-shell" :style="{ height: `${chartHeight}px` }">
+            <div class="level1-column-rail" aria-hidden="true"></div>
+            <div ref="chartEl" class="sankey-chart"></div>
+          </div>
+        </div>
       </section>
 
       <aside
         class="side-panel"
-        :class="{ 'compact-detail': isCompactDetail }"
+        :class="{
+          'compact-detail': isCompactDetail,
+          'has-selection': Boolean(lockedEdge || lockedPathId || currentFocus),
+        }"
         aria-label="ICD11 桑基图说明区"
       >
         <template v-if="detail.kind === 'category' && categoryStats">
@@ -1638,7 +1804,9 @@ function exportPng() {
           </header>
           <section class="detail-block">
             <h3>图例说明</h3>
-            <p><b>颜色</b> 代表 ICD11_Level1；<b>带宽</b> 代表涉及文献数权重。</p>
+            <p><b>颜色</b>：Level1 确定主色家族，Level2 用同色系中的路径色区分；<b>带宽</b> 代表涉及文献数权重。</p>
+            <p><b>Level1 轨道</b>：浅色纵向轨道仅用于层级定位，不代表权重。</p>
+            <p><b>关联展开</b>：选中 Level1 后，同时显示与其共享下游节点的其他 Level1 相关路径。</p>
             <p><b>完整路径</b>：ICD11_Level1 → ICD11_Level2 → ICD11_Level3 → 药物 → 生物标记物。</p>
             <p><b>跨层路径</b>：正式终止于 Level2 的映射直接连接药物，透明度较低且不补造 Level3。</p>
             <p><b>聚合</b>：相同有效层级关系已合并，权重为涉及文献数之和。</p>
@@ -1760,7 +1928,7 @@ function exportPng() {
             >
               <i aria-hidden="true"></i>
               <div class="single-relation-main">
-                <span>唯一关系</span>
+                <span>唯一{{ section.centerLabel }}</span>
                 <strong>{{ singleRelationItem(section).name }}</strong>
                 <em>
                   {{ formatNumber(singleRelationItem(section).value) }} 权重 ·
@@ -1922,7 +2090,7 @@ function exportPng() {
 .sankey-controls {
   display: grid;
   grid-template-columns: minmax(250px, 390px) minmax(150px, 220px) 110px auto auto auto;
-  align-items: end;
+  align-items: center;
   gap: 10px;
 }
 
@@ -3927,15 +4095,272 @@ function exportPng() {
   color: #173247;
 }
 
+:global(.sankey-tip) {
+  box-sizing: border-box;
+  width: min(272px, calc(100vw - 28px));
+  padding: 10px 11px 11px;
+  color: #173247;
+  font-family: Microsoft YaHei, Noto Sans CJK SC, Source Han Sans CN, SimHei, Arial, sans-serif;
+}
+
+:global(.sankey-tip__eyebrow) {
+  margin-bottom: 3px;
+  color: #708691;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+:global(.sankey-tip__title) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  color: #173247;
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+:global(.sankey-tip__title span) {
+  color: #86a0aa;
+  font-weight: 800;
+}
+
+:global(.sankey-tip__type) {
+  display: inline-flex;
+  margin-top: 5px;
+  padding: 2px 6px;
+  border: 1px solid rgba(105, 127, 140, 0.13);
+  border-radius: 5px;
+  color: #557080;
+  background: #f7fafb;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+:global(.sankey-tip__metrics) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  margin-top: 7px;
+}
+
+:global(.sankey-tip__metrics--single) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+:global(.sankey-tip__metrics > div) {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 1px 5px;
+  padding: 6px 7px;
+  border: 1px solid rgba(105, 127, 140, 0.1);
+  border-radius: 6px;
+  background: rgba(246, 250, 251, 0.86);
+}
+
+:global(.sankey-tip__metrics span),
+:global(.sankey-tip__metrics small) {
+  color: #718792;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+:global(.sankey-tip__metrics strong) {
+  justify-self: end;
+  color: #173247;
+  font-size: 14px;
+  font-weight: 950;
+}
+
+:global(.sankey-tip__metrics small) {
+  grid-column: 1 / -1;
+}
+
+:global(.sankey-tip__color) {
+  display: grid;
+  grid-template-columns: 9px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  color: #6a808b;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+:global(.sankey-tip__color i) {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+}
+
+:global(.sankey-tip__color strong) {
+  overflow: hidden;
+  color: #36566a;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.sankey-tip__note) {
+  margin-top: 7px;
+  padding: 5px 7px;
+  border-left: 3px solid #d79243;
+  border-radius: 4px;
+  color: #725226;
+  background: #fff8ee;
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
+:global(.sankey-tip--node) {
+  width: min(248px, calc(100vw - 28px));
+  padding: 8px 10px;
+}
+
+:global(.sankey-tip__node-main) {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+:global(.sankey-tip__node-main > span) {
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: #617985;
+  background: #f0f5f6;
+  font-size: 9px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+:global(.sankey-tip__node-main > strong) {
+  overflow: hidden;
+  color: #173247;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 950;
+}
+
+:global(.sankey-tip__node-main > div) {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+:global(.sankey-tip__node-main b) {
+  color: #173247;
+  font-size: 15px;
+  font-weight: 950;
+}
+
+:global(.sankey-tip__node-main small) {
+  color: #718792;
+  font-size: 9px;
+  font-weight: 850;
+}
+
 .sankey-controls {
   grid-template-columns:
-    minmax(260px, 1.2fr)
-    minmax(150px, 0.55fr)
+    minmax(280px, 1.2fr)
+    minmax(148px, 0.42fr)
+    minmax(150px, 0.52fr)
     minmax(96px, 0.34fr)
     auto
     auto
     auto;
   align-items: end;
+  gap: 8px;
+  padding: 8px clamp(14px, 2vw, 22px) 6px;
+}
+
+.scope-field {
+  min-width: 148px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.scope-field legend {
+  padding: 0;
+  color: var(--sankey-muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.scope-segmented {
+  height: 34px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 2px;
+  border: 1px solid rgba(87, 119, 135, 0.24);
+  border-radius: 8px;
+  background: rgba(237, 243, 245, 0.92);
+}
+
+.scope-segmented label {
+  position: relative;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.scope-segmented input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.scope-segmented span {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: #647985;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+  transition: color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+}
+
+.scope-segmented input:checked + span {
+  color: #075762;
+  background: #ffffff;
+  box-shadow: 0 2px 7px rgba(23, 50, 71, 0.13);
+}
+
+.scope-segmented input:focus-visible + span {
+  outline: 2px solid rgba(26, 132, 125, 0.42);
+  outline-offset: 1px;
+}
+
+.sankey-controls .control-field {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.sankey-controls .control-field > span {
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.sankey-controls .control-field select,
+.sankey-controls .control-button {
+  min-height: 34px;
+  height: 34px;
 }
 
 .display-field {
@@ -3952,9 +4377,45 @@ function exportPng() {
 
 .chart-panel {
   position: relative;
+  overflow: clip;
   background:
     linear-gradient(180deg, rgba(250, 255, 254, 0.98), rgba(238, 249, 247, 0.88)),
     var(--sankey-chart-bg);
+}
+
+.sankey-chart-shell {
+  position: relative;
+  width: 100%;
+}
+
+.sankey-chart-scroll {
+  width: 100%;
+  overflow: visible;
+}
+
+.sankey-chart-shell .sankey-chart {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  height: 100%;
+}
+
+.level1-column-rail {
+  position: absolute;
+  z-index: 0;
+  top: 10px;
+  bottom: 44px;
+  left: calc(var(--series-left) - 7px);
+  width: 28px;
+  border: 1px solid rgba(50, 111, 180, 0.07);
+  border-radius: 7px;
+  background: linear-gradient(180deg, rgba(50, 111, 180, 0.035), rgba(22, 133, 124, 0.065));
+  pointer-events: none;
+}
+
+.sankey-main {
+  gap: 12px;
+  padding-top: 8px;
 }
 
 .chart-panel::before,
@@ -3982,39 +4443,76 @@ function exportPng() {
     var(--sankey-side-bg);
 }
 
+.stats-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.stats-summary span {
+  min-width: 0;
+  justify-content: center;
+  padding: 5px 6px;
+  border-radius: 6px;
+  text-align: center;
+  white-space: nowrap;
+}
+
 .lock-bar {
   width: 100%;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 12px;
-  padding: 12px 16px 10px;
+  min-height: 32px;
+  gap: 4px 9px;
+  padding: 6px 14px 5px;
+  font-size: 12px;
 }
 
 .lock-bar > span {
   color: #5b7280;
 }
 
+.lock-bar.has-lock {
+  border-bottom-color: rgba(11, 102, 112, 0.2);
+  background: linear-gradient(90deg, rgba(222, 246, 243, 0.96), rgba(246, 252, 252, 0.96));
+  box-shadow: inset 3px 0 0 #0b6670;
+}
+
+.lock-bar.has-lock strong {
+  color: #075762;
+}
+
+.side-panel.has-selection {
+  border-color: rgba(11, 102, 112, 0.28);
+  box-shadow: 0 18px 45px rgba(23, 50, 71, 0.08), 0 0 0 2px rgba(11, 102, 112, 0.06);
+}
+
+.side-panel.has-selection::before {
+  height: 4px;
+  background: linear-gradient(90deg, #0b6670, #2f88a0, rgba(50, 111, 180, 0.5));
+}
+
 .filter-summary {
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
-  padding: 0 9px;
+  min-height: 21px;
+  padding: 0 7px;
   border: 1px solid rgba(22, 133, 124, 0.24);
   border-radius: 999px;
   color: #175b65 !important;
   background: linear-gradient(180deg, rgba(232, 249, 246, 0.94), rgba(219, 242, 246, 0.78));
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 900;
 }
 
 .stage-axis {
   position: sticky;
   top: 0;
-  z-index: 4;
+  z-index: 18;
   width: 100%;
   box-sizing: border-box;
-  padding: 12px var(--series-right) 0 var(--series-left);
+  padding: 7px var(--series-right) 0 var(--series-left);
   border-bottom: 1px solid rgba(105, 127, 140, 0.08);
   background:
     linear-gradient(180deg, rgba(250, 255, 254, 0.98), rgba(248, 253, 252, 0.92)),
@@ -4026,7 +4524,7 @@ function exportPng() {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
-  min-height: 26px;
+  min-height: 23px;
 }
 
 .stage-axis-track::before,
@@ -4038,12 +4536,12 @@ function exportPng() {
   min-width: 0;
   display: grid;
   place-items: center;
-  padding: 5px 6px;
+  padding: 3px 5px;
   border: 1px solid rgba(105, 127, 140, 0.1);
   border-radius: 8px;
   color: #102a3d;
   background: rgba(255, 255, 255, 0.58);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 950;
   line-height: 1.05;
   text-align: center;
@@ -4074,10 +4572,19 @@ function exportPng() {
   .compact-field {
     max-width: none;
   }
+
+  .side-panel {
+    position: relative;
+  }
+
 }
 
 @media (max-width: 720px) {
   .chart-panel {
+    overflow: clip;
+  }
+
+  .sankey-chart-scroll {
     overflow-x: auto;
     overflow-y: hidden;
   }
@@ -4110,8 +4617,12 @@ function exportPng() {
     transform: none !important;
   }
 
-  .sankey-chart {
+  .sankey-chart-shell {
     min-width: 760px;
+  }
+
+  .stats-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

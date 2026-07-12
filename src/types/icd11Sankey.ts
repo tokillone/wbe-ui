@@ -20,6 +20,7 @@ export interface Icd11SankeyLink {
   target: string
   value: number
   level1: string
+  level2: string
   sourceLabel: string
   targetLabel: string
   edgeType: string

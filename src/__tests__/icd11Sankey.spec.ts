@@ -8,6 +8,8 @@ import {
 import {
   relationPieSectionsForNode,
   relationShareItems,
+  pathsForLevel1Context,
+  pathsForLevel1Scope,
   sankeyHoverTargetKey,
   smartSankeyLimit,
 } from '../utils/icd11SankeyDisplay'
@@ -149,7 +151,11 @@ describe('icd11Sankey display helpers', () => {
     const biomarkerSections = relationPieSectionsForNode('biomarker', paths)
 
     expect(level1Sections.map((section) => section.id)).toEqual(['level1-level2'])
-    expect(level2Sections.map((section) => section.id)).toEqual(['level2-mapping-depth', 'level2-level3'])
+    expect(level2Sections.map((section) => section.id)).toEqual([
+      'level2-mapping-depth',
+      'level2-drug',
+      'level2-level3',
+    ])
     expect(level3Sections.map((section) => section.id)).toEqual(['level3-drug'])
     expect(drugSections.map((section) => section.id)).toEqual([
       'drug-mapping-depth',
@@ -184,6 +190,39 @@ describe('icd11Sankey display helpers', () => {
       value: 15,
       pathIds: ['p1', 'p2', 'p3'],
     })
+    expect(level2Sections.find((section) => section.id === 'level2-drug')?.items[0]).toMatchObject({
+      name: '二甲双胍',
+      value: 15,
+    })
+  })
+
+  it('adds one-hop paths from other Level1 values when they share a downstream node', () => {
+    const selected = path('selected', '内分泌疾病', '2型糖尿病', '二甲双胍', '二甲双胍', 10)
+    const related = {
+      ...path('related', '肾脏疾病', null, '二甲双胍', '二甲双胍', 3),
+      level1: '泌尿生殖系统疾病',
+      nodeIds: ['level1-b', 'level2-b', 'drug::二甲双胍', 'biomarker::二甲双胍'],
+    }
+    const unrelated = {
+      ...path('unrelated', '心脏疾病', null, '阿斯匹林', '水杨酸', 2),
+      level1: '循环系统疾病',
+      nodeIds: ['level1-c', 'level2-c', 'drug::阿斯匹林', 'biomarker::水杨酸'],
+    }
+
+    expect(pathsForLevel1Context([selected, related, unrelated], selected.level1).map((item) => item.pathId)).toEqual([
+      'selected',
+      'related',
+    ])
+    expect(
+      pathsForLevel1Scope([selected, related, unrelated], selected.level1, 'selected').map(
+        (item) => item.pathId,
+      ),
+    ).toEqual(['selected'])
+    expect(
+      pathsForLevel1Scope([selected, related, unrelated], selected.level1, 'linked').map(
+        (item) => item.pathId,
+      ),
+    ).toEqual(['selected', 'related'])
   })
 
   it('keeps legacy four-stage graph data as a truthful Level2 terminal path', () => {

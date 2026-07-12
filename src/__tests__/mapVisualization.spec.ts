@@ -3,9 +3,14 @@ import { describe, expect, it } from 'vitest'
 import { normalizeMapDetailResponse, normalizeMapStatsResponse } from '../services/map'
 import type { MapDetailResponse, MapRegionStat, MapStatsResponse } from '../types/map'
 import {
+  canExploreBiomarker,
+  compactExplorerSummaryCards,
   displayLevelForZoom,
   overviewSummaryCards,
+  resolveStableHeatRange,
+  selectRowsForDisplayLevel,
   selectionYearRange,
+  sortBiomarkersByLiterature,
   temperatureBandIndex,
   visibleLevelsForZoom,
 } from '../utils/mapVisualization'
@@ -40,6 +45,71 @@ describe('map visualization hierarchy', () => {
   it('maps low and high values to opposite temperature bands', () => {
     expect(temperatureBandIndex(1, 1, 1000, 7)).toBe(0)
     expect(temperatureBandIndex(1000, 1, 1000, 7)).toBe(6)
+  })
+
+  it('keeps the backend heat range stable when the visible hierarchy changes', () => {
+    const countryRange = resolveStableHeatRange(50, 5478, [100, 5478])
+    const cityRange = resolveStableHeatRange(50, 5478, [50, 527.6, 5478])
+
+    expect(countryRange).toEqual({ min: 50, max: 5478 })
+    expect(cityRange).toEqual(countryRange)
+    expect(temperatureBandIndex(527.6, countryRange.min, countryRange.max, 7)).toBe(
+      temperatureBandIndex(527.6, cityRange.min, cityRange.max, 7),
+    )
+  })
+
+  it('falls back to all hierarchy values when a legacy response has no legend range', () => {
+    expect(resolveStableHeatRange(null, null, [100, 50, 5478])).toEqual({ min: 50, max: 5478 })
+  })
+
+  it('keeps a per-country fallback when the map reaches city zoom', () => {
+    const rows = [
+      { level: 'country' as const, key: 'canada', country: 'canada' },
+      { level: 'country' as const, key: 'usa', country: 'usa' },
+      { level: 'admin1' as const, key: 'usa|california', country: 'usa' },
+      { level: 'country' as const, key: 'china', country: 'china' },
+      { level: 'admin1' as const, key: 'china|guangdong', country: 'china' },
+      { level: 'city' as const, key: 'china|guangdong|guangzhou', country: 'china' },
+    ]
+
+    expect(selectRowsForDisplayLevel(rows, 'admin1', (row) => row.country).map((row) => row.key))
+      .toEqual(['canada', 'usa|california', 'china|guangdong'])
+    expect(selectRowsForDisplayLevel(rows, 'city', (row) => row.country).map((row) => row.key))
+      .toEqual(['canada', 'usa|california', 'china|guangdong|guangzhou'])
+  })
+
+  it('keeps exactly the three compact coverage metrics', () => {
+    const cards = compactExplorerSummaryCards([
+      { label: '点位数', value: '119' },
+      { label: '文献数', value: '5' },
+      { label: '记录数', value: '395' },
+      { label: 'biomarker 数', value: '20' },
+      { label: '当前 PNDL', value: '无数据' },
+    ])
+
+    expect(cards.map((card) => card.label)).toEqual(['点位数', '文献数', 'biomarker 数'])
+  })
+
+  it('allows biomarker exploration when coverage exists without PNDL', () => {
+    expect(
+      canExploreBiomarker({
+        biomarkerKey: 'metformin',
+        recordCount: 42,
+        doiCount: 3,
+        pointCount: 8,
+        hasPndl: false,
+      }),
+    ).toBe(true)
+  })
+
+  it('sorts biomarker exploration by literature before record count', () => {
+    const sorted = sortBiomarkersByLiterature([
+      { biomarkerKey: 'a', biomarkerLabel: 'A', doiCount: 2, recordCount: 500 },
+      { biomarkerKey: 'b', biomarkerLabel: 'B', doiCount: 8, recordCount: 40 },
+      { biomarkerKey: 'c', biomarkerLabel: 'C', doiCount: 8, recordCount: 90 },
+    ])
+
+    expect(sorted.map((item) => item.biomarkerKey)).toEqual(['c', 'b', 'a'])
   })
 
   it('shows a year range and keeps six overview cards when no biomarker is selected', () => {
