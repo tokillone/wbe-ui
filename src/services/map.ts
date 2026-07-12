@@ -3,6 +3,8 @@ import type {
   MapDetailResponse,
   MapFilterResponse,
   MapFilterSelection,
+  MapPndlRankingItem,
+  MapRegionStat,
   MapStatsResponse,
 } from '../types/map'
 
@@ -112,7 +114,7 @@ export function fetchMapStats(
       levels: levels.join(','),
     },
     signal,
-  )
+  ).then(normalizeMapStatsResponse)
 }
 
 export function fetchMapDetail(
@@ -133,7 +135,7 @@ export function fetchMapDetail(
       year: selection.year,
     },
     signal,
-  )
+  ).then(normalizeMapDetailResponse)
 }
 
 export function fetchMapClusterDetail(
@@ -153,5 +155,72 @@ export function fetchMapClusterDetail(
       locations,
     },
     signal,
-  )
+  ).then(normalizeMapDetailResponse)
+}
+
+type LegacyPndlValue = {
+  pndlMedianMgD1000inh?: number | null
+  pndlGeomeanMgD1000inh?: number | null
+}
+
+function representativePndlValue(row: LegacyPndlValue) {
+  const median = Number(row.pndlMedianMgD1000inh)
+  if (Number.isFinite(median) && median > 0) return median
+  const legacyGeomean = Number(row.pndlGeomeanMgD1000inh)
+  return Number.isFinite(legacyGeomean) && legacyGeomean > 0 ? legacyGeomean : null
+}
+
+function normalizeRegionStat(row: MapRegionStat): MapRegionStat {
+  return {
+    ...row,
+    pndlMedianMgD1000inh: representativePndlValue(row),
+  }
+}
+
+function normalizeRankingItem(row: MapPndlRankingItem): MapPndlRankingItem {
+  return {
+    ...row,
+    pndlMedianMgD1000inh: representativePndlValue(row),
+  }
+}
+
+function normalizeSelectedRankingItem(
+  row: MapPndlRankingItem,
+  region: MapRegionStat | null,
+): MapPndlRankingItem {
+  const normalized = normalizeRankingItem(row)
+  if (!region || row.level !== region.level || row.geoKey !== region.geoKey) return normalized
+  return {
+    ...normalized,
+    pndlMedianMgD1000inh: region.pndlMedianMgD1000inh,
+    recordCount: region.recordCount ?? normalized.recordCount,
+    doiCount: region.doiCount ?? normalized.doiCount,
+    pointCount: region.pointCount ?? normalized.pointCount,
+    yearCount: region.yearCount ?? normalized.yearCount,
+  }
+}
+
+export function normalizeMapStatsResponse(response: MapStatsResponse): MapStatsResponse {
+  return {
+    ...response,
+    regions: (response.regions ?? []).map(normalizeRegionStat),
+    points: (response.points ?? []).map(normalizeRegionStat),
+  }
+}
+
+export function normalizeMapDetailResponse(response: MapDetailResponse): MapDetailResponse {
+  const region = response.region ? normalizeRegionStat(response.region) : null
+  return {
+    ...response,
+    region,
+    locations: response.locations?.map(normalizeRegionStat) ?? response.locations,
+    summaryCards: response.summaryCards?.map((card) =>
+      card.label === 'PNDL 几何均值' ? { ...card, label: '当前 PNDL' } : card,
+    ) ?? response.summaryCards,
+    pndlRanking: response.pndlRanking?.map((row) => normalizeSelectedRankingItem(row, region)) ?? response.pndlRanking,
+    pndlComparisons: response.pndlComparisons?.map((comparison) => ({
+      ...comparison,
+      rows: (comparison.rows ?? []).map((row) => normalizeSelectedRankingItem(row, region)),
+    })) ?? response.pndlComparisons,
+  }
 }

@@ -536,6 +536,8 @@ const isAuthenticated = ref(false)
 const currentUser = ref('')
 const currentUserRole = ref<UserResponse['role'] | ''>('')
 const currentUserCanUpload = ref(false)
+const currentUserCanReviewUploads = ref(false)
+const currentUserCanSyncData = ref(false)
 const currentUserCanDownload = ref(true)
 const pendingAction = ref<PendingAction>(null)
 const actionNotice = ref('')
@@ -596,7 +598,10 @@ const isReset = computed(() => mode.value === 'reset')
 const canAccessDataEntry = computed(
   () =>
     isAuthenticated.value &&
-    (currentUserRole.value === 'admin' || currentUserRole.value === 'editor' || currentUserCanUpload.value),
+    (currentUserRole.value === 'admin' ||
+      currentUserCanUpload.value ||
+      currentUserCanReviewUploads.value ||
+      currentUserCanSyncData.value),
 )
 const needsCode = computed(() => isRegister.value || isReset.value)
 const pageTitle = computed(() => {
@@ -1318,6 +1323,8 @@ async function handleLogout() {
     currentUser.value = ''
     currentUserRole.value = ''
     currentUserCanUpload.value = false
+    currentUserCanReviewUploads.value = false
+    currentUserCanSyncData.value = false
     currentUserCanDownload.value = true
     pendingAction.value = null
     loginComplete.value = false
@@ -1356,10 +1363,6 @@ function scrollToSection(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
-function openMapVisualization() {
-  router.push('/map-visualization')
-}
-
 function preloadMapVisualization() {
   void import('./MapVisualizationView.vue')
 }
@@ -1389,7 +1392,7 @@ async function openUploadWorkspace() {
   }
 
   if (!canAccessDataEntry.value) {
-    actionNotice.value = '当前账号没有数据录入权限，请联系系统管理员赋予管理人员角色。'
+    actionNotice.value = '当前账号没有数据工作台权限，请联系系统管理员开启上传、审核或同步权限。'
     return
   }
 
@@ -1548,6 +1551,8 @@ async function handleSubmit() {
       currentUser.value = result.data.user.username || result.data.user.email
       currentUserRole.value = result.data.user.role
       currentUserCanUpload.value = result.data.user.canUpload === true
+      currentUserCanReviewUploads.value = result.data.user.canReviewUploads === true
+      currentUserCanSyncData.value = result.data.user.canSyncData === true
       currentUserCanDownload.value = result.data.user.canDownload !== false
       loginComplete.value = true
       isAuthOpen.value = false
@@ -1578,6 +1583,8 @@ async function hydrateSession() {
   currentUser.value = session.user.username || session.user.email
   currentUserRole.value = session.user.role
   currentUserCanUpload.value = session.user.canUpload === true
+  currentUserCanReviewUploads.value = session.user.canReviewUploads === true
+  currentUserCanSyncData.value = session.user.canSyncData === true
   currentUserCanDownload.value = session.user.canDownload !== false
   try {
     const user = await fetchCurrentUser(session.token)
@@ -1585,6 +1592,8 @@ async function hydrateSession() {
     currentUser.value = user.username || user.email
     currentUserRole.value = user.role
     currentUserCanUpload.value = user.canUpload === true
+    currentUserCanReviewUploads.value = user.canReviewUploads === true
+    currentUserCanSyncData.value = user.canSyncData === true
     currentUserCanDownload.value = user.canDownload !== false
   } catch {
     clearSession()
@@ -1592,6 +1601,8 @@ async function hydrateSession() {
     currentUser.value = ''
     currentUserRole.value = ''
     currentUserCanUpload.value = false
+    currentUserCanReviewUploads.value = false
+    currentUserCanSyncData.value = false
     currentUserCanDownload.value = true
   }
 }
@@ -1629,22 +1640,7 @@ onBeforeUnmount(() => {
 
       <nav class="main-nav" aria-label="主导航">
         <a href="#about">数据说明</a>
-        <RouterLink
-          to="/map-visualization"
-          @mouseenter="preloadMapVisualization"
-          @focus="preloadMapVisualization"
-        >
-          地图可视化
-        </RouterLink>
-        <RouterLink
-          to="/icd11-sankey"
-          @mouseenter="preloadIcd11Sankey"
-          @focus="preloadIcd11Sankey"
-        >
-          ICD11 桑基图
-        </RouterLink>
-        <RouterLink v-if="canAccessDataEntry" to="/data-entry">数据录入</RouterLink>
-        <a href="#visual">图谱分析</a>
+        <a href="#visual-entry">可视化</a>
         <a href="#methods">方法与质量</a>
         <a href="#news">更新</a>
       </nav>
@@ -1668,14 +1664,24 @@ onBeforeUnmount(() => {
           <p v-if="!searchResults.length">暂无匹配结果</p>
         </div>
         <div v-if="isAuthenticated" class="user-tools">
-          <span class="account-pill">
-            <span>已登录</span>
-            <strong>{{ currentUser }}</strong>
-          </span>
+          <details class="account-menu">
+            <summary>
+              <span class="account-status-dot" aria-hidden="true"></span>
+              <span class="account-summary-copy">
+                <small>已登录</small>
+                <strong>{{ currentUser }}</strong>
+              </span>
+            </summary>
+            <div class="account-menu-panel">
+              <span>当前账号</span>
+              <strong>{{ currentUser }}</strong>
+              <small>{{ currentUserRole || '用户' }}</small>
+              <button class="logout-button" type="button" @click="handleLogout">退出登录</button>
+            </div>
+          </details>
           <RouterLink v-if="canAccessDataEntry" class="upload-entry" to="/data-entry">
             数据录入
           </RouterLink>
-          <button class="logout-button" type="button" @click="handleLogout">退出</button>
         </div>
         <button v-else class="login-button" type="button" @click="openAuth()">登录</button>
       </div>
@@ -1695,11 +1701,9 @@ onBeforeUnmount(() => {
           <button
             type="button"
             class="secondary-action"
-            @mouseenter="preloadMapVisualization"
-            @focus="preloadMapVisualization"
             @click="scrollToSection('visual-entry')"
           >
-            探索可视化
+            进入可视化中心
           </button>
         </div>
         <p v-if="actionNotice" class="action-notice">{{ actionNotice }}</p>
@@ -2719,6 +2723,11 @@ a {
   font-size: 14px;
 }
 
+.search-box input::placeholder {
+  color: #607684;
+  opacity: 1;
+}
+
 .search-results {
   position: absolute;
   top: calc(100% + 10px);
@@ -2799,29 +2808,96 @@ a {
   min-width: 0;
 }
 
-.account-pill {
-  max-width: 210px;
+.account-menu {
+  position: relative;
+  min-width: 112px;
+}
+
+.account-menu summary {
   min-height: 42px;
-  display: grid;
-  justify-content: start;
-  gap: 2px;
-  overflow: hidden;
-  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
   border: 1px solid rgba(95, 124, 143, 0.2);
   border-radius: 8px;
   background: #ffffff;
+  cursor: pointer;
+  list-style: none;
 }
 
-.account-pill span {
+.account-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.account-menu summary::after {
+  margin-left: auto;
+  color: #607684;
+  content: '⌄';
+  font-size: 13px;
+  transition: transform 0.18s ease;
+}
+
+.account-menu[open] summary::after {
+  transform: rotate(180deg);
+}
+
+.account-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #0b7868;
+  box-shadow: 0 0 0 3px rgba(11, 120, 104, 0.12);
+}
+
+.account-summary-copy {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.account-summary-copy small {
   color: #6a7f8d;
   font-size: 11px;
   font-weight: 900;
 }
 
-.account-pill strong {
+.account-summary-copy strong {
+  max-width: 96px;
   overflow: hidden;
   color: #173247;
   font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  width: 190px;
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid rgba(95, 124, 143, 0.2);
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(21, 52, 72, 0.16);
+}
+
+.account-menu-panel > span,
+.account-menu-panel > small {
+  color: #607684;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.account-menu-panel > strong {
+  overflow: hidden;
+  color: #173247;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2833,18 +2909,20 @@ a {
   padding: 0 14px;
   border-radius: 8px;
   color: #ffffff;
-  background: #0e8f77;
+  background: #0b7868;
   text-decoration: none;
   white-space: nowrap;
 }
 
 .logout-button {
-  height: 42px;
-  padding: 0 14px;
-  border: 1px solid rgba(95, 124, 143, 0.24);
-  border-radius: 8px;
+  width: 100%;
+  height: 36px;
+  margin-top: 6px;
+  padding: 0 10px;
+  border-radius: 7px;
   color: #173247;
-  background: #ffffff;
+  background: #eef4f7;
+  text-align: left;
   white-space: nowrap;
 }
 
@@ -2876,10 +2954,10 @@ a {
   inset: 0;
   z-index: -1;
   background:
-    linear-gradient(90deg, rgba(244, 248, 251, 0.96) 0%, rgba(244, 248, 251, 0.78) 44%, rgba(244, 248, 251, 0.54) 100%),
-    url('/home-overview-bg.png') right center / min(980px, 62vw) auto no-repeat;
+    linear-gradient(90deg, rgba(246, 250, 252, 0.9) 0%, rgba(246, 250, 252, 0.7) 48%, rgba(246, 250, 252, 0.58) 100%),
+    url('/hero-research-bg-v2.webp') center bottom / cover no-repeat;
   content: '';
-  opacity: 0.92;
+  opacity: 0.96;
   pointer-events: none;
 }
 
@@ -2891,7 +2969,7 @@ a {
 
 .section-kicker {
   margin: 0 0 12px;
-  color: #0e8f77;
+  color: #0b6f5f;
   font-size: 12px;
   font-weight: 900;
   letter-spacing: 0.08em;
@@ -2900,9 +2978,10 @@ a {
 .hero-copy h1 {
   margin: 0;
   color: #102a3b;
-  font-size: clamp(36px, 4.8vw, 62px);
-  line-height: 1.08;
+  font-size: clamp(36px, 4.2vw, 56px);
+  line-height: 1.1;
   letter-spacing: 0;
+  text-wrap: balance;
 }
 
 .hero-copy > p:not(.section-kicker, .action-notice) {
@@ -3096,7 +3175,7 @@ a {
 
 .overview-focus span,
 .word-inspector span {
-  color: #0e8f77;
+  color: #0b6f5f;
   font-size: 12px;
   font-weight: 900;
 }
@@ -3293,7 +3372,7 @@ a {
   padding: 3px 8px;
   border-radius: 999px;
   color: #ffffff;
-  background: #0e8f77;
+  background: #0b7868;
   font-size: 13px;
   font-weight: 900;
   white-space: nowrap;
@@ -3580,7 +3659,7 @@ a {
 .biomarker-panel-head span,
 .upload-panel header span,
 .review-panel header span {
-  color: #0e8f77;
+  color: #0b6f5f;
   font-size: 13px;
   font-weight: 900;
 }
@@ -4712,7 +4791,7 @@ a {
 }
 
 .update-list time {
-  color: #0e8f77;
+  color: #0b6f5f;
   font-weight: 900;
 }
 
@@ -5172,16 +5251,26 @@ a {
 
 @media (max-width: 1120px) {
   .site-header {
-    grid-template-columns: 1fr;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 12px 24px;
+  }
+
+  .brand {
+    grid-column: 1;
+    grid-row: 1;
   }
 
   .main-nav {
+    grid-column: 1 / -1;
+    grid-row: 2;
     justify-content: flex-start;
     overflow-x: auto;
   }
 
   .header-tools {
-    justify-content: space-between;
+    grid-column: 2;
+    grid-row: 1;
+    justify-content: flex-end;
   }
 
   .search-box {
@@ -5219,10 +5308,22 @@ a {
 
 @media (max-width: 720px) {
   .site-header {
+    grid-template-columns: 1fr;
     padding: 14px 16px;
   }
 
+  .brand {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .main-nav {
+    display: none;
+  }
+
   .header-tools {
+    grid-column: 1;
+    grid-row: 2;
     display: grid;
     grid-template-columns: 1fr auto;
   }

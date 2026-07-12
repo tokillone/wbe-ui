@@ -10,8 +10,9 @@ import {
   type BulkUserPermissionPayload,
   type UserPermissionPayload,
 } from '../services/admin'
-import { logout as requestLogout, type UserResponse } from '../services/auth'
+import { fetchCurrentUser, logout as requestLogout, type UserResponse } from '../services/auth'
 import {
+  approveUpload,
   downloadUploadFile,
   downloadUploadTemplate,
   fetchUploadRows,
@@ -28,22 +29,16 @@ import { clearSession, getStoredSession, isAdmin, updateStoredUser } from '../se
 
 type WorkspaceSection = 'upload' | 'batches' | 'users'
 type PermissionFilter = 'all' | 'true' | 'false'
-type BatchStatusFilter = 'all' | 'PENDING_REVIEW' | 'PREVIEWED' | 'VALIDATION_FAILED' | 'SYNCED' | 'REJECTED'
-type BatchScopeFilter = 'all' | 'mine' | 'pendingReview'
+type BatchStatusFilter = 'all' | 'PENDING_REVIEW' | 'APPROVED' | 'VALIDATION_FAILED' | 'SYNCED' | 'REJECTED'
+type BatchScopeFilter = 'all' | 'mine' | 'pendingReview' | 'approved'
 type BatchUploaderTypeFilter = 'all' | 'viewer' | 'manager'
 type RowStatusFilter = 'all' | 'ERROR' | 'WARNING' | 'VALID' | 'SYNCED' | 'SKIPPED'
 
-const PREVIEW_COLUMNS = [
-  '文献编号',
-  '目标类别',
-  '目标物质类别',
-  '药物',
-  '生物标记物名称',
-  '污水厂名称',
-  'PNDL_value',
-  'PNDL_unit',
-  'DOI',
-]
+const PREVIEW_COLUMNS: Record<string, string[]> = {
+  数据表: ['文献编号', '目标类别', '目标物质类别', '药物', '生物标记物名称', '污水厂名称', 'PNDL_value', 'PNDL_unit', 'DOI'],
+  药物疾病ICD11映射: ['目标类别', '药物', 'ICD11_Level1_Name', 'ICD11_Level2_Name', 'ICD11_Level3_Name', '映射层级', '是否进入桑基图'],
+  文献基础信息: ['文献编号', '文献名', 'DOI', 'keywords'],
+}
 
 const FIELD_GROUPS = [
   { title: '文献与目标物', fields: '文献编号、目标类别、目标物质类别、目标物质子类、药物、生物标记物名称、biomarker、CAS' },
@@ -53,8 +48,8 @@ const FIELD_GROUPS = [
 ]
 
 const STATUS_LABELS: Record<string, string> = {
-  PREVIEWED: '可同步',
   PENDING_REVIEW: '待审核',
+  APPROVED: '已通过',
   VALIDATION_FAILED: '需修正',
   SYNCED: '已入库',
   SYNC_FAILED: '同步失败',
@@ -68,7 +63,7 @@ const STATUS_LABELS: Record<string, string> = {
 const BATCH_STATUS_FILTERS = [
   { value: 'all', label: '全部状态' },
   { value: 'PENDING_REVIEW', label: '待审核' },
-  { value: 'PREVIEWED', label: '可同步' },
+  { value: 'APPROVED', label: '已通过待同步' },
   { value: 'VALIDATION_FAILED', label: '需修正' },
   { value: 'SYNCED', label: '已入库' },
   { value: 'REJECTED', label: '已驳回' },
@@ -78,6 +73,7 @@ const BATCH_SCOPE_FILTERS = [
   { value: 'all', label: '全部批次' },
   { value: 'mine', label: '我的上传' },
   { value: 'pendingReview', label: '待审核队列' },
+  { value: 'approved', label: '待同步队列' },
 ]
 
 const BATCH_UPLOADER_FILTERS = [
@@ -182,6 +178,7 @@ const isLoadingRows = ref(false)
 const isLoadingUsers = ref(false)
 const isSavingUser = ref(false)
 const preview = ref<DataUploadPreview | null>(null)
+const activePreviewSheet = ref('数据表')
 const selectedBatch = ref<DataUploadBatch | null>(null)
 const selectedRowsPage = ref<DataUploadRowsPage | null>(null)
 const batchPage = ref<DataUploadBatchPage>({ ...emptyBatchPage })
@@ -221,16 +218,13 @@ const canReviewUploads = computed(
   () => currentUser.value?.role === 'admin' || currentUser.value?.canReviewUploads === true,
 )
 const canSyncData = computed(() => currentUser.value?.role === 'admin' || currentUser.value?.canSyncData === true)
-const currentUserCanDownload = computed(() => currentUser.value?.canDownload !== false)
+const currentUserCanDownload = computed(
+  () => currentUser.value?.role === 'admin' || currentUser.value?.canDownload !== false,
+)
 const canSeeBatchModule = computed(() => canUploadData.value || canReviewUploads.value || canSyncData.value)
 const selectedFileLabel = computed(() => selectedFile.value?.name ?? '拖拽或选择 WBE Excel 文件')
-const canSyncPreview = computed(
-  () =>
-    !!preview.value &&
-    preview.value.batch.errorRows === 0 &&
-    canSyncData.value &&
-    ['PREVIEWED', 'PENDING_REVIEW'].includes(preview.value.batch.status),
-)
+const activePreviewRows = computed(() => preview.value?.previewRowsBySheet?.[activePreviewSheet.value] ?? [])
+const activePreviewColumns = computed(() => PREVIEW_COLUMNS[activePreviewSheet.value] ?? [])
 const visibleHeaderErrors = computed(() => preview.value?.headerErrors.slice(0, PREVIEW_ISSUE_LIMIT) ?? [])
 const hiddenHeaderErrorCount = computed(() =>
   Math.max(0, (preview.value?.headerErrors.length ?? 0) - PREVIEW_ISSUE_LIMIT),
@@ -242,13 +236,16 @@ const hiddenBatchWarningCount = computed(() =>
 const previewBlockingMessage = computed(() => {
   if (!preview.value) return ''
   if (preview.value.batch.status === 'VALIDATION_FAILED') {
-    return '该文件未通过基础格式校验，不能同步入库。请确认存在“数据表”工作表，并按模板修正前 58 列字段后重新上传。'
+    return '该文件未通过完整工作簿校验，不能同步入库。请确认三张业务工作表及其表头、跨表文献引用和 ICD11 映射层级均正确。'
   }
   if (preview.value.batch.errorRows > 0) {
     return '存在阻断错误的行，不能同步入库。请查看行预览中的问题字段，修正后重新上传。'
   }
   if (preview.value.batch.status === 'REJECTED') {
     return '该批次已被驳回，不能继续同步；如需入库请重新上传修正后的文件。'
+  }
+  if (preview.value.batch.status === 'PENDING_REVIEW') {
+    return '该批次已提交审核，审核通过后才可同步入库。'
   }
   return ''
 })
@@ -298,10 +295,42 @@ watch(activeSection, (section) => {
 })
 
 onMounted(async () => {
+  await refreshCurrentUser()
+  applyDefaultBatchView()
   activeSection.value = workspaceSections.value[0]?.key ?? 'upload'
   if (canSeeBatchModule.value) await loadBatches()
   if (currentUserIsAdmin.value) await loadUsers(1)
 })
+
+async function refreshCurrentUser() {
+  const token = getStoredSession()?.token
+  if (!token) {
+    clearSession()
+    currentUser.value = null
+    await router.push('/')
+    return
+  }
+  try {
+    const user = await fetchCurrentUser(token)
+    currentUser.value = user
+    updateStoredUser(user)
+  } catch {
+    clearSession()
+    currentUser.value = null
+    await router.push('/')
+  }
+}
+
+function applyDefaultBatchView() {
+  if (canUploadData.value || batchFilters.status !== 'all') return
+  if (canReviewUploads.value) {
+    batchFilters.status = 'PENDING_REVIEW'
+    batchFilters.scope = 'pendingReview'
+  } else if (canSyncData.value) {
+    batchFilters.status = 'APPROVED'
+    batchFilters.scope = 'approved'
+  }
+}
 
 function setMessage(type: 'success' | 'error', text: string) {
   messageType.value = type
@@ -387,6 +416,7 @@ async function handlePreview() {
   try {
     isUploading.value = true
     preview.value = await uploadPreview(selectedFile.value)
+    activePreviewSheet.value = preview.value.sheetSummaries?.[0]?.sheetName ?? '数据表'
     selectedBatch.value = null
     selectedRowsPage.value = null
     await loadBatches()
@@ -394,20 +424,17 @@ async function handlePreview() {
     if (errorRows > 0) {
       setMessage('error', `解析完成，但存在 ${errorRows} 行阻断错误，请修正后重新上传。`)
     } else if (status === 'PENDING_REVIEW') {
-      setMessage('success', `解析完成，已进入待审核队列。提示警告 ${warningRows} 行。`)
+      setMessage('success', `解析完成，已提交审核。提示警告 ${warningRows} 行。`)
+    } else if (status === 'APPROVED') {
+      setMessage('success', `解析完成，已通过审核，可由同步人员入库。提示警告 ${warningRows} 行。`)
     } else {
-      setMessage('success', `解析完成，可同步入库。提示警告 ${warningRows} 行。`)
+      setMessage('success', `解析完成，当前状态为「${statusLabel(status)}」。提示警告 ${warningRows} 行。`)
     }
   } catch (error) {
     setMessage('error', error instanceof Error ? error.message : '上传解析失败')
   } finally {
     isUploading.value = false
   }
-}
-
-async function handlePreviewSync() {
-  if (!preview.value || !canSyncPreview.value) return
-  await handleBatchSync(preview.value.batch)
 }
 
 async function loadBatches() {
@@ -468,17 +495,33 @@ function closeBatchDrawer() {
   rowStatusFilter.value = 'all'
 }
 
-function canApproveAndSync(batch: DataUploadBatch) {
-  if (batch.status === 'PENDING_REVIEW') {
-    return canReviewUploads.value && canSyncData.value
+function canApproveBatch(batch: DataUploadBatch) {
+  return batch.status === 'PENDING_REVIEW' && canReviewUploads.value
+}
+
+function canSyncBatch(batch: DataUploadBatch) {
+  return batch.status === 'APPROVED' && canSyncData.value
+}
+
+async function handleApproveBatch(batch: DataUploadBatch) {
+  if (!canApproveBatch(batch)) return
+  if (!window.confirm(`确定审核通过「${batch.fileName}」吗？通过后将进入待同步队列。`)) return
+  try {
+    const approvedBatch = await approveUpload(batch.uploadId)
+    if (preview.value?.batch.uploadId === batch.uploadId) {
+      preview.value = { ...preview.value, batch: approvedBatch }
+    }
+    selectedBatch.value = approvedBatch
+    await loadBatches()
+    setMessage('success', '批次已审核通过，等待同步入库')
+  } catch (error) {
+    setMessage('error', error instanceof Error ? error.message : '审核通过失败')
   }
-  return batch.status === 'PREVIEWED' && canSyncData.value
 }
 
 async function handleBatchSync(batch: DataUploadBatch) {
-  if (!canApproveAndSync(batch)) return
-  const action = batch.status === 'PENDING_REVIEW' ? '通过审核并同步入库' : '同步入库'
-  if (!window.confirm(`确定要${action}「${batch.fileName}」吗？`)) return
+  if (!canSyncBatch(batch)) return
+  if (!window.confirm(`确定要同步入库「${batch.fileName}」吗？`)) return
   try {
     isSyncing.value = true
     const result = await syncUpload(batch.uploadId)
@@ -490,8 +533,11 @@ async function handleBatchSync(batch: DataUploadBatch) {
     if (selectedRowsPage.value?.uploadId === batch.uploadId) {
       await loadRows(result.batch, selectedRowsPage.value.page)
     }
+    const sheetText = Object.entries(result.insertedRowsBySheet ?? {})
+      .map(([sheet, count]) => `${sheet} ${count} 行`)
+      .join('，')
     const warningText = result.warnings.length ? `；${result.warnings.join('；')}` : ''
-    setMessage('success', `已同步 ${result.insertedRows} 行，跳过重复 ${result.skippedRows} 行${warningText}`)
+    setMessage('success', `已原子同步 ${result.insertedRows} 行${sheetText ? `（${sheetText}）` : ''}${warningText}`)
   } catch (error) {
     setMessage('error', error instanceof Error ? error.message : '同步失败')
   } finally {
@@ -762,7 +808,7 @@ async function handleLogout() {
               >
                 <input type="file" accept=".xlsx" @change="handleFileChange" />
                 <strong>{{ selectedFileLabel }}</strong>
-                <span>.xlsx / 数据表 / 58 个规范字段</span>
+                <span>.xlsx / 三张业务工作表 / 原始字段无损保留</span>
               </label>
               <button type="button" class="primary-action" :disabled="isUploading" @click="handlePreview">
                 {{ isUploading ? '正在解析' : '开始校验' }}
@@ -792,9 +838,21 @@ async function handleLogout() {
                   <strong>{{ preview.batch.warningRows }}</strong>
                 </article>
               </div>
+              <div v-if="preview?.sheetSummaries?.length" class="sheet-summary-list">
+                <button
+                  v-for="sheet in preview.sheetSummaries"
+                  :key="sheet.sheetName"
+                  type="button"
+                  :class="{ active: activePreviewSheet === sheet.sheetName }"
+                  @click="activePreviewSheet = sheet.sheetName"
+                >
+                  <strong>{{ sheet.sheetName }}</strong>
+                  <span>{{ sheet.totalRows }} 行 · 错 {{ sheet.errorRows }} · 警 {{ sheet.warningRows }}</span>
+                </button>
+              </div>
               <p v-else class="empty-state">上传文件后会显示字段识别、错误和警告摘要。</p>
               <div v-if="previewBlockingMessage" class="issue-list blocker">
-                <strong>不能同步</strong>
+                <strong>{{ preview && preview.batch.status === 'PENDING_REVIEW' ? '等待审核' : '不能同步' }}</strong>
                 <p>{{ previewBlockingMessage }}</p>
               </div>
               <div v-if="visibleHeaderErrors.length" class="issue-list error">
@@ -808,17 +866,8 @@ async function handleLogout() {
                 <p v-if="hiddenBatchWarningCount" class="issue-more">还有 {{ hiddenBatchWarningCount }} 条提示未展开。</p>
               </div>
               <p v-if="preview?.batch.status === 'PENDING_REVIEW'" class="review-note">
-                该批次已进入待审核队列，需由具备审核/同步权限的人员处理。
+                该批次已进入待审核队列，需由具备审核权限的人员处理；通过后再由同步人员入库。
               </p>
-              <button
-                v-if="preview && canSyncData"
-                type="button"
-                class="primary-action"
-                :disabled="!canSyncPreview || isSyncing"
-                @click="handlePreviewSync"
-              >
-                {{ preview.batch.status === 'PENDING_REVIEW' ? '通过并同步' : '同步入库' }}
-              </button>
             </div>
           </div>
 
@@ -827,12 +876,12 @@ async function handleLogout() {
               <span>上传要求</span>
               <h3>文件必须匹配 WBE 汇总表格式。</h3>
               <p>
-                仅支持 .xlsx 文件；必须包含名为“数据表”的工作表；前 58 列需与 WBE 汇总表字段完全一致。
+                仅支持 .xlsx 文件；必须同时包含“数据表”“药物疾病ICD11映射”“文献基础信息”；各表字段需与模板完全一致。
                 普通用户开放上传后，校验通过的批次会进入待审核队列。
               </p>
               <div class="template-actions">
                 <button type="button" @click="handleDownloadTemplate">下载 Excel 模板</button>
-                <small>模板包含“数据表 / 字段说明 / 上传说明”三个工作表。</small>
+                <small>模板包含三张业务工作表，并附字段说明与上传说明。</small>
               </div>
             </div>
             <div class="requirements-grid">
@@ -846,9 +895,22 @@ async function handleLogout() {
           <section v-if="preview" class="preview-section" aria-label="上传预览">
             <header class="section-head compact">
               <span>PREVIEW</span>
-              <h3>前 {{ preview.previewRows.length }} 行预览</h3>
+              <h3>{{ activePreviewSheet }} · 前 {{ activePreviewRows.length }} 行</h3>
             </header>
-            <p v-if="!preview.previewRows.length" class="empty-state">
+            <div v-if="preview.sheetSummaries?.length" class="preview-sheet-tabs" role="tablist" aria-label="工作表预览">
+              <button
+                v-for="sheet in preview.sheetSummaries"
+                :key="sheet.sheetName"
+                type="button"
+                role="tab"
+                :aria-selected="activePreviewSheet === sheet.sheetName"
+                :class="{ active: activePreviewSheet === sheet.sheetName }"
+                @click="activePreviewSheet = sheet.sheetName"
+              >
+                {{ sheet.sheetName }}
+              </button>
+            </div>
+            <p v-if="!activePreviewRows.length" class="empty-state">
               当前批次没有可预览行；通常是工作表缺失、表头不匹配或文件解析失败，请按模板修正后重新上传。
             </p>
             <div v-else class="table-scroll">
@@ -857,19 +919,19 @@ async function handleLogout() {
                   <tr>
                     <th>行号</th>
                     <th>状态</th>
-                    <th v-for="column in PREVIEW_COLUMNS" :key="column">{{ column }}</th>
+                    <th v-for="column in activePreviewColumns" :key="column">{{ column }}</th>
                     <th>问题</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="row in preview.previewRows" :key="row.rowId">
+                  <tr v-for="row in activePreviewRows" :key="row.rowId">
                     <td>{{ row.excelRowNumber }}</td>
                     <td>
                       <span class="status-pill" :class="row.status.toLowerCase()">
                         {{ statusLabel(row.status) }}
                       </span>
                     </td>
-                    <td v-for="column in PREVIEW_COLUMNS" :key="column">{{ row.data[column] || 'NA' }}</td>
+                    <td v-for="column in activePreviewColumns" :key="column">{{ row.data[column] || 'NA' }}</td>
                     <td>
                       <span v-if="row.errors.length">{{ row.errors.join('；') }}</span>
                       <span v-else-if="row.warnings.length">{{ row.warnings.join('；') }}</span>
@@ -969,16 +1031,11 @@ async function handleLogout() {
                         {{ batch.status === 'PENDING_REVIEW' ? '查看/审核' : '查看' }}
                       </button>
                       <button type="button" :disabled="!currentUserCanDownload" @click="downloadBatch(batch)">下载</button>
-                      <button v-if="canApproveAndSync(batch)" type="button" @click="handleBatchSync(batch)">
-                        {{ batch.status === 'PENDING_REVIEW' ? '通过同步' : '同步' }}
+                      <button v-if="canApproveBatch(batch)" type="button" @click="handleApproveBatch(batch)">
+                        审核通过
                       </button>
-                      <button
-                        v-if="canReviewUploads && batch.status === 'PENDING_REVIEW'"
-                        type="button"
-                        class="danger-action"
-                        @click="loadRows(batch)"
-                      >
-                        审核
+                      <button v-if="canSyncBatch(batch)" type="button" @click="handleBatchSync(batch)">
+                        同步
                       </button>
                     </div>
                   </td>
@@ -1064,6 +1121,7 @@ async function handleLogout() {
                   <table>
                     <thead>
                       <tr>
+                        <th>工作表</th>
                         <th>行</th>
                         <th>状态</th>
                         <th>目标物</th>
@@ -1072,6 +1130,7 @@ async function handleLogout() {
                     </thead>
                     <tbody>
                       <tr v-for="row in selectedRowsPage.rows" :key="row.rowId">
+                        <td>{{ row.sheetName }}</td>
                         <td>{{ row.excelRowNumber }}</td>
                         <td>
                           <span class="status-pill" :class="row.status.toLowerCase()">
@@ -1119,13 +1178,21 @@ async function handleLogout() {
                       驳回
                     </button>
                     <button
-                      v-if="canApproveAndSync(selectedBatch)"
+                      v-if="canApproveBatch(selectedBatch)"
+                      type="button"
+                      class="primary-action compact"
+                      @click="handleApproveBatch(selectedBatch)"
+                    >
+                      审核通过
+                    </button>
+                    <button
+                      v-if="canSyncBatch(selectedBatch)"
                       type="button"
                       class="primary-action compact"
                       :disabled="isSyncing"
                       @click="handleBatchSync(selectedBatch)"
                     >
-                      {{ selectedBatch.status === 'PENDING_REVIEW' ? '通过并同步' : '同步入库' }}
+                      同步入库
                     </button>
                   </div>
                 </footer>
@@ -1137,7 +1204,7 @@ async function handleLogout() {
         <section v-if="activeSection === 'users' && currentUserIsAdmin" class="workspace-panel" aria-label="用户权限">
           <header class="section-head">
             <h2>账号权限</h2>
-            <p>分页查看所有用户，按角色和功能筛选，支持跨页保留勾选并批量调整普通用户和管理人员权限。</p>
+            <p>分页查看并批量调整用户权限。同步权限只能处理已审核通过的批次，不能代替审核权限。</p>
           </header>
 
           <div class="permission-filters" aria-label="用户筛选">
@@ -1722,6 +1789,53 @@ async function handleLogout() {
 .summary-metrics {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 10px 0;
+}
+
+.sheet-summary-list,
+.preview-sheet-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.sheet-summary-list {
+  margin: 0 0 10px;
+}
+
+.sheet-summary-list button {
+  display: grid;
+  min-width: 170px;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid #d5e1e4;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #203942;
+  text-align: left;
+}
+
+.sheet-summary-list button.active {
+  border-color: #287b87;
+  background: #edf7f7;
+}
+
+.sheet-summary-list span {
+  color: #657980;
+  font-size: 12px;
+}
+
+.preview-sheet-tabs button {
+  padding: 7px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #657980;
+}
+
+.preview-sheet-tabs button.active {
+  border-bottom-color: #287b87;
+  color: #174d57;
+  font-weight: 700;
 }
 
 .requirements-grid article,

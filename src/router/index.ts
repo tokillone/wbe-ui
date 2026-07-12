@@ -1,7 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
 
-import { canManageData, getStoredSession } from '../services/session'
+import { fetchCurrentUser } from '../services/auth'
+import { canManageData, clearSession, getStoredSession, updateStoredUser } from '../services/session'
 
 const optionalViews = import.meta.glob('../views/DataEntryView.vue')
 const dataEntryView = optionalViews['../views/DataEntryView.vue']
@@ -38,8 +39,22 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to) => {
-  if (to.meta.requiresManager && !canManageData(getStoredSession()?.user)) {
+router.beforeEach(async (to) => {
+  if (!to.meta.requiresManager) {
+    return true
+  }
+  const session = getStoredSession()
+  if (!session) {
+    return '/'
+  }
+  try {
+    const user = await fetchCurrentUser(session.token)
+    updateStoredUser(user)
+    if (!canManageData(user)) {
+      return '/'
+    }
+  } catch {
+    clearSession()
     return '/'
   }
   return true

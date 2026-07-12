@@ -39,22 +39,22 @@ const sourceSpecs = [
     path: 'world-admin1.geojson',
     level: 'admin1',
     include: (props) => stringProp(props, 'country_key') !== 'china',
-    geoKey: (props) => `${stringProp(props, 'country_key')}|${stringProp(props, 'region_key')}`,
-    parentGeoKey: (props) => stringProp(props, 'country_key'),
+    geoKey: (props) => stringProp(props, 'geo_key') || `${stringProp(props, 'country_key')}|${stringProp(props, 'region_key')}`,
+    parentGeoKey: (props) => stringProp(props, 'parent_geo_key') || stringProp(props, 'country_key'),
   },
   {
     path: 'china-provinces.geojson',
     level: 'admin1',
     include: () => true,
-    geoKey: (props) => `${stringProp(props, 'country_key')}|${stringProp(props, 'region_key')}`,
-    parentGeoKey: (props) => stringProp(props, 'country_key'),
+    geoKey: (props) => stringProp(props, 'geo_key') || `${stringProp(props, 'country_key')}|${stringProp(props, 'region_key')}`,
+    parentGeoKey: (props) => stringProp(props, 'parent_geo_key') || stringProp(props, 'country_key'),
   },
   {
     path: 'china-cities.geojson',
     level: 'city',
     include: () => true,
-    geoKey: (props) => `${stringProp(props, 'country_key')}|${stringProp(props, 'region_key')}`,
-    parentGeoKey: (props) => stringProp(props, 'country_key'),
+    geoKey: (props) => stringProp(props, 'geo_key') || `${stringProp(props, 'country_key')}|${stringProp(props, 'region_key')}`,
+    parentGeoKey: (props) => stringProp(props, 'parent_geo_key') || stringProp(props, 'country_key'),
   },
 ]
 

@@ -17,10 +17,13 @@ import type {
   MapDetailResponse,
   MapFilterResponse,
   MapFilterSelection,
+  MapPndlComparison,
   MapPndlRankingItem,
   MapRegionStat,
+  MapSummaryCard,
   MapStatsResponse,
   MapTopBiomarker,
+  MapTrendSeries,
 } from '../types/map'
 
 import type {
@@ -32,12 +35,20 @@ import type {
   MapMouseEvent,
   Popup,
 } from 'maplibre-gl'
+import {
+  displayLevelForZoom,
+  overviewSummaryCards,
+  selectionYearRange,
+  temperatureBandIndex,
+  visibleLevelsForZoom,
+} from '../utils/mapVisualization'
 
 type MapMode = 'globe' | 'flat'
 type DetailMode = 'none' | 'compact' | 'full'
 type DetailOrigin = 'none' | 'region' | 'cluster'
 type BasemapMode = 'vector' | 'geojson'
 type RegionSourceMode = 'vector' | 'geojson'
+type MapDisplayLevel = 'country' | 'admin1' | 'city'
 type BoundaryName = 'countries' | 'admin1' | 'chinaProvinces' | 'chinaCities'
 type ViewLayerKey = 'labels' | 'boundaries' | 'pndl' | 'ambience'
 type Locale = 'zh' | 'en'
@@ -50,6 +61,25 @@ type GeoJsonFeature = {
 type FeatureCollection = {
   type: 'FeatureCollection'
   features: GeoJsonFeature[]
+}
+type BoundaryFeatureIndex = {
+  collection: FeatureCollection
+  exact: Map<string, GeoJsonFeature>
+  aliases: Map<string, GeoJsonFeature>
+}
+type CachedFeatureCollection = {
+  stats: MapStatsResponse | null
+  boundaryVersion: number
+  locale: Locale
+  level: MapDisplayLevel
+  collection: FeatureCollection
+}
+type BoundaryHitIndex = {
+  boundaryVersion: number
+  items: Array<{
+    feature: GeoJsonFeature
+    bbox: [number, number, number, number]
+  }>
 }
 type MapLibreModule = typeof import('maplibre-gl') & {
   default?: typeof import('maplibre-gl')
@@ -72,6 +102,12 @@ type MapStatus = {
   longitude: number
   country: string
   mode: 'center' | 'cursor'
+}
+type PndlColumnTooltipState = {
+  visible: boolean
+  text: string
+  x: number
+  y: number
 }
 type BasemapConfig =
   | { mode: 'geojson'; regionSourceUrl?: string }
@@ -109,7 +145,7 @@ const DEFAULT_SELECTION: MapFilterSelection = {
 const ALL_CATEGORY_LABEL = DEFAULT_SELECTION.category
 const ALL_SUBCATEGORY_LABEL = DEFAULT_SELECTION.subcategory
 const ALL_BIOMARKER_KEY = DEFAULT_SELECTION.biomarkerKey
-const ALL_BIOMARKER_LABEL = '全部 biomarker'
+const ALL_BIOMARKER_LABEL = '全部生物标记物'
 const ALL_YEAR_LABEL = DEFAULT_SELECTION.year
 const REGION_INTERACTIVE_LAYERS = [
   'country-hit',
@@ -131,19 +167,30 @@ const REGION_HOVER_PRIORITY_LAYERS = [
   'region-selected-line',
   'region-data-line',
 ] as const
-const POINT_INTERACTIVE_LAYERS = ['pndl-bubbles'] as const
-const ALL_INTERACTIVE_LAYERS = [...REGION_INTERACTIVE_LAYERS, ...POINT_INTERACTIVE_LAYERS] as const
+const POINT_INTERACTIVE_LAYERS = [
+  'pndl-country-bubbles',
+  'pndl-country-bubble-count',
+  'pndl-admin1-bubbles',
+  'pndl-admin1-bubble-count',
+  'pndl-city-bubbles',
+  'pndl-city-bubble-count',
+] as const
 const FLAT_CENTER: [number, number] = [104, 35]
 const FLAT_INITIAL_ZOOM = 1.75
 const FLAT_MIN_ZOOM = 1.25
-const VECTOR_MAX_ZOOM = 8.3
-const FALLBACK_MAX_ZOOM = 6.8
+const VECTOR_MAX_ZOOM = 10
+const FALLBACK_MAX_ZOOM = 9.2
 const GLOBE_MIN_ZOOM = 2.64
 const GLOBE_INITIAL_ZOOM = 2.66
-const FLAT_BACKGROUND_COLOR = '#d8e8ef'
-const GLOBE_BACKGROUND_COLOR = '#1f313c'
-const POINT_COUNTRY_MAX_ZOOM = 3.8
-const POINT_ADMIN_MAX_ZOOM = 6.2
+const FLAT_BACKGROUND_COLOR = '#d9dde0'
+const GLOBE_BACKGROUND_COLOR = '#d5dadd'
+const LEVEL_FADE_COUNTRY_START = 4
+const LEVEL_FADE_COUNTRY_END = 4.4
+const LEVEL_FADE_CITY_START = 5.9
+const LEVEL_FADE_CITY_END = 6.3
+const CITY_BOUNDARY_MIN_ZOOM = 5.9
+const COUNTRY_BOUNDARY_FADE_START = 5.2
+const COUNTRY_BOUNDARY_FADE_END = 5.8
 const VECTOR_REGION_FADE_START_ZOOM = 4.65
 const VECTOR_REGION_FADE_END_ZOOM = 5.25
 const PMTILES_MAGIC = 'PMTiles'
@@ -156,7 +203,7 @@ const LABEL_LAYER_IDS = [
   'china-province-label',
   'china-city-label',
 ] as const
-const BOUNDARY_LAYER_IDS = ['country-line', 'admin1-line', 'china-province-line'] as const
+const BOUNDARY_LAYER_IDS = ['country-line', 'admin1-line', 'china-province-line', 'china-city-line'] as const
 const REGION_HIGHLIGHT_LAYER_IDS = [
   'region-data-fill',
   'region-data-line',
@@ -189,12 +236,14 @@ const REGION_LINE_LAYER_IDS = [
   'region-hover-line',
   'region-city-hover-line',
 ] as const
-const PNDL_LAYER_IDS = [
-  'pndl-selected-ring',
-  'pndl-bubbles',
-  'pndl-bubble-count',
-  'pndl-point-labels',
-] as const
+const MAP_DISPLAY_LEVELS = ['country', 'admin1', 'city'] as const
+const PNDL_LAYER_IDS = MAP_DISPLAY_LEVELS.flatMap((level) => [
+  `pndl-${level}-bubble-icons`,
+  `pndl-${level}-selected-ring`,
+  `pndl-${level}-bubbles`,
+  `pndl-${level}-bubble-count`,
+  `pndl-${level}-point-labels`,
+])
 const MAP_LOCALE_STORAGE_KEY = 'wbe.map.locale'
 const BOUNDARY_NOISE_AREA_THRESHOLDS: Record<BoundaryName, number> = {
   countries: 0.08,
@@ -203,19 +252,46 @@ const BOUNDARY_NOISE_AREA_THRESHOLDS: Record<BoundaryName, number> = {
   chinaCities: 0.08,
 }
 const MAP_HIGHLIGHT_STYLE = {
-  dataFill: '#7891d4',
-  dataLine: '#6077bb',
-  hoverFill: '#5f78d6',
-  hoverLine: '#284b9a',
-  selectedFill: '#425cc0',
-  selectedLine: '#20377f',
-  selectedHalo: '#b7c7ef',
-  bubble: '#4f6fc0',
-  bubbleHover: '#2e8fb8',
-  bubbleSelected: '#274fa7',
+  dataFill: '#e8b45c',
+  dataLine: '#93551b',
+  hoverFill: '#e8b45c',
+  hoverLine: '#71390f',
+  selectedFill: '#ffc96b',
+  selectedLine: '#7c2d12',
+  selectedHalo: '#ffffff',
+  bubble: '#fbbf24',
+  bubbleHover: '#fb923c',
+  bubbleSelected: '#ef7d22',
   bubbleSelectedOuter: '#ffffff',
 } as const
-const MAP_HEAT_COLORS = ['#d9e6ff', '#b4c9f4', '#7fa2df', '#4f75c6', '#253f91'] as const
+const MAP_HEAT_COLORS = ['#fff7ec', '#fee8c8', '#fdd49e', '#fdbb84', '#fc8d59', '#ef6548', '#b30000'] as const
+const BUBBLE_IMAGE_BUCKETS: Record<MapDisplayLevel, readonly number[]> = {
+  country: [24, 34, 46, 60, 74],
+  admin1: [16, 22, 30, 40, 52],
+  city: [12, 16, 22, 28, 36],
+} as const
+const CHINA_COUNTRY_ALIASES = new Set([
+  'china',
+  '中国',
+  'hongkong',
+  'hongkongsar',
+  'hongkongchina',
+  'hongkongregion',
+  'hongkongspecialadministrativeregion',
+  'hksar',
+  '香港',
+  '香港特别行政区',
+  'macau',
+  'macao',
+  'macausar',
+  'macaosar',
+  'macaospecialadministrativeregion',
+  '澳门',
+  '澳门特别行政区',
+  'taiwan',
+  '台湾',
+  '臺灣',
+])
 const CONTINENT_LABELS = [
   { key: 'asia', zh: '亚洲', en: 'Asia', coordinates: [90, 45] },
   { key: 'europe', zh: '欧洲', en: 'Europe', coordinates: [15, 54] },
@@ -225,6 +301,45 @@ const CONTINENT_LABELS = [
   { key: 'oceania', zh: '大洋洲', en: 'Oceania', coordinates: [135, -25] },
   { key: 'antarctica', zh: '南极洲', en: 'Antarctica', coordinates: [20, -82] },
 ] as const
+const CHINA_ADMIN1_ZH_NAMES: Record<string, string> = {
+  'china|anhui': '安徽省',
+  'china|beijing': '北京市',
+  'china|chongqing': '重庆市',
+  'china|fujian': '福建省',
+  'china|gansu': '甘肃省',
+  'china|guangdong': '广东省',
+  'china|guangxi': '广西壮族自治区',
+  'china|guizhou': '贵州省',
+  'china|hainan': '海南省',
+  'china|hebei': '河北省',
+  'china|heilongjiang': '黑龙江省',
+  'china|henan': '河南省',
+  'china|hong-kong': '香港特别行政区',
+  'china|hongkong': '香港特别行政区',
+  'china|hubei': '湖北省',
+  'china|hunan': '湖南省',
+  'china|inner-mongolia': '内蒙古自治区',
+  'china|neimenggu': '内蒙古自治区',
+  'china|jiangsu': '江苏省',
+  'china|jiangxi': '江西省',
+  'china|jilin': '吉林省',
+  'china|liaoning': '辽宁省',
+  'china|macau': '澳门特别行政区',
+  'china|aomen': '澳门特别行政区',
+  'china|ningxia': '宁夏回族自治区',
+  'china|qinghai': '青海省',
+  'china|shaanxi': '陕西省',
+  'china|shandong': '山东省',
+  'china|shanghai': '上海市',
+  'china|shanxi': '山西省',
+  'china|sichuan': '四川省',
+  'china|tianjin': '天津市',
+  'china|tibet': '西藏自治区',
+  'china|xizang': '西藏自治区',
+  'china|xinjiang': '新疆维吾尔自治区',
+  'china|yunnan': '云南省',
+  'china|zhejiang': '浙江省',
+} as const
 const UI_TEXT = {
   zh: {
     brandHome: '污水信息因子数据库首页',
@@ -259,7 +374,7 @@ const UI_TEXT = {
     allCategories: '全部',
     category: '物质类别',
     subcategory: '物质子类',
-    biomarker: 'biomarker',
+    biomarker: '生物标记物',
     year: '年份',
     refresh: '刷新',
     refreshing: '刷新中',
@@ -272,12 +387,12 @@ const UI_TEXT = {
     filterLoadFailed: '筛选项加载失败',
     statsLoadFailed: '地图统计加载失败',
     detailLoadFailed: '详情加载失败',
-    detailExploreTitle: 'biomarker 探索',
-    detailExploreNote: '点击有 PNDL 区域的 biomarker 后，会同步筛选条件并刷新地图；当前区域保持选中高亮。',
-    detailExploreEmpty: '当前筛选下该区域没有可展示的 biomarker。',
+    detailExploreTitle: '生物标记物探索',
+    detailExploreNote: '点击有 PNDL 区域的生物标记物后，会同步筛选条件并刷新地图；当前区域保持选中高亮。',
+    detailExploreEmpty: '当前筛选下该区域没有可展示的生物标记物。',
     pndlRegionAvailable: '有 PNDL 区域',
     pndlRegionUnavailable: '暂无 PNDL',
-    clickExploreHint: '单击探索 biomarker · 双击查看详情',
+    clickExploreHint: '单击探索生物标记物 · 双击查看详情',
     clusterClickHint: '单击探索聚合 · 双击查看详情',
     boundaryLoadFailed: '部分地图边界加载失败，已保留可用图层',
     boundaryLoading: '正在加载地图细节',
@@ -299,16 +414,15 @@ const UI_TEXT = {
     pndlRanking: 'PNDL 排行',
     pndlComparison: 'PNDL 区域对比',
     pndlChartNeedsBiomarker:
-      'PNDL 对比需要先选择具体 biomarker，避免把不同物质的负荷水平混在一起比较。',
+      'PNDL 对比需要先选择具体生物标记物，避免把不同物质的负荷水平混在一起比较。',
     pndlChartNoData: '当前筛选下没有可用于对比的 PNDL 数据。',
     clusterOverview: '聚合位置概览',
     categoryBreakdown: '目标类别构成',
-    topBiomarkers: 'Top biomarker',
+    topBiomarkers: '主要生物标记物',
     locationsInCluster: '聚合位置',
     backendBasemapFallback: '高质量底图未加载，已使用简化底图',
     locationPrecision: '位置精度',
-    pndlGeomean: 'PNDL几何均值',
-    pndlMean: 'PNDL均值',
+    pndlMedian: 'PNDL',
     range: '范围',
     recordsAndDoi: '记录/文献',
     source: '来源',
@@ -329,6 +443,19 @@ const UI_TEXT = {
     clusterCount: '合并位置',
     clusterHint: '双击查看详情',
     noPndlForSelection: '当前筛选无 PNDL 数据',
+    heatLegendTitle: 'PNDL 水平',
+    heatLegendLow: '低',
+    heatLegendMedium: '中',
+    heatLegendHigh: '高',
+    heatLegendNote: '颜色由浅黄到深红表示 PNDL 由低到高；气泡数字表示点位数。',
+    heatLegendUnit: 'mg/day/1000 inh',
+    pndlTrend: 'PNDL 年度趋势',
+    annualTrends: '年度趋势',
+    physicochemicalProperties: 'biomarker 理化性质',
+    dataNotes: '数据说明',
+    dataNotePndl: 'PNDL 对比仅在选择具体生物标记物后展示；年度趋势节点使用同年同单位数据的中位数。',
+    dataNoteBubble: '地图气泡数字表示当前筛选下可映射点位数。',
+    dataNoteCoverage: '点位、文献、记录和 biomarker 数均按当前区域与筛选条件统计。',
     points: '点位',
     cities: '城市',
     records: '记录数',
@@ -418,8 +545,7 @@ const UI_TEXT = {
     locationsInCluster: 'Cluster locations',
     backendBasemapFallback: 'High-quality basemap is unavailable; simplified basemap is active',
     locationPrecision: 'Location precision',
-    pndlGeomean: 'PNDL geometric mean',
-    pndlMean: 'PNDL mean',
+    pndlMedian: 'PNDL',
     range: 'Range',
     recordsAndDoi: 'Records / DOI',
     source: 'Source',
@@ -440,6 +566,19 @@ const UI_TEXT = {
     clusterCount: 'Merged locations',
     clusterHint: 'Double-click for details',
     noPndlForSelection: 'No PNDL data for the current filters',
+    heatLegendTitle: 'PNDL level',
+    heatLegendLow: 'Low',
+    heatLegendMedium: 'Medium',
+    heatLegendHigh: 'High',
+    heatLegendNote: 'Colors run from pale yellow to deep red as PNDL rises; bubbles show site count.',
+    heatLegendUnit: 'mg/day/1000 inh',
+    pndlTrend: 'PNDL yearly trend',
+    annualTrends: 'Yearly trends',
+    physicochemicalProperties: 'Biomarker properties',
+    dataNotes: 'Data notes',
+    dataNotePndl: 'PNDL comparison requires a specific biomarker; yearly trend points use same-unit annual medians.',
+    dataNoteBubble: 'Map bubble numbers show mappable site counts under the current filters.',
+    dataNoteCoverage: 'Site, literature, record, and biomarker counts follow the current region and filters.',
     points: 'Sites',
     cities: 'Cities',
     records: 'Records',
@@ -447,8 +586,70 @@ const UI_TEXT = {
   },
 } as const
 
+const BACKEND_LABEL_TRANSLATIONS: Record<Locale, Record<string, string>> = {
+  zh: {},
+  en: {
+    'PNDL 聚合详情': 'PNDL cluster detail',
+    PNDL年度趋势: 'PNDL yearly trend',
+    点位数: 'Sites',
+    文献数: 'Literature',
+    记录数: 'Records',
+    'biomarker 数': 'Biomarkers',
+    PNDL年份数: 'PNDL years',
+    年份范围: 'Year range',
+    当前区域覆盖年份: 'Years covered by the current region',
+    涉及城市数: 'Cities',
+    当前PNDL: 'Current PNDL',
+    '当前 PNDL': 'Current PNDL',
+    同层PNDL排名: 'Same-level PNDL rank',
+    当前排名: 'Current rank',
+    涉及城市数量: 'Covered cities',
+    地图层级合并显示: 'Merged for map display',
+    做图PNDL: 'Plot PNDL',
+    PNDL估算: 'Estimated PNDL',
+    聚合内位置对比: 'Locations in cluster',
+    国家横向比较: 'Country comparison',
+    中国省份横向比较: 'China province comparison',
+    本国省州比较: 'Same-country admin comparison',
+    '本国省/州比较': 'Same-country admin comparison',
+    同国省州比较: 'Same-country admin comparison',
+    '同国省/州比较': 'Same-country admin comparison',
+    中国城市比较: 'China city comparison',
+    中国城市横向比较: 'China city comparison',
+    城市横向比较: 'City comparison',
+    所属省州内城市比较: 'Cities in same province/state',
+    '所属省/州内城市比较': 'Cities in same province/state',
+    返回国家比较: 'Country comparison',
+  },
+}
+
+const PNDL_COMPARISON_LABELS: Record<Locale, Record<string, string>> = {
+  zh: {
+    country: '国家横向比较',
+    admin1: '省/州横向比较',
+    'china-city': '中国城市比较',
+    city: '中国城市横向比较',
+    'parent-city': '所属省/州内城市比较',
+    cluster: '聚合内位置对比',
+  },
+  en: {
+    country: 'Country comparison',
+    admin1: 'Province/state comparison',
+    'china-city': 'China city comparison',
+    city: 'City comparison',
+    'parent-city': 'Cities in same province/state',
+    cluster: 'Locations in cluster',
+  },
+}
+
 const mapContainer = ref<HTMLElement | null>(null)
 const pndlChartScrollRef = ref<HTMLElement | null>(null)
+const pndlColumnTooltipState = ref<PndlColumnTooltipState>({
+  visible: false,
+  text: '',
+  x: 0,
+  y: 0,
+})
 const filters = ref<MapFilterResponse | null>(null)
 const stats = ref<MapStatsResponse | null>(null)
 const selectedDetail = ref<MapDetailResponse | null>(null)
@@ -461,6 +662,8 @@ const isLoadingStats = ref(false)
 const isLoadingDetail = ref(false)
 const mapMode = ref<MapMode>('flat')
 const mapReady = ref(false)
+const mapZoomLevel = ref(FLAT_INITIAL_ZOOM)
+const activeMapLevel = ref<MapDisplayLevel>(mapDisplayLevelForZoom(FLAT_INITIAL_ZOOM))
 const boundaryVersion = ref(0)
 const globeAvailable = ref(false)
 const detailMode = ref<DetailMode>('none')
@@ -497,21 +700,28 @@ let basemapMode: BasemapMode = 'geojson'
 let regionSourceMode: RegionSourceMode = 'geojson'
 let activeBasemapConfig: BasemapConfig = { mode: 'geojson' }
 let hoverPopup: Popup | null = null
+let hoverPopupFeatureKey = ''
 let statsController: AbortController | null = null
 let detailController: AbortController | null = null
+let detailRequestId = 0
 let fetchTimer: number | undefined
 let clickTimer: number | undefined
 let searchBlurTimer: number | undefined
 let resizeTimer: number | undefined
 let regionTooltipTimer: number | undefined
 let mapStatusFrame: number | undefined
+let pointHoverFrame: number | undefined
 let countryStatusTimer: number | undefined
+let pointSourceRefreshTimer: number | undefined
 let pendingCursorPoint: [number, number] | null = null
 let pendingCursorPixel: [number, number] | null = null
+let pendingPointHover: { feature: GeoJsonFeature; lngLat: MapLayerMouseEvent['lngLat'] } | null = null
 let removePmtilesProtocol: (() => void) | null = null
 let pmtilesProtocolReady = false
 let hoveredPointId: string | number | null = null
 let selectedPointId: string | number | null = null
+let hoveredPointSourceId = ''
+let selectedPointSourceId = ''
 let hoveredRegionFeature: GeoJsonFeature | null = null
 let pointLayerEventsBound = false
 let regionLayerEventsBound = false
@@ -521,6 +731,23 @@ let preserveSelectionOnNextSelectionChange = false
 let programmaticSelectionUpdateInProgress = false
 const boundaryCache = new Map<BoundaryName, FeatureCollection>()
 const cleanedBoundaryCache = new Map<BoundaryName, FeatureCollection>()
+const boundaryFeatureIndexCache = new Map<BoundaryName, BoundaryFeatureIndex>()
+const boundaryHitIndexCache = new Map<BoundaryName, BoundaryHitIndex>()
+let displayRegionRowsCache: { stats: MapStatsResponse | null; rows: MapRegionStat[] } | null = null
+let displayMapRowsStats: MapStatsResponse | null = null
+const displayMapRowsCache = new Map<MapDisplayLevel, MapRegionStat[]>()
+let regionDataCollectionCache: CachedFeatureCollection | null = null
+const labelPointCollectionCache = new Map<BoundaryName, CachedFeatureCollection>()
+const pointCollectionCache = new Map<MapDisplayLevel, CachedFeatureCollection>()
+let statLookupCache:
+  | {
+      stats: MapStatsResponse | null
+      exact: Map<string, MapRegionStat>
+      aliases: Map<string, MapRegionStat>
+    }
+  | null = null
+const cityAdminKeyCache = new Map<string, string>()
+let cityAdminKeyCacheVersion = -1
 
 const ui = computed(() => UI_TEXT[locale.value])
 const isCompactDetailOpen = computed(() => detailMode.value === 'compact')
@@ -529,16 +756,31 @@ const isDetailOpen = computed(() => detailMode.value !== 'none')
 const isClusterDetail = computed(
   () => detailOrigin.value === 'cluster' || Boolean(selectedDetail.value?.cluster),
 )
-const currentTargetClasses = computed(() => filters.value?.targetClasses ?? [])
+const currentTargetClasses = computed(() => {
+  const items = filters.value?.targetClasses ?? []
+  if (selection.targetClass && selection.targetClass !== 'ALL' && !items.includes(selection.targetClass)) {
+    return [...items, selection.targetClass]
+  }
+  return items
+})
 const currentCategories = computed(() => {
   if (!filters.value) return []
+  const withCurrent = (items?: string[]) =>
+    selection.category && !withAllCategory(items).includes(selection.category)
+      ? [...withAllCategory(items), selection.category]
+      : withAllCategory(items)
   if (selection.targetClass && selection.targetClass !== 'ALL') {
-    return withAllCategory(filters.value.categoriesByTargetClass?.[selection.targetClass])
+    return withCurrent(filters.value.categoriesByTargetClass?.[selection.targetClass])
   }
-  return withAllCategory(filters.value.categories)
+  return withCurrent(filters.value.categories)
 })
 const currentSubcategories = computed(() =>
-  withFallbackOption(filters.value?.subcategoriesByCategory[selection.category], ALL_SUBCATEGORY_LABEL),
+  withFallbackOption(
+    filters.value?.subcategoriesByCategory[selection.category]?.includes(selection.subcategory)
+      ? filters.value?.subcategoriesByCategory[selection.category]
+      : [...(filters.value?.subcategoriesByCategory[selection.category] ?? []), selection.subcategory],
+    ALL_SUBCATEGORY_LABEL,
+  ),
 )
 const currentBiomarkers = computed(() => {
   const items =
@@ -579,13 +821,30 @@ const filterSummary = computed(() => {
   return parts.length ? parts.join(' / ') : ui.value.filterSummaryEmpty
 })
 const detailRegion = computed(() => selectedDetail.value?.region ?? null)
-const detailTitle = computed(
-  () => selectedDetail.value?.title || detailRegion.value?.displayName || ui.value.detail,
-)
-const detailSubtitle = computed(() => selectedDetail.value?.subtitle || filterSummary.value)
+const detailTitle = computed(() => {
+  if (isClusterDetail.value) return localizedBackendLabel(selectedDetail.value?.title) || ui.value.detail
+  if (detailRegion.value) return localizedStatDisplayName(detailRegion.value) || selectedDetail.value?.title || ui.value.detail
+  return selectedDetail.value?.title || ui.value.detail
+})
+const detailSubtitle = computed(() => {
+  const prefix = isClusterDetail.value
+    ? ui.value.clusterOverview
+    : detailRegion.value
+      ? locationPrecisionLabel(detailRegion.value.level)
+      : ''
+  return [prefix, filterSummary.value].filter(Boolean).join(' · ') || filterSummary.value
+})
 const compactSummaryCards = computed(() => selectedDetail.value?.summaryCards?.slice(0, 4) ?? [])
 const compactBiomarkers = computed(() => selectedDetail.value?.topBiomarkers ?? [])
-const fullDetailSummaryCards = computed(() => selectedDetail.value?.summaryCards ?? [])
+const hasSpecificBiomarker = computed(() => selection.biomarkerKey !== ALL_BIOMARKER_KEY)
+const availableYearRange = computed(() => selectionYearRange(currentYears.value))
+const fullDetailSummaryCards = computed(() =>
+  overviewSummaryCards(
+    selectedDetail.value?.summaryCards ?? [],
+    hasSpecificBiomarker.value,
+    availableYearRange.value,
+  ),
+)
 const pndlComparisons = computed(() => selectedDetail.value?.pndlComparisons ?? [])
 const activePndlComparison = computed(() => {
   const comparisons = pndlComparisons.value
@@ -595,23 +854,26 @@ const activePndlComparison = computed(() => {
   )
 })
 const pndlChartRows = computed(
-  () => activePndlComparison.value?.rows ?? selectedDetail.value?.pndlRanking ?? [],
+  () =>
+    ensureSelectedPndlChartRow(
+      filteredPndlComparisonRows(
+        activePndlComparison.value,
+        activePndlComparison.value?.rows ?? selectedDetail.value?.pndlRanking ?? [],
+      ),
+    ),
 )
 const pndlChartDisplayRows = computed(() => selectPndlChartDisplayRows(pndlChartRows.value))
 const pndlChartColumnStyle = computed<Record<string, string>>(() => ({
   '--pndl-column-count': String(Math.max(pndlChartDisplayRows.value.length, 1)),
 }))
 const pndlRankingRows = computed(() => pndlChartRows.value.slice(0, 30))
-const hasSpecificBiomarker = computed(() => selection.biomarkerKey !== ALL_BIOMARKER_KEY)
 const canRenderPndlChart = computed(
   () => hasSpecificBiomarker.value && pndlChartRows.value.length > 0,
 )
-const canShowPndlComparisonSection = computed(
-  () => hasSpecificBiomarker.value && pndlComparisons.value.length > 0 && canRenderPndlChart.value,
-)
+const canShowPndlComparisonSection = computed(() => hasSpecificBiomarker.value)
 const pndlChartPositiveValues = computed(() =>
   pndlChartDisplayRows.value
-    .map((item) => Number(item.pndlGeomeanMgD1000inh ?? 0))
+    .map((item) => Number(item.pndlMedianMgD1000inh ?? 0))
     .filter((value) => Number.isFinite(value) && value > 0),
 )
 const pndlChartMax = computed(() => Math.max(...pndlChartPositiveValues.value, 0))
@@ -623,20 +885,28 @@ const pndlChartBottomLabel = computed(() =>
   pndlChartUsesLogScale.value ? formatCompact(pndlChartMin.value) : '0',
 )
 const pndlChartTitle = computed(() =>
-  activePndlComparison.value?.label ||
+  (activePndlComparison.value ? localizedPndlComparisonLabel(activePndlComparison.value) : '') ||
   (isClusterDetail.value ? ui.value.clusterOverview : ui.value.pndlComparison),
 )
+const trendTitle = computed(() => localizedBackendLabel(activeTrendSeries.value?.label) || ui.value.pndlTrend)
+const detailNoteItems = computed(() => [
+  ui.value.dataNotePndl,
+  ui.value.dataNoteBubble,
+  ui.value.dataNoteCoverage,
+])
 const trendSeries = computed(() => selectedDetail.value?.trendSeries ?? [])
 const activeTrendSeries = computed(() => trendSeries.value[0] ?? null)
+const renderableTrendSeries = computed(() =>
+  hasSpecificBiomarker.value && !isClusterDetail.value
+    ? trendSeries.value.filter((series) => (series.points?.length ?? 0) >= 2)
+    : [],
+)
 const canRenderTrendChart = computed(
-  () =>
-    hasSpecificBiomarker.value &&
-    !isClusterDetail.value &&
-    (activeTrendSeries.value?.points?.length ?? 0) >= 2,
+  () => renderableTrendSeries.value.length > 0,
 )
 const regionHeatValues = computed(() =>
-  displayRegionRows()
-    .map((row) => Number(row.pndlGeomeanMgD1000inh ?? 0))
+  displayMapRegionRows()
+    .map((row) => Number(row.pndlMedianMgD1000inh ?? 0))
     .filter((value) => Number.isFinite(value) && value > 0),
 )
 const regionHeatMin = computed(() =>
@@ -645,6 +915,25 @@ const regionHeatMin = computed(() =>
 const regionHeatMax = computed(() =>
   regionHeatValues.value.length ? Math.max(...regionHeatValues.value) : 0,
 )
+const canShowHeatLegend = computed(
+  () => hasSpecificBiomarker.value && regionHeatValues.value.length > 0,
+)
+const heatLegendGradient = computed(
+  () =>
+    `linear-gradient(90deg, ${MAP_HEAT_COLORS.map(
+      (color, index) => `${color} ${(index / Math.max(MAP_HEAT_COLORS.length - 1, 1)) * 100}%`,
+    ).join(', ')})`,
+)
+const heatLegendBands = computed(() => {
+  const min = regionHeatMin.value
+  const max = regionHeatMax.value
+  const middle = heatLegendMiddleValue(min, max)
+  return [
+    { label: ui.value.heatLegendLow, value: formatCompact(min) },
+    { label: ui.value.heatLegendMedium, value: formatCompact(middle) },
+    { label: ui.value.heatLegendHigh, value: formatCompact(max) },
+  ]
+})
 const trendChartPoints = computed(() => {
   const points = activeTrendSeries.value?.points ?? []
   const values = points
@@ -671,6 +960,38 @@ const trendChartPoints = computed(() => {
 const trendPolyline = computed(() =>
   trendChartPoints.value.map((point) => `${point.x},${point.y}`).join(' '),
 )
+
+function trendChartPointsForSeries(series: MapTrendSeries) {
+  const points = series.points ?? []
+  const values = points
+    .map((point) => Number(point.value ?? 0))
+    .filter((value) => Number.isFinite(value) && value > 0)
+  if (points.length < 2 || !values.length) return []
+  const max = Math.max(...values)
+  const min = Math.min(...values)
+  const range = max - min || max || 1
+  const width = 680
+  const height = 210
+  return points.map((point, index) => {
+    const value = Number(point.value ?? 0)
+    return {
+      ...point,
+      x: (index / (points.length - 1)) * width,
+      y: height - ((value - min) / range) * (height - 28) - 14,
+      label: formatCompact(value),
+    }
+  })
+}
+
+function trendPolylineForSeries(series: MapTrendSeries) {
+  return trendChartPointsForSeries(series)
+    .map((point) => `${point.x},${point.y}`)
+    .join(' ')
+}
+
+function trendPointTooltip(series: MapTrendSeries, point: MapTrendSeries['points'][number]) {
+  return `${localizedBackendLabel(series.label)} · ${point.year} · ${formatCompact(point.value)} ${series.unit ?? ''} · 数据行 ${formatNumber(point.valueCount ?? point.recordCount)}`
+}
 const compactDetailCallout = computed(() => {
   if (!selectedDetail.value) return ''
   if (selectedDetail.value.cluster) {
@@ -679,7 +1000,7 @@ const compactDetailCallout = computed(() => {
     return `${formatNumber(locationCount)} ${ui.value.clusterCount} · ${ui.value.records} ${formatNumber(detailRegion.value?.recordCount)} · ${ui.value.literature} ${formatNumber(detailRegion.value?.doiCount)}`
   }
   if (!detailRegion.value) return detailSubtitle.value
-  return `${locationPrecisionLabel(detailRegion.value.level)} · ${ui.value.pndlGeomean} ${formatCompact(detailRegion.value.pndlGeomeanMgD1000inh)} · ${ui.value.records} ${formatNumber(detailRegion.value.recordCount)}`
+  return `${locationPrecisionLabel(detailRegion.value.level)} · ${ui.value.pndlMedian} ${formatCompact(detailRegion.value.pndlMedianMgD1000inh)} · ${ui.value.records} ${formatNumber(detailRegion.value.recordCount)}`
 })
 const hasEmptyFilterData = computed(
   () =>
@@ -740,6 +1061,12 @@ const formattedMapStatus = computed(() => ({
 watch(locale, (value) => {
   window.localStorage.setItem(MAP_LOCALE_STORAGE_KEY, value)
   updateContinentLabels()
+  if (mapReady.value) {
+    updateLoadedLabelSources()
+    updatePointSource()
+    updateRegionDataSource()
+    updateRegionHighlightSources()
+  }
   void refreshVectorBasemapLanguage()
   if (
     mapStatus.value.country === UI_TEXT.zh.unknownCountry ||
@@ -806,8 +1133,18 @@ watch(
   },
 )
 watch(
+  [detailRegion, activePndlComparison],
+  ([region, comparison]) => {
+    if (region?.level !== 'city' || !shouldFilterToDetailAdmin(comparison)) return
+    void ensureBoundary('chinaProvinces')
+    void ensureBoundary('chinaCities')
+  },
+  { immediate: true },
+)
+watch(
   [pndlChartDisplayRows, activePndlComparison, isFullDetailOpen],
   () => {
+    hidePndlColumnTooltip()
     void nextTick(scrollSelectedPndlColumnIntoView)
   },
   { flush: 'post' },
@@ -835,6 +1172,7 @@ onBeforeUnmount(() => {
   if (searchBlurTimer) window.clearTimeout(searchBlurTimer)
   if (resizeTimer) window.clearTimeout(resizeTimer)
   if (regionTooltipTimer) window.clearTimeout(regionTooltipTimer)
+  if (pointSourceRefreshTimer) window.clearTimeout(pointSourceRefreshTimer)
   if (countryStatusTimer != null) {
     window.clearTimeout(countryStatusTimer)
     countryStatusTimer = undefined
@@ -842,6 +1180,10 @@ onBeforeUnmount(() => {
   if (mapStatusFrame != null) {
     window.cancelAnimationFrame(mapStatusFrame)
     mapStatusFrame = undefined
+  }
+  if (pointHoverFrame != null) {
+    window.cancelAnimationFrame(pointHoverFrame)
+    pointHoverFrame = undefined
   }
   window.removeEventListener('resize', handleMapResize)
   window.removeEventListener('keydown', handleMapKeydown)
@@ -930,21 +1272,40 @@ async function initMap() {
     )
     map.on('load', () => {
       mapReady.value = true
+      mapZoomLevel.value = map?.getZoom() ?? FLAT_INITIAL_ZOOM
+      syncActiveMapLevel(mapZoomLevel.value)
+      stripVectorTextLayersForLocale()
       addMapSourcesAndLayers()
       bindLayerEvents()
-      void ensureBoundary('countries')
+      void ensureBoundary('countries', true)
       updateMapData()
       enforceGlobeSafeZoom(false)
       updateMapStatus()
     })
     map.on('zoomend', () => {
+      const nextZoom = map?.getZoom() ?? mapZoomLevel.value
+      mapZoomLevel.value = nextZoom
+      const levelChanged = syncActiveMapLevel(nextZoom)
       updateMapStatus()
       ensureStagedBoundariesForCurrentZoom()
-      updatePointSource()
-      updateLoadedLabelSources()
+      if (levelChanged) {
+        updateLoadedLabelSources()
+        updateRegionDataSource()
+        updateRegionHighlightSources()
+      }
     })
     map.on('move', scheduleLiveMapStatusUpdate)
-    map.on('moveend', updateMapStatus)
+    map.on('moveend', () => {
+      const nextZoom = map?.getZoom() ?? mapZoomLevel.value
+      mapZoomLevel.value = nextZoom
+      const levelChanged = syncActiveMapLevel(nextZoom)
+      if (levelChanged) {
+        updateLoadedLabelSources()
+        updateRegionDataSource()
+        updateRegionHighlightSources()
+      }
+      updateMapStatus()
+    })
     map.on('mousemove', handleMapMouseMove)
     map.on('mouseleave', handleMapMouseLeave)
     map.on('click', hideTooltipOnEmptyClick)
@@ -962,6 +1323,100 @@ function canUseGlobe(_module: MapLibreModule) {
 
 function currentMapMaxZoom() {
   return basemapMode === 'vector' ? VECTOR_MAX_ZOOM : FALLBACK_MAX_ZOOM
+}
+
+function mapDisplayLevelForZoom(zoom: number): MapDisplayLevel {
+  return displayLevelForZoom(zoom)
+}
+
+function syncActiveMapLevel(zoom: number) {
+  const nextLevel = mapDisplayLevelForZoom(zoom)
+  if (activeMapLevel.value === nextLevel) return false
+  activeMapLevel.value = nextLevel
+  return true
+}
+
+function pointSourceId(level: MapDisplayLevel) {
+  return `map-points-${level}`
+}
+
+function pointLabelSourceId(level: MapDisplayLevel) {
+  return `map-point-labels-${level}`
+}
+
+function pndlLayerId(
+  level: MapDisplayLevel,
+  part: 'bubble-icons' | 'selected-ring' | 'bubbles' | 'bubble-count' | 'point-labels',
+) {
+  return `pndl-${level}-${part}`
+}
+
+function pndlLayerZoomRange(level: MapDisplayLevel, preferredMinzoom?: number) {
+  const range: { minzoom?: number; maxzoom?: number } = {}
+  if (level === 'country') {
+    range.maxzoom = LEVEL_FADE_COUNTRY_END + 0.05
+  } else if (level === 'admin1') {
+    range.minzoom = LEVEL_FADE_COUNTRY_START - 0.05
+    range.maxzoom = LEVEL_FADE_CITY_END + 0.05
+  } else {
+    range.minzoom = LEVEL_FADE_CITY_START - 0.05
+  }
+  if (preferredMinzoom != null) {
+    range.minzoom = Math.max(range.minzoom ?? 0, preferredMinzoom)
+  }
+  return range
+}
+
+function levelTransitionOpacityExpression(level: MapDisplayLevel, opacity = 1) {
+  if (level === 'country') {
+    return [
+      'interpolate',
+      ['linear'],
+      ['zoom'],
+      0,
+      opacity,
+      LEVEL_FADE_COUNTRY_START,
+      opacity,
+      LEVEL_FADE_COUNTRY_END,
+      0,
+    ]
+  }
+  if (level === 'admin1') {
+    return [
+      'interpolate',
+      ['linear'],
+      ['zoom'],
+      LEVEL_FADE_COUNTRY_START,
+      0,
+      LEVEL_FADE_COUNTRY_END,
+      opacity,
+      LEVEL_FADE_CITY_START,
+      opacity,
+      LEVEL_FADE_CITY_END,
+      0,
+    ]
+  }
+  return [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    LEVEL_FADE_CITY_START,
+    0,
+    LEVEL_FADE_CITY_END,
+    opacity,
+    currentMapMaxZoom(),
+    opacity,
+  ]
+}
+
+function invalidateMapDisplayCaches() {
+  displayRegionRowsCache = null
+  displayMapRowsStats = null
+  displayMapRowsCache.clear()
+  regionDataCollectionCache = null
+  labelPointCollectionCache.clear()
+  pointCollectionCache.clear()
+  statLookupCache = null
 }
 
 function clampNumber(value: number, min: number, max: number) {
@@ -1240,14 +1695,16 @@ function reloadCurrentMapStyle() {
       return
     }
     mapReady.value = true
+    stripVectorTextLayersForLocale()
     addMapSourcesAndLayers()
     bindLayerEvents()
-    void ensureBoundary('countries')
-    ensureFallbackBoundaries()
+    map.jumpTo(camera)
+    syncActiveMapLevel(camera.zoom)
+    void ensureBoundary('countries', true)
+    ensureFallbackBoundaries(true)
     updateMapData()
     syncAtmosphereStyle()
     map.setMaxZoom(currentMapMaxZoom())
-    map.jumpTo(camera)
     isMapStyleSwitching.value = false
   }
   map.once('idle', restore)
@@ -1266,10 +1723,12 @@ function restoreGeoJsonBasemapLayers() {
     map.easeTo({ zoom: currentMapMaxZoom(), duration: 260, essential: true })
   }
   mapReady.value = true
+  stripVectorTextLayersForLocale()
   addMapSourcesAndLayers()
   bindLayerEvents()
-  void ensureBoundary('countries')
-  ensureFallbackBoundaries()
+  syncActiveMapLevel(map.getZoom())
+  void ensureBoundary('countries', true)
+  ensureFallbackBoundaries(true)
   updateMapData()
   enforceGlobeSafeZoom(false)
 }
@@ -1326,75 +1785,50 @@ function buildMapStyle(mode: MapMode, basemapConfig: BasemapConfig) {
 }
 
 function vectorBasemapLayers(layers: unknown[], mode: MapMode) {
-  return layers.map((layer) => {
-    if (!isStyleLayer(layer)) return layer
+  return layers.flatMap((layer) => {
+    if (!isStyleLayer(layer)) return [layer]
     if (layer.id === 'background') {
-      return {
-        ...layer,
-        paint: {
-          ...(layer.paint ?? {}),
-          'background-color': mode === 'globe' ? GLOBE_BACKGROUND_COLOR : FLAT_BACKGROUND_COLOR,
+      return [
+        {
+          ...layer,
+          paint: {
+            ...(layer.paint ?? {}),
+            'background-color': mode === 'globe' ? GLOBE_BACKGROUND_COLOR : FLAT_BACKGROUND_COLOR,
+          },
         },
-      }
+      ]
     }
     if (layer.type === 'symbol' && layer.layout?.['text-field']) {
-      if (isLowValueWaterLabelLayer(layer.id)) {
-        return {
-          ...layer,
-          layout: {
-            ...(layer.layout ?? {}),
-            visibility: 'none',
-          },
-        }
+      if (locale.value === 'zh' || isLowValueWaterLabelLayer(layer.id)) return []
+      const layout = {
+        ...(layer.layout ?? {}),
+        'text-field': vectorLocalizedNameExpression(),
       }
-      if (locale.value === 'zh' && isVectorCountryLabelLayer(layer.id)) {
-        return {
-          ...layer,
-          layout: {
-            ...(layer.layout ?? {}),
-            visibility: 'none',
-          },
-        }
-      }
-      const layout = shouldNormalizeVectorLabel(layer.id)
-        ? {
-            ...(layer.layout ?? {}),
-            'text-field': vectorLocalizedNameExpression(),
-          }
-        : layer.layout
       const zoomRange = vectorLabelZoomRange(layer.id)
-      return {
-        ...layer,
-        ...zoomRange,
-        layout,
-        paint: {
-          ...(layer.paint ?? {}),
-          'text-color': vectorTextColor(layer.id),
-          'text-halo-color': 'rgba(255,255,255,0.94)',
-          'text-halo-width': vectorTextHaloWidth(layer.id),
-          'text-opacity': 0.98,
+      return [
+        {
+          ...layer,
+          ...zoomRange,
+          layout,
+          paint: {
+            ...(layer.paint ?? {}),
+            'text-color': vectorTextColor(layer.id),
+            'text-halo-color': 'rgba(255,255,255,0.94)',
+            'text-halo-width': vectorTextHaloWidth(layer.id),
+            'text-opacity': 0.98,
+          },
         },
-      }
+      ]
     }
     if (layer.type === 'fill' || layer.type === 'line') {
-      return styleVectorBasemapLayer(layer)
+      return [styleVectorBasemapLayer(layer)]
     }
-    return layer
+    return [layer]
   })
 }
 
 function isLowValueWaterLabelLayer(layerId: string) {
   return /ocean|marine|sea|bay|water_name|water-label|water_label/i.test(layerId)
-}
-
-function isVectorCountryLabelLayer(layerId: string) {
-  return /^places_country/i.test(layerId) || /(^|_)(country|countries)(_|$)/i.test(layerId)
-}
-
-function shouldNormalizeVectorLabel(layerId: string) {
-  return /^(places_|pois$|roads_labels_|earth_label_islands|water_waterway_label|water_label_lakes)/i.test(
-    layerId,
-  )
 }
 
 function vectorLabelZoomRange(layerId: string) {
@@ -1417,7 +1851,7 @@ function vectorLocalizedNameExpression() {
       ['get', 'name_en'],
       ['get', 'name:latin'],
       ['get', 'pgf:name'],
-      ['get', 'name'],
+      '',
     ]
   }
   return [
@@ -1425,11 +1859,8 @@ function vectorLocalizedNameExpression() {
     ['get', 'name:zh'],
     ['get', 'name_zh'],
     ['get', 'name:zh-Hans'],
-    ['get', 'name:en'],
-    ['get', 'name_en'],
-    ['get', 'name:latin'],
-    ['get', 'pgf:name'],
-    ['get', 'name'],
+    ['get', 'name_zh-Hans'],
+    '',
   ]
 }
 
@@ -1443,7 +1874,17 @@ function styleVectorBasemapLayer(layer: {
   if (layer.id === 'boundaries_country') {
     paint['line-color'] = '#9fb0ba'
     paint['line-width'] = ['interpolate', ['linear'], ['zoom'], 0, 0.32, 5, 0.42, 8, 0.5]
-    paint['line-opacity'] = ['interpolate', ['linear'], ['zoom'], 0, 0.18, 4, 0.26, 8, 0.3]
+    paint['line-opacity'] = [
+      'interpolate',
+      ['linear'],
+      ['zoom'],
+      0,
+      0.18,
+      COUNTRY_BOUNDARY_FADE_START,
+      0.26,
+      COUNTRY_BOUNDARY_FADE_END,
+      0,
+    ]
     paint['line-blur'] = 0.16
   } else if (layer.id === 'boundaries') {
     paint['line-color'] = '#b8c6cd'
@@ -1451,27 +1892,45 @@ function styleVectorBasemapLayer(layer: {
     paint['line-opacity'] = 0
     paint['line-blur'] = 0.2
   } else if (layer.id === 'earth' || /landcover|landuse|park|wood|forest|grass|scrub|urban|sand|beach|glacier|natural/i.test(layer.id)) {
-    paint['fill-color'] = '#f3f6f5'
-    paint['fill-opacity'] = ['interpolate', ['linear'], ['zoom'], 0, 0.86, 8, 0.72]
+    paint['fill-color'] = '#fbfbfa'
+    paint['fill-opacity'] = ['interpolate', ['linear'], ['zoom'], 0, 0.96, 8, 0.88]
   } else if (layer.id === 'water') {
-    paint['fill-color'] = '#d7e9ef'
+    paint['fill-color'] = '#d9dee1'
   } else if (/^water_/.test(layer.id)) {
-    paint['line-color'] = '#a7c7d4'
-    paint['line-opacity'] = 0.72
+    paint['line-color'] = '#c2c9cd'
+    paint['line-opacity'] = 0.68
   } else if (/roads_.*casing/.test(layer.id)) {
     paint['line-color'] = '#d2dbe0'
     paint['line-opacity'] = 0.84
   } else if (/roads_(highway|major|bridges_major|bridges_highway)/.test(layer.id)) {
     paint['line-color'] = '#ffffff'
-    paint['line-opacity'] = 0.96
-  } else if (/roads_(minor|other|link|bridges_minor|bridges_other|bridges_link)/.test(layer.id)) {
-    paint['line-color'] = '#f3f7f9'
-    paint['line-opacity'] = 0.9
-  } else if (layer.id === 'buildings') {
-    paint['fill-color'] = '#d7dde1'
-    paint['fill-opacity'] = 0.42
+    paint['line-opacity'] = ['interpolate', ['linear'], ['zoom'], 4, 0.52, 8, 0.76]
+  } else if (/roads_/.test(layer.id)) {
+    paint['line-color'] = '#edf2f4'
+    paint['line-opacity'] = ['interpolate', ['linear'], ['zoom'], 5, 0.3, 9, 0.62]
+  } else if (/buildings/i.test(layer.id)) {
+    paint['fill-color'] = '#dce4e8'
+    paint['fill-opacity'] = 0.46
   }
-  return { ...layer, paint }
+  return {
+    ...layer,
+    paint,
+  }
+}
+
+function stripVectorTextLayersForLocale() {
+  if (!map || basemapMode !== 'vector') return
+  const layers = [...(map.getStyle().layers ?? [])]
+  layers.forEach((layer) => {
+    if (!isStyleLayer(layer)) return
+    if (layer.type !== 'symbol') return
+    const source = String((layer as { source?: string }).source ?? '')
+    if (source !== 'protomaps') return
+    const hasText = Boolean(layer.layout?.['text-field'])
+    if (!hasText) return
+    if (locale.value !== 'zh' && !isLowValueWaterLabelLayer(layer.id)) return
+    if (map?.getLayer(layer.id)) map.removeLayer(layer.id)
+  })
 }
 
 function vectorTextColor(layerId: string) {
@@ -1517,30 +1976,103 @@ function regionLayerBeforeId(layer: unknown) {
   return mapLabelLayerBeforeId()
 }
 
-function addPndlLabelLayer() {
+function addPndlLabelLayer(level: MapDisplayLevel) {
+  const minzoom =
+    level === 'country' ? 1.35 : level === 'admin1' ? 4.4 : CITY_BOUNDARY_MIN_ZOOM + 0.4
   addMapLayer({
-    id: 'pndl-point-labels',
+    id: pndlLayerId(level, 'point-labels'),
     type: 'symbol',
-    source: 'map-point-labels',
-    minzoom: 5.35,
+    source: pointLabelSourceId(level),
+    ...pndlLayerZoomRange(level, minzoom),
+    filter: ['==', ['get', 'labelVisible'], true],
     layout: {
       'text-field': ['get', 'displayName'],
       'text-font': ['Noto Sans Medium'],
-      'text-size': ['interpolate', ['linear'], ['zoom'], 5.35, 11, 8.6, 13.5],
+      'text-size': ['interpolate', ['linear'], ['zoom'], minzoom, 11, 8.6, 13.5],
       'text-offset': [0, 1.35],
       'text-anchor': 'top',
-      'text-allow-overlap': true,
-      'text-ignore-placement': true,
+      'text-allow-overlap': false,
+      'text-ignore-placement': false,
       'text-padding': 8,
-      'text-optional': false,
+      'text-optional': true,
     },
     paint: {
       'text-color': '#273444',
       'text-halo-color': 'rgba(255,255,255,0.96)',
       'text-halo-width': 1.8,
-      'text-opacity': ['interpolate', ['linear'], ['zoom'], 5.35, 0, 5.75, 0.96],
+      'text-opacity': levelTransitionOpacityExpression(level, 0.92),
     },
   })
+}
+
+function addBubbleImages() {
+  if (!map) return
+  MAP_DISPLAY_LEVELS.forEach((level) => {
+    BUBBLE_IMAGE_BUCKETS[level].forEach((diameter, index) => {
+      const id = bubbleImageId(level, index)
+      if (map?.hasImage(id)) return
+      map?.addImage(id, createBubbleImage(diameter), { pixelRatio: 2 })
+    })
+  })
+}
+
+function bubbleImageId(level: MapDisplayLevel, bucketIndex: number) {
+  return `wbe-bubble-${level}-${bucketIndex}`
+}
+
+function createBubbleImage(diameter: number) {
+  const pixelRatio = 2
+  const padding = 6
+  const size = (diameter + padding * 2) * pixelRatio
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const context = canvas.getContext('2d')
+  if (!context) {
+    return new ImageData(size, size)
+  }
+  const center = size / 2
+  const radius = (diameter * pixelRatio) / 2
+  context.clearRect(0, 0, size, size)
+  context.shadowColor = 'rgba(27, 45, 56, 0.2)'
+  context.shadowBlur = 9 * pixelRatio
+  context.shadowOffsetY = 2.4 * pixelRatio
+  context.beginPath()
+  context.arc(center, center, radius, 0, Math.PI * 2)
+  context.fillStyle = 'rgba(251, 191, 36, 0.78)'
+  context.fill()
+  context.shadowColor = 'transparent'
+  context.lineWidth = 1.25 * pixelRatio
+  context.strokeStyle = 'rgba(51, 65, 85, 0.58)'
+  context.stroke()
+  return context.getImageData(0, 0, size, size)
+}
+
+function bubbleIconImageExpression(level: MapDisplayLevel) {
+  const buckets = BUBBLE_IMAGE_BUCKETS[level]
+  const thresholds =
+    level === 'country'
+      ? [20, 80, 300, 1000]
+      : level === 'admin1'
+        ? [5, 20, 80, 300]
+        : [3, 10, 30, 100]
+  return [
+    'step',
+    pointCountNumberExpression(),
+    bubbleImageId(level, 0),
+    thresholds[0],
+    bubbleImageId(level, 1),
+    thresholds[1],
+    bubbleImageId(level, 2),
+    thresholds[2],
+    bubbleImageId(level, 3),
+    thresholds[3],
+    bubbleImageId(level, Math.min(4, buckets.length - 1)),
+  ]
+}
+
+function pointCountNumberExpression() {
+  return ['to-number', ['coalesce', ['get', 'pointCount'], 1]]
 }
 
 function addMapSourcesAndLayers() {
@@ -1561,138 +2093,37 @@ function addMapSourcesAndLayers() {
   if (usesControlledLowZoomLabels()) {
     addGeoSource('continent-label-points')
     addGeoSource('country-label-points')
-  }
-  if (basemapMode === 'geojson') {
     addGeoSource('admin1-label-points')
     addGeoSource('china-province-label-points')
     addGeoSource('china-city-label-points')
   }
-  addPointSource()
-  addPointLabelSource()
+  MAP_DISPLAY_LEVELS.forEach((level) => {
+    addPointSource(level)
+    addPointLabelSource(level)
+  })
 
   if (basemapMode === 'geojson') {
-    addBaseFillLayer('country-land', 'country-boundaries')
+    addBaseFillLayer('country-land', 'country-boundaries', 0, 0.92, COUNTRY_BOUNDARY_FADE_END)
     addBaseFillLayer('admin1-land', 'admin1-boundaries', 3.2, 0)
     addBaseFillLayer('china-province-land', 'china-province-boundaries', 3.2, 0)
-    addBaseFillLayer('china-city-land', 'china-city-boundaries', 7.1, 0)
-    addLineLayer('country-line', 'country-boundaries', '#8ea1ac', 0.58, 0, 0.62)
-    addLineLayer('admin1-line', 'admin1-boundaries', '#9dacb5', 0.28, 3.4, 0.34, [
-      '!=',
-      ['get', 'country_key'],
-      'china',
-    ])
-    addLineLayer('china-province-line', 'china-province-boundaries', '#8397a2', 0.4, 3.5, 0.46)
-
-    addLabelLayer('admin1-label', 'admin1-label-points', 3.45, 5.8, 10, false)
-    addLabelLayer('china-province-label', 'china-province-label-points', 3.45, 5.8, 10)
-    addLabelLayer('china-city-label', 'china-city-label-points', 5.75, undefined, 10)
+    addBaseFillLayer('china-city-land', 'china-city-boundaries', CITY_BOUNDARY_MIN_ZOOM, 0)
   }
   if (usesControlledLowZoomLabels()) {
+    addLabelLayer('admin1-label', 'admin1-label-points', LEVEL_FADE_COUNTRY_START, 5.8, 10, false)
+    addLabelLayer('china-province-label', 'china-province-label-points', LEVEL_FADE_COUNTRY_START, 5.8, 10)
+    addLabelLayer('china-city-label', 'china-city-label-points', CITY_BOUNDARY_MIN_ZOOM + 0.3, undefined, 10)
     addLabelLayer('continent-label', 'continent-label-points', 0, 1.75, 16)
-    addLabelLayer('country-label', 'country-label-points', 1.35, 3.45, 12)
+    addLabelLayer('country-label', 'country-label-points', 1.35, LEVEL_FADE_COUNTRY_END, 12)
     updateContinentLabels()
   }
   addRegionHitLayers()
   addRegionDataLayers()
   addRegionHighlightLayers()
   addCityFallbackRegionLayers()
+  addBoundaryLineLayers()
 
-  addMapLayer({
-    id: 'pndl-selected-ring',
-    type: 'circle',
-    source: 'map-points',
-    filter: ['!', ['has', 'point_count']],
-    paint: {
-      'circle-radius': [
-        '+',
-        ['step', ['coalesce', ['get', 'pointCount'], 1], 8, 2, 11, 5, 15, 20, 20, 80, 25],
-        ['case', ['boolean', ['feature-state', 'selected'], false], 2.5, 0],
-      ],
-      'circle-color': 'rgba(255,255,255,0)',
-      'circle-stroke-color': MAP_HIGHLIGHT_STYLE.bubbleSelectedOuter,
-      'circle-stroke-width': ['case', ['boolean', ['feature-state', 'selected'], false], 2.2, 0],
-      'circle-opacity': ['case', ['boolean', ['feature-state', 'selected'], false], 0.92, 0],
-    },
-  })
-  addMapLayer({
-    id: 'pndl-bubbles',
-    type: 'circle',
-    source: 'map-points',
-    filter: ['!', ['has', 'point_count']],
-    paint: {
-      'circle-radius': [
-        '+',
-        ['step', ['coalesce', ['get', 'pointCount'], 1], 7, 2, 10, 5, 14, 20, 19, 80, 24],
-        [
-          'case',
-          ['boolean', ['feature-state', 'selected'], false],
-          3,
-          ['boolean', ['feature-state', 'hover'], false],
-          2,
-          0,
-        ],
-      ],
-      'circle-color': [
-        'case',
-        ['boolean', ['feature-state', 'hover'], false],
-        MAP_HIGHLIGHT_STYLE.bubbleHover,
-        ['boolean', ['feature-state', 'selected'], false],
-        MAP_HIGHLIGHT_STYLE.bubbleSelected,
-        ['==', ['get', 'level'], 'city'],
-        MAP_HIGHLIGHT_STYLE.bubble,
-        '#ffffff',
-      ],
-      'circle-opacity': ['case', ['==', ['get', 'level'], 'city'], 0.9, 0.78],
-      'circle-stroke-color': [
-        'case',
-        ['boolean', ['feature-state', 'selected'], false],
-        '#ffffff',
-        ['boolean', ['feature-state', 'hover'], false],
-        MAP_HIGHLIGHT_STYLE.hoverLine,
-        ['==', ['get', 'level'], 'city'],
-        '#4f62bf',
-        MAP_HIGHLIGHT_STYLE.bubble,
-      ],
-      'circle-stroke-width': [
-        'case',
-        ['boolean', ['feature-state', 'selected'], false],
-        3,
-        ['boolean', ['feature-state', 'hover'], false],
-        2.4,
-        ['==', ['get', 'level'], 'city'],
-        1.4,
-        2.4,
-      ],
-    },
-  })
-  addMapLayer({
-    id: 'pndl-bubble-count',
-    type: 'symbol',
-    source: 'map-points',
-    filter: ['!', ['has', 'point_count']],
-    layout: {
-      'text-field': ['to-string', ['coalesce', ['get', 'pointCount'], 1]],
-      'text-font': ['Noto Sans Regular'],
-      'text-size': ['step', ['coalesce', ['get', 'pointCount'], 1], 10, 5, 11, 20, 12],
-      'text-allow-overlap': true,
-      'text-ignore-placement': true,
-    },
-    paint: {
-      'text-color': [
-        'case',
-        ['boolean', ['feature-state', 'hover'], false],
-        '#ffffff',
-        ['boolean', ['feature-state', 'selected'], false],
-        '#ffffff',
-        ['==', ['get', 'level'], 'city'],
-        '#ffffff',
-        MAP_HIGHLIGHT_STYLE.bubble,
-      ],
-      'text-halo-color': 'rgba(19, 46, 63, 0.2)',
-      'text-halo-width': 0.45,
-    },
-  })
-  addPndlLabelLayer()
+  addBubbleImages()
+  MAP_DISPLAY_LEVELS.forEach(addPndlPointLayers)
   applyViewLayerVisibility()
 }
 
@@ -1708,9 +2139,10 @@ function addMapLayer(layer: unknown, beforeId?: string) {
   map.addLayer(layer as never, beforeId && map.getLayer(beforeId) ? beforeId : undefined)
 }
 
-function addPointSource() {
-  if (!map?.getSource('map-points')) {
-    map?.addSource('map-points', {
+function addPointSource(level: MapDisplayLevel) {
+  const id = pointSourceId(level)
+  if (!map?.getSource(id)) {
+    map?.addSource(id, {
       type: 'geojson',
       data: EMPTY_COLLECTION as never,
       promoteId: 'featureId',
@@ -1718,26 +2150,173 @@ function addPointSource() {
   }
 }
 
-function addPointLabelSource() {
-  if (!map?.getSource('map-point-labels')) {
-    map?.addSource('map-point-labels', {
+function addPointLabelSource(level: MapDisplayLevel) {
+  const id = pointLabelSourceId(level)
+  if (!map?.getSource(id)) {
+    map?.addSource(id, {
       type: 'geojson',
       data: EMPTY_COLLECTION as never,
     } as never)
   }
 }
 
-function addBaseFillLayer(id: string, source: string, minzoom = 0, opacity = 0.92) {
+function addPndlPointLayers(level: MapDisplayLevel) {
+  const sourceId = pointSourceId(level)
+  const pointCount = pointCountNumberExpression()
+  const baseRadius =
+    level === 'country'
+      ? ['step', pointCount, 12, 20, 17, 80, 23, 300, 30, 1000, 37]
+      : level === 'admin1'
+        ? ['step', pointCount, 8, 5, 11, 20, 15, 80, 20, 300, 26]
+        : ['step', pointCount, 6, 3, 8, 10, 10, 30, 13, 100, 17]
+
+  addMapLayer({
+    id: pndlLayerId(level, 'bubble-icons'),
+    type: 'symbol',
+    source: sourceId,
+    ...pndlLayerZoomRange(level),
+    layout: {
+      'icon-image': bubbleIconImageExpression(level),
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+      'symbol-sort-key': pointCount,
+    },
+    paint: {
+      'icon-opacity': levelTransitionOpacityExpression(level, level === 'city' ? 0.58 : 0.54),
+    },
+  })
+
+  addMapLayer({
+    id: pndlLayerId(level, 'selected-ring'),
+    type: 'circle',
+    source: sourceId,
+    ...pndlLayerZoomRange(level),
+    paint: {
+      'circle-radius': [
+        '+',
+        baseRadius,
+        ['case', ['boolean', ['feature-state', 'selected'], false], 5, 0],
+      ],
+      'circle-color': 'rgba(255,255,255,0)',
+      'circle-stroke-color': MAP_HIGHLIGHT_STYLE.bubbleSelectedOuter,
+      'circle-stroke-width': ['case', ['boolean', ['feature-state', 'selected'], false], 3, 0],
+      'circle-opacity': [
+        '*',
+        levelTransitionOpacityExpression(level, 0.9),
+        ['case', ['boolean', ['feature-state', 'selected'], false], 1, 0],
+      ],
+    },
+  })
+
+  addMapLayer({
+    id: pndlLayerId(level, 'bubbles'),
+    type: 'circle',
+    source: sourceId,
+    ...pndlLayerZoomRange(level),
+    paint: {
+      'circle-radius': baseRadius,
+      'circle-color': [
+        'case',
+        ['boolean', ['feature-state', 'hover'], false],
+        MAP_HIGHLIGHT_STYLE.bubbleHover,
+        ['boolean', ['feature-state', 'selected'], false],
+        MAP_HIGHLIGHT_STYLE.bubbleSelected,
+        ['step', pointCount, '#fff7bc', 5, '#fee391', 20, '#fec44f', 80, '#fe9929', 300, '#d95f0e'],
+      ],
+      'circle-opacity': [
+        'case',
+        ['boolean', ['feature-state', 'hover'], false],
+        levelTransitionOpacityExpression(level, 1),
+        ['boolean', ['feature-state', 'selected'], false],
+        levelTransitionOpacityExpression(level, 1),
+        levelTransitionOpacityExpression(level, level === 'city' ? 0.94 : 0.92),
+      ],
+      'circle-stroke-color': [
+        'case',
+        ['boolean', ['feature-state', 'selected'], false],
+        MAP_HIGHLIGHT_STYLE.selectedLine,
+        ['boolean', ['feature-state', 'hover'], false],
+        MAP_HIGHLIGHT_STYLE.hoverLine,
+        'rgba(51, 65, 85, 0.72)',
+      ],
+      'circle-stroke-width': [
+        'case',
+        ['boolean', ['feature-state', 'selected'], false],
+        3,
+        ['boolean', ['feature-state', 'hover'], false],
+        2.2,
+        1.45,
+      ],
+    },
+  })
+
+  addMapLayer({
+    id: pndlLayerId(level, 'bubble-count'),
+    type: 'symbol',
+    source: sourceId,
+    ...pndlLayerZoomRange(level),
+    layout: {
+      'text-field': ['to-string', ['coalesce', ['get', 'pointCount'], 1]],
+      'text-font': ['Noto Sans Regular'],
+      'text-size': ['step', pointCount, 9.8, 20, 11.2, 80, 12.6],
+      'symbol-sort-key': pointCount,
+      'text-allow-overlap': true,
+      'text-ignore-placement': true,
+    },
+    paint: {
+      'text-color': [
+        'case',
+        ['boolean', ['feature-state', 'hover'], false],
+        '#172f3c',
+        ['boolean', ['feature-state', 'selected'], false],
+        '#172f3c',
+        '#172f3c',
+      ],
+      'text-halo-color': 'rgba(255, 255, 255, 0.92)',
+      'text-halo-width': 0.85,
+      'text-opacity': levelTransitionOpacityExpression(level, 1),
+    },
+  })
+
+  addPndlLabelLayer(level)
+}
+
+function addBaseFillLayer(
+  id: string,
+  source: string,
+  minzoom = 0,
+  opacity = 0.92,
+  maxzoom?: number,
+) {
   addMapLayer({
     id,
     type: 'fill',
     source,
     minzoom,
+    ...(maxzoom != null ? { maxzoom } : {}),
     paint: {
       'fill-color': '#fbfbf8',
       'fill-opacity': opacity,
     },
   })
+}
+
+function addBoundaryLineLayers() {
+  addLineLayer('country-line', 'country-boundaries', '#5f8bad', 0.72, 0, 0.78)
+  addLineLayer('admin1-line', 'admin1-boundaries', '#89a9c2', 0.32, 3.4, 0.42, [
+    '!=',
+    ['get', 'country_key'],
+    'china',
+  ])
+  addLineLayer('china-province-line', 'china-province-boundaries', '#5f92bf', 0.54, 3.3, 0.62)
+  addLineLayer(
+    'china-city-line',
+    'china-city-boundaries',
+    '#9cb9cf',
+    0.24,
+    CITY_BOUNDARY_MIN_ZOOM,
+    0.36,
+  )
 }
 
 function addLineLayer(
@@ -1754,6 +2333,7 @@ function addLineLayer(
     type: 'line',
     source,
     minzoom,
+    ...(id === 'country-line' ? { maxzoom: COUNTRY_BOUNDARY_FADE_END + 0.01 } : {}),
     ...(filter ? { filter } : {}),
     layout: {
       'line-cap': 'round',
@@ -1762,25 +2342,41 @@ function addLineLayer(
     paint: {
       'line-color': color,
       'line-width': ['interpolate', ['linear'], ['zoom'], minzoom, width, 8, width * 1.45],
-      'line-opacity': ['interpolate', ['linear'], ['zoom'], minzoom, 0.08, minzoom + 0.8, opacity],
+      'line-opacity':
+        id === 'country-line'
+          ? [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              minzoom,
+              0.08,
+              minzoom + 0.8,
+              opacity,
+              COUNTRY_BOUNDARY_FADE_START,
+              opacity,
+              COUNTRY_BOUNDARY_FADE_END,
+              0,
+            ]
+          : ['interpolate', ['linear'], ['zoom'], minzoom, 0.08, minzoom + 0.8, opacity],
       'line-blur': ['interpolate', ['linear'], ['zoom'], minzoom, 0.08, 8, 0.28],
     },
   })
 }
 
 function addRegionHitLayers() {
-  addRegionHitLayer('country-hit', 'country-boundaries')
+  addRegionHitLayer('country-hit', 'country-boundaries', 0, COUNTRY_BOUNDARY_FADE_END)
   addRegionHitLayer('admin1-hit', 'admin1-boundaries', 3.2)
   addRegionHitLayer('china-province-hit', 'china-province-boundaries', 3.2)
-  addRegionHitLayer('china-city-hit', 'china-city-boundaries', 7.1)
+  addRegionHitLayer('china-city-hit', 'china-city-boundaries', CITY_BOUNDARY_MIN_ZOOM)
 }
 
-function addRegionHitLayer(id: string, source: string, minzoom = 0) {
+function addRegionHitLayer(id: string, source: string, minzoom = 0, maxzoom?: number) {
   addMapLayer({
     id,
     type: 'fill',
     source,
     minzoom,
+    ...(maxzoom != null ? { maxzoom } : {}),
     paint: {
       'fill-color': '#ffffff',
       'fill-opacity': 0.01,
@@ -1805,28 +2401,28 @@ function addRegionDataLayers() {
 function addRegionHighlightLayers() {
   addRegionOverlayLayers(
     'region-selected',
-    MAP_HIGHLIGHT_STYLE.selectedFill,
+    selectedRegionFillColorExpression(),
     MAP_HIGHLIGHT_STYLE.selectedLine,
     {
       fillOpacity: regionSourceMode === 'vector' ? 0.56 : regionOverlayOpacityExpression(0.52),
-      lineOpacity: regionSourceMode === 'vector' ? 0.9 : regionOverlayOpacityExpression(0.88),
-      lineWidth: ['interpolate', ['linear'], ['zoom'], 0, 1.0, 8, 1.42],
+      lineOpacity: regionSourceMode === 'vector' ? 0.94 : regionOverlayOpacityExpression(0.92),
+      lineWidth: ['interpolate', ['linear'], ['zoom'], 0, 1.4, 8, 2.2],
       filter: regionVectorFilter(selectedRegionId() ? vectorRegionIds([selectedRegionId() as string]) : []),
       halo: {
         color: MAP_HIGHLIGHT_STYLE.selectedHalo,
-        opacity: regionSourceMode === 'vector' ? 0.28 : regionOverlayOpacityExpression(0.26),
-        width: ['interpolate', ['linear'], ['zoom'], 0, 1.6, 8, 2.2],
+        opacity: regionSourceMode === 'vector' ? 0.36 : regionOverlayOpacityExpression(0.34),
+        width: ['interpolate', ['linear'], ['zoom'], 0, 2.8, 8, 4.2],
       },
     },
   )
   addRegionOverlayLayers(
     'region-hover',
-    MAP_HIGHLIGHT_STYLE.hoverFill,
+    hoveredRegionFillColorExpression(),
     MAP_HIGHLIGHT_STYLE.hoverLine,
     {
-      fillOpacity: regionOverlayOpacityExpression(0.36),
-      lineOpacity: regionOverlayOpacityExpression(0.68),
-      lineWidth: ['interpolate', ['linear'], ['zoom'], 0, 0.62, 8, 1.02],
+      fillOpacity: 0,
+      lineOpacity: regionOverlayOpacityExpression(1),
+      lineWidth: ['interpolate', ['linear'], ['zoom'], 0, 2.1, 8, 3.1],
       filter: regionVectorFilter(
         activeHoveredRegionId() ? vectorRegionIds([activeHoveredRegionId() as string]) : [],
       ),
@@ -1845,19 +2441,19 @@ function addCityFallbackRegionLayers() {
   )
   addCityFallbackLayerPair(
     'region-city-selected',
-    MAP_HIGHLIGHT_STYLE.selectedFill,
+    selectedRegionFillColorExpression(),
     MAP_HIGHLIGHT_STYLE.selectedLine,
     0.54,
     0.92,
-    ['interpolate', ['linear'], ['zoom'], 5.75, 0.95, 8, 1.34],
+    ['interpolate', ['linear'], ['zoom'], 5.75, 1.3, 8, 2.2],
   )
   addCityFallbackLayerPair(
     'region-city-hover',
-    MAP_HIGHLIGHT_STYLE.hoverFill,
+    hoveredRegionFillColorExpression(),
     MAP_HIGHLIGHT_STYLE.hoverLine,
-    0.4,
-    0.78,
-    ['interpolate', ['linear'], ['zoom'], 5.75, 0.72, 8, 1.08],
+    0,
+    1,
+    ['interpolate', ['linear'], ['zoom'], 5.75, 2.2, 8, 3.2],
   )
 }
 
@@ -1873,7 +2469,6 @@ function addCityFallbackLayerPair(
     id: `${sourceId}-fill`,
     type: 'fill',
     source: sourceId,
-    minzoom: 5.75,
     paint: {
       'fill-color': fillColor,
       'fill-opacity': fillOpacity,
@@ -1884,7 +2479,6 @@ function addCityFallbackLayerPair(
     id: `${sourceId}-line`,
     type: 'line',
     source: sourceId,
-    minzoom: 5.75,
     layout: {
       'line-cap': 'round',
       'line-join': 'round',
@@ -1968,57 +2562,46 @@ function addRegionOverlayLayers(
 }
 
 function regionDataFillOpacityExpression() {
-  const countryOpacity = hasSpecificBiomarker.value ? 0.36 : 0.28
-  const adminOpacity = hasSpecificBiomarker.value ? 0.44 : 0.34
-  const cityOpacity = hasSpecificBiomarker.value ? 0.52 : 0.42
+  const countryOpacity = hasSpecificBiomarker.value ? 0.78 : 0.42
+  const adminOpacity = hasSpecificBiomarker.value ? 0.8 : 0.46
+  const cityOpacity = hasSpecificBiomarker.value ? 0.82 : 0.5
   return [
     'case',
-    ['all', regionLevelEqualsExpression('country'), ['<', ['zoom'], 3.45]],
-    countryOpacity,
-    [
-      'all',
-      regionLevelEqualsExpression('admin1'),
-      ['>=', ['zoom'], 3.2],
-      ['<', ['zoom'], 5.8],
-    ],
-    adminOpacity,
-    ['all', regionLevelEqualsExpression('city'), ['>=', ['zoom'], 5.75]],
+    regionLevelEqualsExpression('city'),
     cityOpacity,
-    0,
+    regionLevelEqualsExpression('admin1'),
+    adminOpacity,
+    countryOpacity,
   ]
 }
 
 function regionDataLineOpacityExpression() {
   return [
     'case',
-    ['all', regionLevelEqualsExpression('country'), ['<', ['zoom'], 3.45]],
-    0.22,
-    [
-      'all',
-      regionLevelEqualsExpression('admin1'),
-      ['>=', ['zoom'], 3.2],
-      ['<', ['zoom'], 5.8],
-    ],
-    0.2,
-    ['all', regionLevelEqualsExpression('city'), ['>=', ['zoom'], 5.75]],
-    0.24,
-    0,
+    regionLevelEqualsExpression('city'),
+    0.34,
+    regionLevelEqualsExpression('admin1'),
+    0.3,
+    0.28,
   ]
 }
 
 function regionDataLineWidthExpression() {
-  return ['interpolate', ['linear'], ['zoom'], 0, 0.42, 8, 0.82]
+  return ['interpolate', ['linear'], ['zoom'], 0, 0.48, 8, 1.08]
 }
 
 function regionDataFillColorExpression() {
   if (!hasSpecificBiomarker.value) return MAP_HIGHLIGHT_STYLE.dataFill
-  const entries = dataRegionIdsExcludingSelected().flatMap((regionId) => [
-    regionId,
-    heatColorForStat(dataRegionStatById(regionId)),
-  ])
-  return entries.length
-    ? ['match', ['get', 'region_id'], ...entries, MAP_HIGHLIGHT_STYLE.dataFill]
-    : MAP_HIGHLIGHT_STYLE.dataFill
+  return ['coalesce', ['get', 'heatColor'], MAP_HIGHLIGHT_STYLE.dataFill]
+}
+
+function selectedRegionFillColorExpression() {
+  if (!hasSpecificBiomarker.value) return MAP_HIGHLIGHT_STYLE.dataFill
+  return ['coalesce', ['get', 'heatColor'], MAP_HIGHLIGHT_STYLE.dataFill]
+}
+
+function hoveredRegionFillColorExpression() {
+  return regionDataFillColorExpression()
 }
 
 function regionOverlayOpacityExpression(opacity: number) {
@@ -2086,7 +2669,10 @@ function addLabelLayer(
 }
 
 function labelLayerFilter(includeChina: boolean) {
-  const filters: unknown[] = [['!=', ['get', 'hasPndlRegion'], true]]
+  const filters: unknown[] = [
+    ['==', ['get', 'labelVisible'], true],
+    ['!=', ['get', 'hasPndlRegion'], true],
+  ]
   if (!includeChina) filters.push(['!=', ['get', 'country_key'], 'china'])
   return filters.length === 1 ? filters[0] : ['all', ...filters]
 }
@@ -2096,18 +2682,12 @@ function bindLayerEvents() {
     POINT_INTERACTIVE_LAYERS.forEach((layerId) => {
       map?.on('mousemove', layerId, handlePointMouseMove)
       map?.on('mouseleave', layerId, handlePointMouseLeave)
-      map?.on('click', layerId, handlePointClick)
-      map?.on('dblclick', layerId, handleFeatureDoubleClick)
     })
+    map?.on('click', handleUnifiedMapClick)
+    map?.on('dblclick', handleUnifiedMapDoubleClick)
     pointLayerEventsBound = true
   }
-  if (!regionLayerEventsBound) {
-    REGION_INTERACTIVE_LAYERS.forEach((layerId) => {
-      map?.on('click', layerId, handleRegionClick)
-      map?.on('dblclick', layerId, handleFeatureDoubleClick)
-    })
-    regionLayerEventsBound = true
-  }
+  regionLayerEventsBound = true
 }
 
 function unbindLayerEvents() {
@@ -2115,13 +2695,9 @@ function unbindLayerEvents() {
   POINT_INTERACTIVE_LAYERS.forEach((layerId) => {
     offLayerEvent('mousemove', layerId, handlePointMouseMove)
     offLayerEvent('mouseleave', layerId, handlePointMouseLeave)
-    offLayerEvent('click', layerId, handlePointClick)
-    offLayerEvent('dblclick', layerId, handleFeatureDoubleClick)
   })
-  REGION_INTERACTIVE_LAYERS.forEach((layerId) => {
-    offLayerEvent('click', layerId, handleRegionClick)
-    offLayerEvent('dblclick', layerId, handleFeatureDoubleClick)
-  })
+  map.off('click', handleUnifiedMapClick)
+  map.off('dblclick', handleUnifiedMapDoubleClick)
   pointLayerEventsBound = false
   regionLayerEventsBound = false
 }
@@ -2139,11 +2715,13 @@ function offLayerEvent(
   ).off(type, layerId, listener)
 }
 
-async function ensureBoundary(name: BoundaryName) {
+async function ensureBoundary(name: BoundaryName, refreshCached = false) {
   if (!mapReady.value) return
   if (boundaryCache.has(name)) {
-    updateBoundarySource(name)
-    updateRegionDataSource()
+    if (refreshCached) {
+      updateBoundarySource(name)
+      updateRegionDataSource()
+    }
     return
   }
   pushBoundaryLoading(name)
@@ -2152,6 +2730,12 @@ async function ensureBoundary(name: BoundaryName) {
     if (!response.ok) throw new Error(`${name} boundary failed`)
     boundaryCache.set(name, (await response.json()) as FeatureCollection)
     cleanedBoundaryCache.delete(name)
+    boundaryFeatureIndexCache.delete(name)
+    boundaryHitIndexCache.delete(name)
+    regionDataCollectionCache = null
+    labelPointCollectionCache.delete(name)
+    pointCollectionCache.clear()
+    displayMapRowsCache.clear()
     boundaryVersion.value += 1
     updateBoundarySource(name)
     updatePointSource()
@@ -2164,15 +2748,27 @@ async function ensureBoundary(name: BoundaryName) {
   }
 }
 
-function ensureStagedBoundariesForCurrentZoom() {
+function ensureStagedBoundariesForCurrentZoom(refreshCached = false) {
   if (!mapReady.value) return
-  const zoom = map?.getZoom() ?? 0
-  void ensureBoundary('countries')
+  const zoom = map?.getZoom() ?? mapZoomLevel.value
+  void ensureBoundary('countries', refreshCached)
   if (zoom >= 3.2) {
-    void ensureBoundary('admin1')
-    void ensureBoundary('chinaProvinces')
+    void ensureBoundary('admin1', refreshCached)
+    void ensureBoundary('chinaProvinces', refreshCached)
   }
-  if (zoom >= 6.05) void ensureBoundary('chinaCities')
+  const shouldLoadCities =
+    zoom >= CITY_BOUNDARY_MIN_ZOOM ||
+    activeMapLevel.value === 'city' ||
+    (zoom >= LEVEL_FADE_CITY_START - 0.15 && hasChinaCityRows())
+  if (shouldLoadCities) {
+    void ensureBoundary('chinaCities', refreshCached)
+  }
+}
+
+function hasChinaCityRows() {
+  return displayRegionRows().some(
+    (row) => row.level === 'city' && countryGroupKey(row) === 'china',
+  )
 }
 
 function pushBoundaryLoading(name: BoundaryName) {
@@ -2186,10 +2782,8 @@ function popBoundaryLoading(name: BoundaryName) {
 
 function updateMapData() {
   if (!mapReady.value) return
-  if (usesControlledLowZoomLabels()) updateContinentLabels()
-  ;(['countries', 'admin1', 'chinaProvinces', 'chinaCities'] as BoundaryName[]).forEach(
-    updateBoundarySource,
-  )
+  syncActiveMapLevel(map?.getZoom() ?? mapZoomLevel.value)
+  updateLoadedLabelSources()
   updatePointSource()
   updateRegionDataSource()
   updateRegionHighlightSources()
@@ -2206,7 +2800,7 @@ function updateBoundarySource(name: BoundaryName) {
 
 function updateLabelSource(name: BoundaryName, collection: FeatureCollection) {
   const source = map?.getSource(labelSourceId(name)) as GeoJSONSource | undefined
-  source?.setData(buildLabelPointCollection(collection, boundaryLevel(name)) as never)
+  source?.setData(buildLabelPointCollection(collection, boundaryLevel(name), name) as never)
 }
 
 function updateLoadedLabelSources() {
@@ -2229,6 +2823,99 @@ function getCleanBoundaryCollection(name: BoundaryName) {
   const cleaned = cleanBoundaryCollection(collection, name)
   cleanedBoundaryCache.set(name, cleaned)
   return cleaned
+}
+
+function getBoundaryFeatureIndex(name: BoundaryName) {
+  const collection = getCleanBoundaryCollection(name)
+  if (!collection) return null
+  const cached = boundaryFeatureIndexCache.get(name)
+  if (cached?.collection === collection) return cached
+  const level = boundaryLevel(name)
+  const exact = new Map<string, GeoJsonFeature>()
+  const aliases = new Map<string, GeoJsonFeature>()
+  collection.features.forEach((feature) => {
+    const geoKey = featureGeoKey(feature, level)
+    if (geoKey) setBestBoundaryIndexFeature(exact, `${level}|${geoKey}`, feature)
+    boundaryFeatureAliases(feature, level).forEach((alias) => {
+      const key = boundaryAliasKey(level, alias)
+      if (key) setBestBoundaryIndexFeature(aliases, key, feature)
+    })
+  })
+  const index = { collection, exact, aliases }
+  boundaryFeatureIndexCache.set(name, index)
+  return index
+}
+
+function setBestBoundaryIndexFeature(
+  index: Map<string, GeoJsonFeature>,
+  key: string,
+  feature: GeoJsonFeature,
+) {
+  const existing = index.get(key)
+  if (!existing || boundaryFeatureAreaScore(feature) > boundaryFeatureAreaScore(existing)) {
+    index.set(key, feature)
+  }
+}
+
+function boundaryFeatureAreaScore(feature: GeoJsonFeature) {
+  const bbox = featureBbox(feature.geometry)
+  if (!bbox) return 0
+  return Math.abs((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]))
+}
+
+function boundaryFeatureAliases(feature: GeoJsonFeature, level: MapRegionStat['level']) {
+  const props = feature.properties
+  const countryKey = String(props.country_key ?? '')
+  const regionKey = String(props.region_key ?? '')
+  const propKeys = Array.isArray(props.keys) ? props.keys : []
+  return [
+    featureGeoKey(feature, level),
+    regionKey,
+    props.name,
+    props.display_name,
+    ...propKeys,
+    `${countryKey}|${regionKey}`,
+    `${countryKey}|${props.name ?? ''}`,
+    `${countryKey}|${props.display_name ?? ''}`,
+  ]
+    .filter(Boolean)
+    .flatMap((value) => {
+      const stringValue = String(value)
+      const keyParts = stringValue
+        .split('|')
+        .filter((part) => part && normalizeGeoAlias(part) !== normalizeGeoAlias(countryKey))
+      return [stringValue, ...keyParts]
+    })
+}
+
+function boundaryAliasKey(level: MapRegionStat['level'], alias: string) {
+  const normalizedAlias = normalizeGeoAlias(alias)
+  return normalizedAlias ? `${level}|${normalizedAlias}` : ''
+}
+
+function lookupBoundaryFeature(
+  name: BoundaryName,
+  level: MapRegionStat['level'],
+  geoKey: string,
+  stat?: MapRegionStat,
+) {
+  const index = getBoundaryFeatureIndex(name)
+  if (!index) return null
+  const exact = index.exact.get(`${level}|${geoKey}`)
+  if (exact) return exact
+  const geoKeyParts = geoKey.split('|')
+  const regionPart = geoKeyParts[geoKeyParts.length - 1]
+  const targets = [geoKey, regionPart, stat?.displayName, stat?.province, stat?.city, stat?.country]
+    .filter(Boolean)
+    .flatMap((value) => {
+      const stringValue = String(value)
+      return [stringValue, ...stringValue.split('|').slice(1)]
+    })
+  for (const target of targets) {
+    const feature = index.aliases.get(boundaryAliasKey(level, target))
+    if (feature) return feature
+  }
+  return null
 }
 
 function updateContinentLabels() {
@@ -2254,17 +2941,33 @@ function buildContinentLabelCollection() {
 }
 
 function updatePointSource() {
+  if (pointSourceRefreshTimer != null) {
+    window.clearTimeout(pointSourceRefreshTimer)
+    pointSourceRefreshTimer = undefined
+  }
   clearHoveredPoint()
-  const collection = buildPointCollection()
-  const source = map?.getSource('map-points') as GeoJSONSource | undefined
-  const labelSource = map?.getSource('map-point-labels') as GeoJSONSource | undefined
-  source?.setData(collection as never)
-  labelSource?.setData(collection as never)
+  MAP_DISPLAY_LEVELS.forEach((level) => {
+    const collection = buildPointCollection(level)
+    const source = map?.getSource(pointSourceId(level)) as GeoJSONSource | undefined
+    const labelSource = map?.getSource(pointLabelSourceId(level)) as GeoJSONSource | undefined
+    source?.setData(collection as never)
+    labelSource?.setData(collection as never)
+  })
+}
+
+function schedulePointSourceRefresh(delay = 120) {
+  if (!mapReady.value || !map) return
+  if (pointSourceRefreshTimer != null) window.clearTimeout(pointSourceRefreshTimer)
+  pointSourceRefreshTimer = window.setTimeout(() => {
+    pointSourceRefreshTimer = undefined
+    updatePointSource()
+  }, delay)
 }
 
 function updateRegionDataSource() {
   updateRegionPaintStyles()
   updateCityFallbackPaintStyles()
+  updateSelectedRegionPaintStyles()
   updateCityFallbackRegionSources()
   if (regionSourceMode === 'vector') {
     updateRegionVectorFilters()
@@ -2323,6 +3026,37 @@ function updateCityFallbackPaintStyles() {
   )
 }
 
+function updateSelectedRegionPaintStyles() {
+  if (map?.getLayer('region-selected-fill')) {
+    map.setPaintProperty(
+      'region-selected-fill',
+      'fill-color',
+      selectedRegionFillColorExpression() as never,
+    )
+  }
+  if (map?.getLayer('region-hover-fill')) {
+    map.setPaintProperty(
+      'region-hover-fill',
+      'fill-color',
+      hoveredRegionFillColorExpression() as never,
+    )
+  }
+  if (map?.getLayer('region-city-selected-fill')) {
+    map.setPaintProperty(
+      'region-city-selected-fill',
+      'fill-color',
+      selectedRegionFillColorExpression() as never,
+    )
+  }
+  if (map?.getLayer('region-city-hover-fill')) {
+    map.setPaintProperty(
+      'region-city-hover-fill',
+      'fill-color',
+      hoveredRegionFillColorExpression() as never,
+    )
+  }
+}
+
 function updateRegionHighlightSources() {
   if (regionSourceMode === 'vector') {
     updateRegionVectorFilters()
@@ -2352,7 +3086,11 @@ function updateRegionVectorFilters() {
 }
 
 function vectorRegionIds(regionIds: string[]) {
-  return regionIds.filter((regionId) => !regionId.startsWith('city|'))
+  // Keep the visual business overlay on one geometry source. The PMTiles region
+  // layer is still useful when it is complete, but current local tiles can miss
+  // country/city ids; the GeoJSON overlay below guarantees every data region is visible.
+  void regionIds
+  return []
 }
 
 function setRegionLayerFilter(layerIds: string[], filter: unknown) {
@@ -2397,11 +3135,11 @@ function dataRegionIdsExcludingSelected() {
 }
 
 function dataRegionIdSet() {
-  return new Set(displayRegionRows().map(regionIdForStat).filter(Boolean))
+  return new Set(displayMapRegionRows().map(regionIdForStat).filter(Boolean))
 }
 
 function pointRegionIdSet() {
-  return new Set(displayPointRows().map(regionIdForStat).filter(Boolean))
+  return new Set(displayMapRegionRows().map(regionIdForStat).filter(Boolean))
 }
 
 function setGeoJsonSourceData(
@@ -2438,41 +3176,46 @@ function cloneHighlightFeature(feature: GeoJsonFeature, stat?: MapRegionStat): G
 }
 
 function buildRegionDataCollection(): FeatureCollection {
-  const seen = new Set<string>()
-  const selectedId = selectedRegionId()
-  const features = displayRegionRows().flatMap((row) => {
-    const feature = boundaryFeatureForStat(row)
-    const key = regionFeatureKey(feature)
-    if (!feature || !key || key === selectedId || seen.has(key)) return []
-    seen.add(key)
-    return [cloneHighlightFeature(feature, row)]
-  })
-  return { type: 'FeatureCollection', features }
+  const level = activeMapLevel.value
+  if (
+    regionDataCollectionCache &&
+    regionDataCollectionCache.stats === stats.value &&
+    regionDataCollectionCache.boundaryVersion === boundaryVersion.value &&
+    regionDataCollectionCache.locale === locale.value &&
+    regionDataCollectionCache.level === level
+  ) {
+    return regionDataCollectionCache.collection
+  }
+  const collection: FeatureCollection = {
+    type: 'FeatureCollection',
+    features: displayMapRegionRows(level).flatMap((stat) => {
+      const feature = boundaryFeatureForStat(stat)
+      if (!feature) return []
+      return [cloneHighlightFeature(feature, stat)]
+    }),
+  }
+  regionDataCollectionCache = {
+    stats: stats.value,
+    boundaryVersion: boundaryVersion.value,
+    locale: locale.value,
+    level,
+    collection,
+  }
+  return collection
 }
 
 function buildCityFallbackRegionDataCollection(): FeatureCollection {
-  const seen = new Set<string>()
-  const selectedId = selectedRegionId()
-  const features = displayRegionRows().flatMap((row) => {
-    if (row.level !== 'city') return []
-    const feature = boundaryFeatureForStat(row)
-    const key = regionFeatureKey(feature)
-    if (!feature || !key || key === selectedId || seen.has(key)) return []
-    seen.add(key)
-    return [cloneHighlightFeature(feature, row)]
-  })
-  return { type: 'FeatureCollection', features }
+  return buildRegionDataCollection()
 }
 
 function buildCityFallbackSingleCollection(
   regionId: string,
   state: 'hovered' | 'selected',
 ): FeatureCollection {
-  if (!regionId.startsWith('city|')) return EMPTY_COLLECTION
-  const [, geoKey] = regionId.split('|')
-  if (!geoKey) return EMPTY_COLLECTION
+  const [level, geoKey] = regionId.split('|') as [MapRegionStat['level'], string]
+  if (!normalizeMapLevel(level) || !geoKey) return EMPTY_COLLECTION
   const stat = dataRegionStatById(regionId)
-  const feature = boundaryFeatureForLevelGeoKey('city', geoKey, stat)
+  const feature = boundaryFeatureForLevelGeoKey(level, geoKey, stat)
   if (!feature) return EMPTY_COLLECTION
   const cloned = cloneHighlightFeature(feature, stat)
   return {
@@ -2522,8 +3265,9 @@ function activeHoveredRegionFeature() {
 
 function dataRegionStatById(regionId: string) {
   return (
+    displayMapRegionRows().find((row) => regionIdForStat(row) === regionId) ??
     displayRegionRows().find((row) => regionIdForStat(row) === regionId) ??
-    displayPointRows().find((row) => regionIdForStat(row) === regionId)
+    findStatByRegionIdAlias(regionId)
   )
 }
 
@@ -2544,6 +3288,7 @@ function cleanBoundaryCollection(
 }
 
 function filterSmallGeometryParts(geometry: unknown, minArea: number) {
+  if (!geometry || typeof geometry !== 'object') return null
   const typedGeometry = geometry as { type?: string; coordinates?: unknown }
   if (typedGeometry.type === 'Polygon' && Array.isArray(typedGeometry.coordinates)) {
     return typedGeometry
@@ -2562,27 +3307,102 @@ function filterSmallGeometryParts(geometry: unknown, minArea: number) {
   return largest ? { type: 'MultiPolygon', coordinates: [largest] } : null
 }
 
+function declutterPointRows(level: MapDisplayLevel, rows: MapRegionStat[]) {
+  if (!map || rows.length < 2) return rows
+  const selectedId = selectedRegionId()
+  const candidates = rows
+    .map((row, index) => {
+      const coordinates = representativeCoordinates(row)
+      if (!coordinates) return null
+      const projected = map?.project(coordinates as [number, number])
+      if (!projected) return null
+      const regionId = regionIdForStat(row)
+      const priority =
+        regionId && (regionId === selectedId || regionId === selectedPointKey.value) ? 1 : 0
+      return {
+        row,
+        index,
+        x: projected.x,
+        y: projected.y,
+        radius: approximateBubbleRadius(level, row),
+        priority,
+      }
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+    .sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority
+      return (b.row.pointCount ?? 0) - (a.row.pointCount ?? 0)
+    })
+
+  const accepted: typeof candidates = []
+  candidates.forEach((candidate) => {
+    const minGap = level === 'country' ? 12 : level === 'admin1' ? 10 : 8
+    const collides = accepted.some((item) => {
+      const dx = candidate.x - item.x
+      const dy = candidate.y - item.y
+      const minDistance = candidate.radius + item.radius + minGap
+      return dx * dx + dy * dy < minDistance * minDistance
+    })
+    if (!collides || candidate.priority) accepted.push(candidate)
+  })
+  return accepted.sort((a, b) => a.index - b.index).map((item) => item.row)
+}
+
+function approximateBubbleRadius(level: MapDisplayLevel, row: MapRegionStat) {
+  const pointCount = row.pointCount ?? 1
+  if (level === 'country') {
+    if (pointCount >= 1000) return 37
+    if (pointCount >= 300) return 30
+    if (pointCount >= 80) return 23
+    if (pointCount >= 20) return 17
+    return 12
+  }
+  if (level === 'admin1') {
+    if (pointCount >= 300) return 26
+    if (pointCount >= 80) return 20
+    if (pointCount >= 20) return 15
+    if (pointCount >= 5) return 11
+    return 8
+  }
+  if (pointCount >= 100) return 17
+  if (pointCount >= 30) return 13
+  if (pointCount >= 10) return 10
+  if (pointCount >= 3) return 8
+  return 6
+}
+
 function enrichBoundaryCollection(collection: FeatureCollection, level: MapRegionStat['level']) {
-  const statIndex = buildStatIndex()
   return {
     type: 'FeatureCollection',
     features: collection.features.map((feature) => {
       const geoKey = featureGeoKey(feature, level)
-      const stat = statIndex.get(`${level}|${geoKey}`)
       return {
         ...feature,
         properties: {
           ...feature.properties,
           boundaryLevel: level,
           geoKey,
-          ...(stat ? statProperties(stat) : {}),
         },
       }
     }),
   }
 }
 
-function buildLabelPointCollection(collection: FeatureCollection, level: MapRegionStat['level']) {
+function buildLabelPointCollection(
+  collection: FeatureCollection,
+  level: MapRegionStat['level'],
+  name?: BoundaryName,
+) {
+  const cached = name ? labelPointCollectionCache.get(name) : undefined
+  if (
+    cached &&
+    cached.stats === stats.value &&
+    cached.boundaryVersion === boundaryVersion.value &&
+    cached.locale === locale.value &&
+    cached.level === activeMapLevel.value
+  ) {
+    return cached.collection
+  }
   const seen = new Set<string>()
   const activeRegionIds = pointRegionIdSet()
   const features = collection.features.flatMap((feature) => {
@@ -2592,16 +3412,20 @@ function buildLabelPointCollection(collection: FeatureCollection, level: MapRegi
     const coordinates = labelPointForGeometry(feature.geometry)
     if (!coordinates) return []
     seen.add(geoKey)
+    const stat = findStatByLevelGeoKey(level, geoKey, feature.properties)
+    const statRegionId = stat ? regionIdForStat(stat) : ''
+    const displayName = localizedBoundaryName(feature, level)
     return [
       {
         type: 'Feature',
         properties: {
           ...feature.properties,
-          display_name: localizedBoundaryName(feature, level),
+          display_name: displayName,
+          labelVisible: Boolean(displayName) && !isSuppressedCountryAliasLabel(name, geoKey),
           boundaryLevel: level,
           geoKey,
-          region_id: regionId,
-          hasPndlRegion: activeRegionIds.has(regionId),
+          region_id: statRegionId || regionId,
+          hasPndlRegion: activeRegionIds.has(statRegionId || regionId),
         },
         geometry: {
           type: 'Point',
@@ -2610,13 +3434,39 @@ function buildLabelPointCollection(collection: FeatureCollection, level: MapRegi
       },
     ]
   })
-  return { type: 'FeatureCollection', features }
+  const result: FeatureCollection = { type: 'FeatureCollection', features: features as GeoJsonFeature[] }
+  if (name) {
+    labelPointCollectionCache.set(name, {
+      stats: stats.value,
+      boundaryVersion: boundaryVersion.value,
+      locale: locale.value,
+      level: activeMapLevel.value,
+      collection: result,
+    })
+  }
+  return result
 }
 
-function buildPointCollection() {
-  return {
+function isSuppressedCountryAliasLabel(name: BoundaryName | undefined, geoKey: string) {
+  if (name !== 'countries') return false
+  return canonicalCountryKey(geoKey) === 'china' && geoKey !== 'china'
+}
+
+function buildPointCollection(level: MapDisplayLevel) {
+  const cached = pointCollectionCache.get(level)
+  if (
+    cached &&
+    cached.stats === stats.value &&
+    cached.boundaryVersion === boundaryVersion.value &&
+    cached.locale === locale.value &&
+    cached.level === level
+  ) {
+    return cached.collection
+  }
+  const sourceId = pointSourceId(level)
+  const collection: FeatureCollection = {
     type: 'FeatureCollection',
-    features: displayPointRows().flatMap((row) => {
+    features: displayMapRegionRows(level).flatMap((row) => {
       const coordinates = representativeCoordinates(row)
       if (!coordinates) return []
       const featureId = pointFeatureId(row)
@@ -2624,7 +3474,11 @@ function buildPointCollection() {
         {
           type: 'Feature',
           id: featureId,
-          properties: statProperties(row),
+          properties: {
+            ...statProperties(row),
+            displayLevel: level,
+            pointSourceId: sourceId,
+          },
           geometry: {
             type: 'Point',
             coordinates,
@@ -2633,28 +3487,63 @@ function buildPointCollection() {
       ]
     }),
   }
+  pointCollectionCache.set(level, {
+    stats: stats.value,
+    boundaryVersion: boundaryVersion.value,
+    locale: locale.value,
+    level,
+    collection,
+  })
+  return collection
 }
 
 function displayPointRows() {
-  const rows = displayRegionRows()
-  const zoom = map?.getZoom() ?? FLAT_INITIAL_ZOOM
-  if (zoom < POINT_COUNTRY_MAX_ZOOM) {
-    const countryRows = rows.filter((row) => row.level === 'country')
-    return countryRows.length ? countryRows : synthesizeCountryRows(rawStatRows())
+  return displayMapRegionRows()
+}
+
+function displayMapRegionRows(level: MapDisplayLevel = activeMapLevel.value) {
+  if (displayMapRowsStats !== stats.value) {
+    displayMapRowsStats = stats.value
+    displayMapRowsCache.clear()
   }
-  if (zoom < POINT_ADMIN_MAX_ZOOM) {
+  const cachedRows = displayMapRowsCache.get(level)
+  if (cachedRows) {
+    return cachedRows
+  }
+  const rows = displayRegionRows()
+  if (level === 'country') {
+    const countryRows = rows.filter(
+      (row) => row.level === 'country' && countryGroupKey(row) === row.geoKey,
+    )
+    const merged = new Map<string, MapRegionStat>()
+    ;[...countryRows, ...synthesizeCountryRows(rawStatRows())].forEach((row) => {
+      const id = regionIdForStat(row)
+      if (!merged.has(id)) merged.set(id, row)
+    })
+    const result = [...merged.values()]
+    displayMapRowsCache.set(level, result)
+    return result
+  }
+  if (level === 'admin1') {
     const adminRows = rows.filter((row) => row.level === 'admin1')
-    return adminRows.length ? adminRows : rows.filter((row) => row.level === 'country')
+    const result = adminRows.length ? adminRows : rows.filter((row) => row.level === 'country')
+    displayMapRowsCache.set(level, result)
+    return result
   }
   const cityRows = rows.filter((row) => row.level === 'city')
   const nonChinaAdminRows = rows.filter(
     (row) => row.level === 'admin1' && countryGroupKey(row) !== 'china',
   )
   const highZoomRows = [...nonChinaAdminRows, ...cityRows]
-  return highZoomRows.length ? highZoomRows : rows.filter((row) => row.level !== 'country')
+  const result = highZoomRows.length ? highZoomRows : rows.filter((row) => row.level !== 'country')
+  displayMapRowsCache.set(level, result)
+  return result
 }
 
 function displayRegionRows() {
+  if (displayRegionRowsCache && displayRegionRowsCache.stats === stats.value) {
+    return displayRegionRowsCache.rows
+  }
   const rows = rawStatRows()
   const byRegionId = new Map<string, MapRegionStat>()
   ;[
@@ -2666,7 +3555,9 @@ function displayRegionRows() {
     if (!id || byRegionId.has(id)) return
     byRegionId.set(id, row)
   })
-  return [...byRegionId.values()]
+  const result = [...byRegionId.values()]
+  displayRegionRowsCache = { stats: stats.value, rows: result }
+  return result
 }
 
 function rawStatRows() {
@@ -2734,6 +3625,10 @@ function combineStatRows(
     geoKey,
     parentGeoKey,
     displayName,
+    country:
+      level === 'country'
+        ? (first.country ?? displayName)
+        : (first.country ?? rows.find((row) => row.country)?.country ?? ''),
     province: level === 'admin1' ? (first.province ?? displayName) : null,
     city: null,
     category: selection.category,
@@ -2741,8 +3636,7 @@ function combineStatRows(
     biomarkerKey: selection.biomarkerKey,
     biomarkerLabel: selectedBiomarkerLabel.value,
     yearLabel: selection.year,
-    pndlGeomeanMgD1000inh: weightedStatAverage(rows, 'pndlGeomeanMgD1000inh'),
-    pndlMeanMgD1000inh: weightedStatAverage(rows, 'pndlMeanMgD1000inh'),
+    pndlMedianMgD1000inh: null,
     pndlMinMgD1000inh: minStat(rows, 'pndlMinMgD1000inh'),
     pndlMaxMgD1000inh: maxStat(rows, 'pndlMaxMgD1000inh'),
     recordCount,
@@ -2750,6 +3644,11 @@ function combineStatRows(
     pointCount,
     yearCount,
     cityCount,
+    biomarkerCount: Math.max(...rows.map((row) => Number(row.biomarkerCount ?? 0)), 0),
+    pndlRecordCount: 0,
+    pndlDoiCount: 0,
+    pndlPointCount: 0,
+    pndlYearCount: 0,
     pndlSources: first.pndlSources || '地图层级合并显示',
   }
 }
@@ -2760,19 +3659,6 @@ function sumStat(rows: MapRegionStat[], key: keyof MapRegionStat) {
 
 function uniqueCount(values: Array<string | null | undefined>) {
   return new Set(values.filter(Boolean)).size
-}
-
-function weightedStatAverage(rows: MapRegionStat[], key: keyof MapRegionStat) {
-  let weightSum = 0
-  let valueSum = 0
-  rows.forEach((row) => {
-    const value = Number(row[key] ?? 0)
-    if (!Number.isFinite(value) || value <= 0) return
-    const weight = Math.max(Number(row.recordCount ?? row.pointCount ?? 1), 1)
-    valueSum += value * weight
-    weightSum += weight
-  })
-  return weightSum ? valueSum / weightSum : null
 }
 
 function minStat(rows: MapRegionStat[], key: keyof MapRegionStat) {
@@ -2806,9 +3692,9 @@ function titleCaseGeoKey(value: string) {
 }
 
 function representativeCoordinates(row: MapRegionStat): [number, number] | null {
-  if (row.level !== 'city') {
-    const boundaryCenter = representativeBoundaryCenter(row)
-    if (boundaryCenter) return boundaryCenter
+  const boundaryCenter = representativeBoundaryCenter(row)
+  if (boundaryCenter && (row.level !== 'city' || row.latitude == null || row.longitude == null)) {
+    return boundaryCenter
   }
   if (row.latitude == null || row.longitude == null) return null
   return [Number(row.longitude), Number(row.latitude)]
@@ -2827,14 +3713,12 @@ function findBoundaryFeature(row: MapRegionStat) {
       ? ['countries']
       : row.level === 'city'
         ? ['chinaCities']
-        : row.geoKey.startsWith('china|')
+        : isChinaRegion(row)
           ? ['chinaProvinces', 'admin1']
           : ['admin1']
   for (const name of names) {
-    const collection = getCleanBoundaryCollection(name)
-    if (!collection) continue
     const level = boundaryLevel(name)
-    const feature = collection.features.find((item) => featureGeoKey(item, level) === row.geoKey)
+    const feature = lookupBoundaryFeature(name, level, row.geoKey, row)
     if (feature) return feature
   }
   return null
@@ -2842,8 +3726,10 @@ function findBoundaryFeature(row: MapRegionStat) {
 
 function statProperties(stat: MapRegionStat) {
   const featureId = pointFeatureId(stat)
+  const displayName = localizedStatDisplayName(stat)
   return {
     featureId,
+    region_id: regionIdForStat(stat),
     level: stat.level,
     geoKey: stat.geoKey,
     parentGeoKey: stat.parentGeoKey ?? '',
@@ -2851,20 +3737,123 @@ function statProperties(stat: MapRegionStat) {
     province: stat.province ?? '',
     city: stat.city ?? '',
     countryKey: countryGroupKey(stat),
-    displayName: stat.displayName,
+    displayName,
+    labelVisible: Boolean(displayName),
     biomarkerLabel: stat.biomarkerLabel,
     locationPrecision: locationPrecisionLabel(stat.level),
-    pndlGeomean: numberOrNull(stat.pndlGeomeanMgD1000inh),
-    pndlMean: numberOrNull(stat.pndlMeanMgD1000inh),
+    pndlMedian: numberOrNull(stat.pndlMedianMgD1000inh),
     pndlMin: numberOrNull(stat.pndlMinMgD1000inh),
     pndlMax: numberOrNull(stat.pndlMaxMgD1000inh),
-    pndlRank: valueRank(stat.pndlGeomeanMgD1000inh),
+    pndlRank: valueRank(stat.pndlMedianMgD1000inh),
+    heatColor: heatColorForStat(stat),
     recordCount: stat.recordCount ?? 0,
     doiCount: stat.doiCount ?? 0,
     yearCount: stat.yearCount ?? 0,
     pointCount: stat.pointCount ?? 0,
+    biomarkerCount: stat.biomarkerCount ?? 0,
+    pndlRecordCount: stat.pndlRecordCount ?? 0,
+    pndlDoiCount: stat.pndlDoiCount ?? 0,
+    pndlPointCount: stat.pndlPointCount ?? 0,
+    pndlYearCount: stat.pndlYearCount ?? 0,
     pndlSources: stat.pndlSources ?? '',
   }
+}
+
+function localizedStatDisplayName(stat: MapRegionStat) {
+  if (locale.value === 'zh') {
+    const chineseName = localizedChineseStatName(stat)
+    if (chineseName) return chineseName
+    const boundaryFeature = findBoundaryFeature(stat)
+    if (boundaryFeature) {
+      const boundaryName = localizedBoundaryName(boundaryFeature, stat.level)
+      return hasCjk(boundaryName) ? boundaryName : ''
+    }
+    return ''
+  }
+  const boundaryFeature = findBoundaryFeature(stat)
+  if (boundaryFeature) return localizedBoundaryName(boundaryFeature, stat.level)
+  return singleLanguageLabel(stat.displayName, 'en') || stat.displayName
+}
+
+function localizedChineseStatName(stat: MapRegionStat) {
+  if (stat.level === 'country') {
+    if (countryGroupKey(stat) === 'china') return '中国'
+    if (hasCjk(stat.country)) return singleLanguageLabel(stat.country as string, 'zh')
+    if (hasCjk(stat.displayName)) return singleLanguageLabel(stat.displayName, 'zh')
+    return ''
+  }
+  if (stat.level === 'admin1') {
+    const mappedName = chineseAdmin1NameForStat(stat)
+    if (mappedName) return mappedName
+    if (hasCjk(stat.province)) return singleLanguageLabel(stat.province as string, 'zh')
+    if (hasCjk(stat.displayName)) return singleLanguageLabel(stat.displayName, 'zh')
+    return ''
+  }
+  if (hasCjk(stat.city)) return singleLanguageLabel(stat.city as string, 'zh')
+  if (hasCjk(stat.displayName)) return singleLanguageLabel(stat.displayName, 'zh')
+  return ''
+}
+
+function chineseAdmin1NameForStat(stat: MapRegionStat) {
+  const direct = CHINA_ADMIN1_ZH_NAMES[(stat.geoKey ?? '').trim().toLowerCase()]
+  if (direct) return direct
+  const aliases = [stat.geoKey, stat.geoKey.split('|').pop(), stat.province, stat.displayName]
+  for (const alias of aliases) {
+    const normalizedAlias = normalizeGeoAlias(String(alias ?? ''))
+    if (!normalizedAlias) continue
+    for (const [key, label] of Object.entries(CHINA_ADMIN1_ZH_NAMES)) {
+      const keyAlias = normalizeGeoAlias(String(key.split('|').pop() ?? ''))
+      if (keyAlias && keyAlias === normalizedAlias) return label
+    }
+  }
+  return ''
+}
+
+function hasCjk(value: string | null | undefined) {
+  return Boolean(value && /[\u3400-\u9fff]/.test(value))
+}
+
+function singleLanguageLabel(value: string | null | undefined, targetLocale: Locale = locale.value) {
+  const normalized = String(value ?? '').replace(/\s+/g, ' ').trim()
+  if (!normalized) return ''
+  const cleanLoosePunctuation = (label: string) =>
+    label
+      .replace(/[()（）［］\[\]【】]/g, '')
+      .replace(/[|/·,，;；:：]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  if (targetLocale === 'zh') {
+    if (!hasCjk(normalized)) return ''
+    return cleanLoosePunctuation(
+      normalized
+      .replace(/[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ\s.'’()/-]*/g, '')
+      .replace(/\s+/g, ''),
+    )
+  }
+  return cleanLoosePunctuation(
+    normalized
+    .replace(/[\u3400-\u9fff]+/g, '')
+      .replace(/[、。！？《》“”‘’]/g, ' '),
+  )
+}
+
+function localizedPropertyName(props: Record<string, unknown>, fallback = '') {
+  const primary = locale.value === 'en' ? props.name : props.display_name
+  const secondary = locale.value === 'en' ? props.display_name : props.name
+  return (
+    singleLanguageLabel(String(primary ?? ''), locale.value) ||
+    singleLanguageLabel(String(secondary ?? ''), locale.value) ||
+    singleLanguageLabel(String(props.displayName ?? ''), locale.value) ||
+    singleLanguageLabel(fallback, locale.value) ||
+    fallback
+  )
+}
+
+function localizedLocationMeta(values: Array<string | null | undefined>) {
+  return values
+    .map((value) => singleLanguageLabel(value, locale.value))
+    .filter(Boolean)
+    .join(' · ')
 }
 
 function pointFeatureId(stat: MapRegionStat) {
@@ -2878,11 +3867,11 @@ function pointFeatureId(stat: MapRegionStat) {
 }
 
 function countryGroupKey(row: MapRegionStat) {
-  if (row.level === 'country') return row.geoKey
+  if (row.level === 'country') return canonicalCountryKey(row.geoKey)
   const geoCountry = row.geoKey.split('|')[0]
-  if (geoCountry) return geoCountry
+  if (geoCountry) return canonicalCountryKey(geoCountry)
   const parentCountry = row.parentGeoKey?.split('|')[0]
-  return parentCountry || row.geoKey
+  return canonicalCountryKey(parentCountry || row.geoKey)
 }
 
 function adminGroupKey(row: MapRegionStat) {
@@ -2892,22 +3881,99 @@ function adminGroupKey(row: MapRegionStat) {
   return country && admin ? `${country}|${admin}` : ''
 }
 
+function canonicalCountryKey(value: string | null | undefined) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return ''
+  const countryPart = raw.split('|')[0] || raw
+  const alias = normalizeGeoAlias(countryPart)
+  return CHINA_COUNTRY_ALIASES.has(alias) ? 'china' : countryPart
+}
+
 function localizedBoundaryName(feature: GeoJsonFeature, level: MapRegionStat['level']) {
   const props = feature.properties
-  if (level === 'country') {
+  if (locale.value === 'zh' && level === 'country') {
     const alpha2 = String(props['ISO3166-1-Alpha-2'] ?? '').trim()
-    if (alpha2 && locale.value === 'zh') {
+    if (/^[A-Z]{2}$/i.test(alpha2)) {
       try {
-        return (
-          new Intl.DisplayNames(['zh-CN'], { type: 'region' }).of(alpha2) ||
-          String(props.display_name ?? props.name ?? '')
-        )
+        const displayName = new Intl.DisplayNames(['zh-CN'], { type: 'region' }).of(alpha2)
+        if (hasCjk(displayName)) return displayName ?? ''
       } catch {
-        return String(props.display_name ?? props.name ?? '')
+        // Some Natural Earth placeholders use non-standard country codes.
       }
     }
+    return localizedFeatureChineseAlias(props) || singleLanguageLabel(String(props.display_name ?? props.name ?? ''), 'zh')
   }
-  return String((locale.value === 'en' ? props.name : props.display_name) ?? props.display_name ?? props.name ?? '')
+  if (locale.value === 'zh') {
+    const directLabel = singleLanguageLabel(String(props.display_name ?? props.name ?? ''), 'zh')
+    return directLabel || localizedFeatureChineseAlias(props)
+  }
+  const primary = locale.value === 'en' ? props.name : props.display_name
+  const fallback = locale.value === 'en' ? props.display_name : props.name
+  return singleLanguageLabel(String(primary ?? fallback ?? ''), locale.value)
+}
+
+function localizedFeatureChineseAlias(props: Record<string, unknown>) {
+  const aliases = Array.isArray(props.keys) ? props.keys : []
+  for (const alias of aliases) {
+    const candidate = String(alias ?? '').split('|').pop() ?? ''
+    const label = singleLanguageLabel(candidate, 'zh')
+    if (label) return label
+  }
+  return ''
+}
+
+function boundaryFeatureMatchesGeoKey(
+  feature: GeoJsonFeature,
+  level: MapRegionStat['level'],
+  geoKey: string,
+  stat?: MapRegionStat,
+) {
+  const props = feature.properties
+  const exactGeoKey = featureGeoKey(feature, level)
+  if (exactGeoKey === geoKey) return true
+
+  const normalizedTargets = new Set(
+    [geoKey, ...geoKey.split('|'), stat?.displayName, stat?.country, stat?.province, stat?.city]
+      .filter(Boolean)
+      .map((value) => normalizeGeoAlias(String(value))),
+  )
+  normalizedTargets.delete('')
+  if (!normalizedTargets.size) return false
+
+  const countryKey = String(props.country_key ?? '')
+  const regionKey = String(props.region_key ?? '')
+  const propKeys = Array.isArray(props.keys) ? props.keys : []
+  const aliases = [
+    exactGeoKey,
+    regionKey,
+    props.name,
+    props.display_name,
+    ...propKeys,
+    `${countryKey}|${regionKey}`,
+    `${countryKey}|${props.name ?? ''}`,
+    `${countryKey}|${props.display_name ?? ''}`,
+  ]
+    .filter(Boolean)
+    .map((value) => normalizeGeoAlias(String(value)))
+
+  return aliases.some((alias) => alias && normalizedTargets.has(alias))
+}
+
+function normalizeGeoAlias(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/市|省|地区|盟|州|特别行政区|壮族自治区|回族自治区|维吾尔自治区|自治区/g, '')
+    .replace(/municipality|province|prefecture|autonomousregion|specialadministrativeregion/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+}
+
+function isChinaRegion(row?: Pick<MapRegionStat, 'geoKey' | 'country' | 'displayName'>) {
+  if (!row) return false
+  return [row.geoKey, row.country, row.displayName]
+    .filter(Boolean)
+    .map((value) => normalizeGeoAlias(String(value)))
+    .some((value) => value === 'china' || value === '中国' || value.startsWith('china'))
 }
 
 function locationPrecisionLabel(level: MapRegionStat['level'] | string) {
@@ -2916,23 +3982,171 @@ function locationPrecisionLabel(level: MapRegionStat['level'] | string) {
   return ui.value.countryPrecision
 }
 
+function buildStatLookups() {
+  if (statLookupCache?.stats === stats.value) return statLookupCache
+  const exact = new Map<string, MapRegionStat>()
+  const aliases = new Map<string, MapRegionStat>()
+  displayRegionRows().forEach((row) => {
+    exact.set(`${row.level}|${row.geoKey}`, row)
+    statLookupAliases(row).forEach((alias) => {
+      const key = statLookupAliasKey(row.level, alias)
+      if (key && !aliases.has(key)) aliases.set(key, row)
+    })
+  })
+  statLookupCache = { stats: stats.value, exact, aliases }
+  return statLookupCache
+}
+
 function buildStatIndex() {
-  return new Map((stats.value?.regions ?? []).map((row) => [`${row.level}|${row.geoKey}`, row]))
+  return buildStatLookups().exact
+}
+
+function statLookupAliasKey(level: string, alias: string) {
+  const normalizedAlias = normalizeGeoAlias(alias)
+  return normalizedAlias ? `${level}|${normalizedAlias}` : ''
+}
+
+function statLookupAliases(row: MapRegionStat) {
+  const geoKeyParts = row.geoKey.split('|')
+  const regionPart = geoKeyParts[geoKeyParts.length - 1]
+  const aliases = [
+    row.geoKey,
+    regionPart,
+    row.displayName,
+    row.level === 'country' ? row.country : '',
+    row.level === 'admin1' ? row.province : '',
+    row.level === 'city' ? row.city : '',
+  ]
+  return aliases.filter(Boolean).map((value) => String(value))
+}
+
+function findStatByRegionIdAlias(regionId: string) {
+  const [level, ...geoKeyParts] = regionId.split('|')
+  if (!level) return undefined
+  return findStatByLevelGeoKey(level, geoKeyParts.join('|'))
+}
+
+function findStatByFeatureId(featureId: string) {
+  if (!featureId) return undefined
+  return displayRegionRows().find((row) => pointFeatureId(row) === featureId)
+}
+
+function statFromFeatureProperties(props: Record<string, unknown>): MapRegionStat | undefined {
+  const featureId = String(props.featureId ?? '')
+  const byFeatureId = findStatByFeatureId(featureId)
+  if (byFeatureId) return byFeatureId
+
+  const explicitRegionId = String(props.region_id ?? '')
+  const byRegionId = explicitRegionId ? dataRegionStatById(explicitRegionId) : undefined
+  if (byRegionId) return byRegionId
+
+  const candidates: Array<[unknown, unknown]> = [
+    [props.sourceLevel, props.sourceGeoKey],
+    [props.level, props.geoKey],
+    [props.boundaryLevel, props.geoKey],
+    [props.level, props.geo_key],
+    [props.boundaryLevel, props.geo_key],
+    [props.sourceLevel, props.geo_key],
+  ]
+  for (const [levelValue, geoKeyValue] of candidates) {
+    const level = normalizeMapLevel(levelValue)
+    const geoKey = String(geoKeyValue ?? '')
+    if (!level || !geoKey) continue
+    const stat = findStatByLevelGeoKey(level, geoKey, props)
+    if (stat) return stat
+  }
+
+  const derivedRegionId = regionIdFromProperties(props)
+  return derivedRegionId ? dataRegionStatById(derivedRegionId) : undefined
+}
+
+function rawStatsForDetail() {
+  return [...(stats.value?.regions ?? []), ...(stats.value?.points ?? [])]
+}
+
+function statAliasSet(stat: MapRegionStat) {
+  return new Set(
+    [
+      stat.geoKey,
+      ...stat.geoKey.split('|'),
+      stat.displayName,
+      stat.country,
+      stat.province,
+      stat.city,
+    ]
+      .filter(Boolean)
+      .map((value) => normalizeGeoAlias(String(value)))
+      .filter(Boolean),
+  )
+}
+
+function statAliasesOverlap(a: MapRegionStat, b: MapRegionStat) {
+  const aliases = statAliasSet(a)
+  return [...statAliasSet(b)].some((alias) => aliases.has(alias))
+}
+
+function backendStatForMapStat(stat: MapRegionStat) {
+  const rows = rawStatsForDetail()
+  return (
+    rows.find(
+      (row) =>
+        row.level === stat.level && row.geoKey === stat.geoKey && statHasBackendData(row),
+    ) ??
+    rows.find(
+      (row) => row.level === stat.level && statAliasesOverlap(row, stat) && statHasBackendData(row),
+    ) ??
+    undefined
+  )
+}
+
+function findStatByLevelGeoKey(
+  level: string,
+  geoKey: string,
+  props?: Record<string, unknown>,
+): MapRegionStat | undefined {
+  const lookups = buildStatLookups()
+  const exact = lookups.exact.get(`${level}|${geoKey}`)
+  if (exact) return exact
+  const propKeys = Array.isArray(props?.keys) ? props.keys : []
+  const geoKeyParts = geoKey.split('|')
+  const regionPart = geoKeyParts[geoKeyParts.length - 1]
+  const normalizedTargets = new Set(
+    [
+      geoKey,
+      regionPart,
+      props?.geoKey,
+      props?.sourceGeoKey,
+      props?.geo_key,
+      props?.region_key,
+      props?.name,
+      props?.display_name,
+      ...propKeys,
+    ]
+      .filter(Boolean)
+      .map((value) => normalizeGeoAlias(String(value))),
+  )
+  normalizedTargets.delete('')
+  if (!normalizedTargets.size) return undefined
+  for (const target of normalizedTargets) {
+    const stat = lookups.aliases.get(`${level}|${target}`)
+    if (stat) return stat
+  }
+  return undefined
 }
 
 function buildSearchCandidates() {
   const candidates = new Map<string, MapSearchResult>()
   ;[...(stats.value?.points ?? []), ...(stats.value?.regions ?? [])].forEach((row) => {
+    const label = localizedStatDisplayName(row) || singleLanguageLabel(row.displayName, locale.value)
+    if (!label) return
     const center =
       row.longitude != null && row.latitude != null
         ? ([Number(row.longitude), Number(row.latitude)] as [number, number])
         : undefined
     addSearchCandidate(candidates, {
       id: `stat|${row.level}|${row.geoKey}`,
-      label: row.displayName,
-      meta: [locationPrecisionLabel(row.level), row.country, row.province, row.city]
-        .filter(Boolean)
-        .join(' · '),
+      label,
+      meta: localizedLocationMeta([locationPrecisionLabel(row.level), row.country, row.province, row.city]),
       level: row.level,
       geoKey: row.geoKey,
       center,
@@ -2949,13 +4163,13 @@ function boundarySearchCandidates(candidates: Map<string, MapSearchResult>) {
     const level = boundaryLevel(name)
     collection.features.forEach((feature) => {
       const props = feature.properties
-      const label = String(props.display_name ?? props.name ?? '').trim()
+      const label = localizedBoundaryName(feature, level)
       if (!label) return
       const geoKey = featureGeoKey(feature, level)
       addSearchCandidate(candidates, {
         id: `boundary|${level}|${geoKey}`,
         label,
-        meta: [locationPrecisionLabel(level), props.country_display].filter(Boolean).join(' · '),
+        meta: localizedLocationMeta([locationPrecisionLabel(level), String(props.country_display ?? '')]),
         level,
         geoKey,
         bbox: featureBbox(feature.geometry) ?? undefined,
@@ -3057,7 +4271,7 @@ function valueRank(value?: number | null) {
 
 function heatColorForStat(stat?: MapRegionStat) {
   if (!hasSpecificBiomarker.value || !stat) return MAP_HIGHLIGHT_STYLE.dataFill
-  return heatColorForValue(Number(stat.pndlGeomeanMgD1000inh ?? 0))
+  return heatColorForValue(Number(stat.pndlMedianMgD1000inh ?? 0))
 }
 
 function heatColorForValue(value: number) {
@@ -3068,18 +4282,33 @@ function heatColorForValue(value: number) {
     return MAP_HIGHLIGHT_STYLE.dataFill
   }
   if (max <= min) return MAP_HEAT_COLORS[Math.floor(MAP_HEAT_COLORS.length / 2)]
-  const useLogScale = min > 0 && max / min > 100
-  const ratio = useLogScale
-    ? (Math.log10(value + 1) - Math.log10(min + 1)) / (Math.log10(max + 1) - Math.log10(min + 1))
-    : (value - min) / (max - min)
-  const index = Math.round(clampNumber(ratio, 0, 1) * (MAP_HEAT_COLORS.length - 1))
+  const index = temperatureBandIndex(value, min, max, MAP_HEAT_COLORS.length)
   return MAP_HEAT_COLORS[index]
+}
+
+function heatLegendMiddleValue(min: number, max: number) {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= 0) return 0
+  if (min <= 0 || max <= min) return max
+  return max / min > 100
+    ? 10 ** ((Math.log10(min + 1) + Math.log10(max + 1)) / 2) - 1
+    : (min + max) / 2
 }
 
 function featureGeoKey(feature: GeoJsonFeature, level: MapRegionStat['level']) {
   const props = feature.properties
+  const explicitGeoKey = String(props.geo_key ?? props.geoKey ?? '').trim()
+  if (explicitGeoKey) return explicitGeoKey
   if (level === 'country') return String(props.country_key ?? '')
+  if (level === 'admin1' && String(props.country_key ?? '') === 'china') {
+    const canonicalChinaKey = canonicalChinaAdminBoundaryKey(props)
+    if (canonicalChinaKey) return canonicalChinaKey
+  }
   return `${String(props.country_key ?? '')}|${String(props.region_key ?? '')}`
+}
+
+function canonicalChinaAdminBoundaryKey(props: Record<string, unknown>) {
+  const keys = Array.isArray(props.keys) ? props.keys.map((key) => String(key)) : []
+  return keys.find((key) => /^china\|[a-z][a-z0-9-]*$/i.test(key)) || ''
 }
 
 function boundaryLevel(name: BoundaryName): MapRegionStat['level'] {
@@ -3119,7 +4348,9 @@ async function fetchStats() {
       ['country', 'admin1', 'city'],
       statsController.signal,
     )
+    invalidateMapDisplayCaches()
     ensureFallbackBoundaries()
+    ensureStagedBoundariesForCurrentZoom()
     updateMapData()
     focusGlobeOnDensePoints()
   } catch (error) {
@@ -3209,13 +4440,54 @@ function normalizeLng(lng: number) {
   return ((((lng + 180) % 360) + 360) % 360) - 180
 }
 
-function ensureFallbackBoundaries() {
-  ensureStagedBoundariesForCurrentZoom()
+function ensureFallbackBoundaries(refreshCached = false) {
+  ensureStagedBoundariesForCurrentZoom(refreshCached)
+}
+
+function handleUnifiedMapClick(event: MapMouseEvent) {
+  closeSearch()
+  const pointFeature = bestPointFeatureAtPoint(event.point)
+  if (pointFeature?.properties) {
+    if (isClusterFeature(pointFeature.properties)) {
+      scheduleClusterDetailOpen(pointFeature)
+      return
+    }
+    setSelectedPoint(pointFeature)
+    selectMatchingBoundaryForPoint(pointFeature)
+    scheduleDetailOpen(pointFeature)
+    return
+  }
+  const regionFeature = bestRegionFeatureAtPoint(event.point)
+  if (!regionFeature?.properties) return
+  setSelectedRegion(regionFeature)
+  clearSelectedPoint()
+  scheduleDetailOpen(regionFeature)
+}
+
+function handleUnifiedMapDoubleClick(event: MapMouseEvent) {
+  event.preventDefault()
+  if (clickTimer) window.clearTimeout(clickTimer)
+  clickTimer = undefined
+  closeSearch()
+  const feature = bestPointFeatureAtPoint(event.point) ?? bestRegionFeatureAtPoint(event.point)
+  if (!feature?.properties) return
+  if (isClusterFeature(feature.properties)) {
+    void openClusterDetail(feature, 'full')
+    return
+  }
+  if (isRegionFeature(feature)) {
+    setSelectedRegion(feature)
+    clearSelectedPoint()
+  } else {
+    setSelectedPoint(feature)
+    selectMatchingBoundaryForPoint(feature)
+  }
+  void openFeatureDetail(feature, 'full')
 }
 
 function handlePointClick(event: MapLayerMouseEvent) {
   closeSearch()
-  const feature = event.features?.[0]
+  const feature = bestPointFeatureAtPoint(event.point)
   if (!feature?.properties) return
   if (isClusterFeature(feature.properties)) {
     scheduleClusterDetailOpen(feature)
@@ -3256,27 +4528,19 @@ function focusCompactDetailTarget(feature: GeoJsonFeature) {
   if (!map || window.innerWidth < 900) return
   const targetCenter = pointCoordinates(feature) ?? compactDetailRegionCenter(feature)
   if (!targetCenter) return
-  const reserve = compactDetailViewportReserve()
-  const width = mapContainer.value?.clientWidth ?? window.innerWidth
-  const height = mapContainer.value?.clientHeight ?? window.innerHeight
-  const viewportCenterX = width / 2
-  const viewportCenterY = height / 2
-  const desiredTargetX = Math.max(160, (width - reserve) / 2)
-  const desiredTargetY = height / 2
-  const projected = map.project(targetCenter)
-  const nextCenter = map.unproject([
-    projected.x + (viewportCenterX - desiredTargetX),
-    projected.y + (viewportCenterY - desiredTargetY),
-  ])
-  map.stop()
-  map.easeTo({
-    center: nextCenter,
-    zoom: map.getZoom(),
-    bearing: map.getBearing(),
-    pitch: map.getPitch(),
-    duration: 680,
-    essential: true,
-  })
+  try {
+    map.stop()
+    map.easeTo({
+      center: targetCenter,
+      zoom: map.getZoom(),
+      bearing: map.getBearing(),
+      pitch: map.getPitch(),
+      duration: 680,
+      essential: true,
+    })
+  } catch {
+    // A concurrent style refresh must not turn successful detail data into an error state.
+  }
 }
 
 function compactDetailRegionCenter(feature: GeoJsonFeature): [number, number] | null {
@@ -3289,7 +4553,8 @@ function compactDetailRegionCenter(feature: GeoJsonFeature): [number, number] | 
   }
   const stat =
     target?.level && target.geoKey
-      ? buildStatIndex().get(`${target.level}|${target.geoKey}`) ??
+      ? target.stat ??
+        buildStatIndex().get(`${target.level}|${target.geoKey}`) ??
         statLikeFromProperties(feature.properties, target.level, target.geoKey)
       : undefined
   if (stat) {
@@ -3299,15 +4564,10 @@ function compactDetailRegionCenter(feature: GeoJsonFeature): [number, number] | 
   return labelPointForGeometry(feature.geometry) ?? pointCoordinates(feature)
 }
 
-function compactDetailViewportReserve() {
-  const drawer = document.querySelector<HTMLElement>('.detail-drawer')
-  const drawerWidth = drawer?.getBoundingClientRect().width ?? Math.min(420, window.innerWidth * 0.5 - 30)
-  return Math.max(0, drawerWidth + 36)
-}
-
 async function openFeatureDetail(feature: GeoJsonFeature, mode: DetailMode = 'compact') {
   const target = detailTargetFromFeature(feature)
   if (!target) return
+  const requestId = ++detailRequestId
   hideTooltip()
   detailController?.abort()
   detailController = new AbortController()
@@ -3318,20 +4578,45 @@ async function openFeatureDetail(feature: GeoJsonFeature, mode: DetailMode = 'co
   fullDetailShouldRestoreCompact.value = false
   detailError.value = ''
   try {
-    selectedDetail.value = await fetchMapDetail(
+    let detail = await fetchMapDetail(
       target.level,
       target.geoKey,
       { ...selection },
       detailController.signal,
     )
+    if (requestId !== detailRequestId) return
+    const retryStat = target.stat ? backendStatForMapStat(target.stat) : undefined
+    if (
+      target.stat &&
+      statHasBackendData(target.stat) &&
+      !detailHasBackendData(detail) &&
+      retryStat &&
+      (retryStat.level !== target.level || retryStat.geoKey !== target.geoKey)
+    ) {
+      detail = await fetchMapDetail(
+        retryStat.level,
+        retryStat.geoKey,
+        { ...selection },
+        detailController.signal,
+      )
+      if (requestId !== detailRequestId) return
+    }
+    if (target.stat && statHasBackendData(target.stat) && !detailHasBackendData(detail)) {
+      selectedDetail.value = null
+      detailError.value = ui.value.emptyBackendDetail
+      detailMode.value = 'none'
+      return
+    }
+    selectedDetail.value = detail
     detailMode.value = mode
     if (mode === 'compact') focusCompactDetailTarget(feature)
   } catch (error) {
+    if (requestId !== detailRequestId) return
     if (error instanceof DOMException && error.name === 'AbortError') return
     detailError.value = error instanceof Error ? error.message : ui.value.detailLoadFailed
-    detailMode.value = 'compact'
+    detailMode.value = mode === 'compact' ? 'compact' : 'none'
   } finally {
-    isLoadingDetail.value = false
+    if (requestId === detailRequestId) isLoadingDetail.value = false
   }
 }
 
@@ -3339,6 +4624,7 @@ async function openClusterDetail(feature: GeoJsonFeature, mode: DetailMode = 'co
   if (!map) return
   const clusterId = Number(feature.properties.cluster_id)
   if (Number.isNaN(clusterId)) return
+  const requestId = ++detailRequestId
   hideTooltip()
   detailController?.abort()
   detailController = new AbortController()
@@ -3350,18 +4636,21 @@ async function openClusterDetail(feature: GeoJsonFeature, mode: DetailMode = 'co
   detailError.value = ''
   try {
     const locations = await clusterLocations(clusterId, Number(feature.properties.point_count ?? 0))
-    selectedDetail.value = await fetchMapClusterDetail(
+    const detail = await fetchMapClusterDetail(
       { ...selection },
       locations,
       detailController.signal,
     )
+    if (requestId !== detailRequestId) return
+    selectedDetail.value = detail
     detailMode.value = mode
   } catch (error) {
+    if (requestId !== detailRequestId) return
     if (error instanceof DOMException && error.name === 'AbortError') return
     detailError.value = error instanceof Error ? error.message : ui.value.detailLoadFailed
     detailMode.value = 'compact'
   } finally {
-    isLoadingDetail.value = false
+    if (requestId === detailRequestId) isLoadingDetail.value = false
   }
 }
 
@@ -3377,8 +4666,9 @@ async function clusterLocations(
   )
   const locations = new Map<string, MapClusterLocationRequest>()
   ;(leaves ?? []).forEach((leaf) => {
-    const level = String(leaf.properties?.level ?? '') as MapRegionStat['level']
-    const geoKey = String(leaf.properties?.geoKey ?? '')
+    const target = canonicalDetailTargetFromFeature(leaf as GeoJsonFeature)
+    const level = target?.level
+    const geoKey = target?.geoKey
     if (!level || !geoKey) return
     locations.set(`${level}|${geoKey}`, { level, geoKey })
   })
@@ -3393,7 +4683,7 @@ function handleFeatureDoubleClick(event: MapLayerMouseEvent) {
   if (isRegionFeature(firstFeature) && pointFeaturesAtPoint(event.point).length) return
   const feature = isRegionFeature(firstFeature)
     ? bestRegionFeatureAtPoint(event.point)
-    : firstFeature
+    : visiblePointFeatureFromEvent(event) ?? bestPointFeatureAtPoint(event.point)
   if (!feature?.properties) return
   if (isClusterFeature(feature.properties)) {
     void openClusterDetail(feature, 'full')
@@ -3410,15 +4700,28 @@ function handleFeatureDoubleClick(event: MapLayerMouseEvent) {
 }
 
 function handlePointMouseMove(event: MapLayerMouseEvent) {
-  setHoveredRegion(null)
-  const feature = event.features?.[0]
+  const feature = visiblePointFeatureFromEvent(event) ?? bestPointFeatureAtPoint(event.point)
   if (!feature?.properties) return
-  setHoveredPoint(feature)
-  showFeatureTooltip(feature, event.lngLat)
+  pendingPointHover = { feature, lngLat: event.lngLat }
+  if (pointHoverFrame != null) return
+  pointHoverFrame = window.requestAnimationFrame(() => {
+    pointHoverFrame = undefined
+    const pending = pendingPointHover
+    pendingPointHover = null
+    if (!pending) return
+    if (setHoveredPoint(pending.feature)) hoverMatchingBoundaryForPoint(pending.feature)
+    showFeatureTooltip(pending.feature, pending.lngLat)
+  })
 }
 
 function handlePointMouseLeave() {
+  pendingPointHover = null
+  if (pointHoverFrame != null) {
+    window.cancelAnimationFrame(pointHoverFrame)
+    pointHoverFrame = undefined
+  }
   clearHoveredPoint()
+  setHoveredRegion(null)
   hideTooltip()
 }
 
@@ -3426,21 +4729,24 @@ function hideTooltipOnEmptyClick(event: MapMouseEvent) {
   closeSearch()
   isLayerPanelOpen.value = false
   isLanguageMenuOpen.value = false
-  const layers = ALL_INTERACTIVE_LAYERS.filter((layerId) => map?.getLayer(layerId))
+  const layers = [
+    ...REGION_INTERACTIVE_LAYERS.filter((layerId) => map?.getLayer(layerId)),
+    ...interactivePointLayerIdsForCurrentZoom(),
+  ]
   const features = layers.length ? map?.queryRenderedFeatures(event.point, { layers }) : []
   if (!features?.length) hideTooltip()
-}
-
-function showTooltip(event: MapLayerMouseEvent) {
-  const feature = event.features?.[0]
-  if (!feature?.properties) return
-  showFeatureTooltip(feature, event.lngLat)
 }
 
 function showFeatureTooltip(feature: GeoJsonFeature, lngLat: MapLayerMouseEvent['lngLat']) {
   if (!map || !hoverPopup) return
   map.getCanvas().style.cursor = 'pointer'
-  hoverPopup.setLngLat(lngLat).setHTML(buildTooltipHtml(feature.properties)).addTo(map)
+  const tooltipKey = regionFeatureKey(feature) || String(pointFeatureStateId(feature) ?? '')
+  hoverPopup.setLngLat(lngLat)
+  if (hoverPopupFeatureKey !== tooltipKey) {
+    hoverPopup.setHTML(buildTooltipHtml(feature.properties))
+    hoverPopupFeatureKey = tooltipKey
+  }
+  hoverPopup.addTo(map)
 }
 
 function hideTooltip() {
@@ -3449,31 +4755,68 @@ function hideTooltip() {
     window.clearTimeout(regionTooltipTimer)
     regionTooltipTimer = undefined
   }
+  hoverPopupFeatureKey = ''
   hoverPopup?.remove()
 }
 
-function updateRegionHoverFromPoint(event: MapMouseEvent) {
-  if (!map || !viewLayers.boundaries) return
-  if (pointFeaturesAtPoint(event.point).length) {
-    setHoveredRegion(null)
-    return
-  }
+function hoverMatchingBoundaryForPoint(feature: GeoJsonFeature) {
+  const props = feature.properties
+  const boundaryFeature =
+    regionSourceMode === 'vector'
+      ? regionReferenceFeatureFromProperties(props)
+      : boundaryFeatureForProperties(props)
+  setHoveredRegion(boundaryFeature)
+}
 
-  const regionFeature = bestRegionFeatureAtPoint(event.point)
-  setHoveredRegion(regionFeature)
-  if (regionFeature) {
-    showFeatureTooltip(regionFeature, event.lngLat)
-  } else if (!hoveredPointId) {
-    hideTooltip()
-  }
+function bestPointFeatureAtPoint(point: MapMouseEvent['point']) {
+  const activeLevel = activeMapLevel.value
+  const features = pointFeaturesAtPoint(point) as GeoJsonFeature[]
+  return (
+    features.sort((a, b) => {
+      const aLevel = normalizeMapLevel(a.properties.displayLevel ?? a.properties.level)
+      const bLevel = normalizeMapLevel(b.properties.displayLevel ?? b.properties.level)
+      return Number(bLevel === activeLevel) - Number(aLevel === activeLevel)
+    })[0] ?? null
+  )
+}
+
+function visiblePointFeatureFromEvent(event: MapLayerMouseEvent) {
+  return (
+    ((event.features ?? []) as GeoJsonFeature[]).find((feature) => isVisiblePointFeature(feature)) ??
+    null
+  )
+}
+
+function isVisiblePointFeature(feature?: GeoJsonFeature | null) {
+  if (!feature?.properties) return false
+  const level = normalizeMapLevel(feature.properties.displayLevel ?? feature.properties.level)
+  if (!level) return false
+  return visiblePointLevelsForZoom(map?.getZoom() ?? mapZoomLevel.value).includes(level)
 }
 
 function pointFeaturesAtPoint(point: MapMouseEvent['point']) {
   if (!map) return []
-  const pointLayers = POINT_INTERACTIVE_LAYERS.filter((layerId) => map?.getLayer(layerId))
+  const pointLayers = interactivePointLayerIdsForCurrentZoom()
   return pointLayers.length
     ? map.queryRenderedFeatures(point, { layers: pointLayers as unknown as string[] })
     : []
+}
+
+function interactivePointLayerIdsForCurrentZoom() {
+  const visibleLevels = new Set(visiblePointLevelsForZoom(map?.getZoom() ?? mapZoomLevel.value))
+  return POINT_INTERACTIVE_LAYERS.filter(
+    (layerId) => visibleLevels.has(pointLevelFromLayerId(layerId)) && map?.getLayer(layerId),
+  )
+}
+
+function visiblePointLevelsForZoom(zoom: number): MapDisplayLevel[] {
+  return visibleLevelsForZoom(zoom)
+}
+
+function pointLevelFromLayerId(layerId: string): MapDisplayLevel {
+  if (layerId.includes('-city-')) return 'city'
+  if (layerId.includes('-admin1-')) return 'admin1'
+  return 'country'
 }
 
 function bestRegionFeatureAtPoint(point: MapMouseEvent['point']) {
@@ -3488,51 +4831,73 @@ function bestRegionFeatureAtPoint(point: MapMouseEvent['point']) {
 
 function enrichRenderedRegionFeature(feature: GeoJsonFeature) {
   const props = feature.properties
-  const regionId = regionIdFromProperties(props)
-  const stat = regionId ? dataRegionStatById(regionId) : undefined
-  const level = String(props.level ?? stat?.level ?? props.boundaryLevel ?? '')
-  const geoKey = String(props.geoKey ?? props.geo_key ?? stat?.geoKey ?? '')
+  const rawLevel = normalizeMapLevel(props.boundaryLevel ?? props.level ?? props.sourceLevel)
+  const rawGeoKey = String(props.geoKey ?? props.geo_key ?? props.sourceGeoKey ?? '')
+  const rawRegionId = rawLevel && rawGeoKey ? `${rawLevel}|${rawGeoKey}` : regionIdFromProperties(props)
+  const stat = statFromFeatureProperties(props) ?? (rawRegionId ? dataRegionStatById(rawRegionId) : undefined)
+  const level = stat?.level ?? rawLevel
+  const geoKey = stat?.geoKey ?? rawGeoKey
+  const regionId = stat ? regionIdForStat(stat) : rawRegionId
+  const fallbackDisplayName = localizedPropertyName(props, geoKey)
+  const displayName = stat
+    ? localizedStatDisplayName(stat) || fallbackDisplayName
+    : level
+      ? localizedBoundaryName(feature, level) || fallbackDisplayName
+      : fallbackDisplayName
   return {
     ...feature,
     properties: {
       ...props,
       ...(stat ? statProperties(stat) : {}),
       region_id: regionId || (level && geoKey ? `${level}|${geoKey}` : ''),
-      boundaryLevel: level,
+      boundaryLevel: rawLevel || level,
+      sourceLevel: rawLevel || level,
+      sourceGeoKey: rawGeoKey || geoKey,
+      boundaryGeoKey: rawGeoKey || geoKey,
       level,
       geoKey,
       geo_key: geoKey,
-      displayName: stat?.displayName ?? props.displayName ?? props.display_name ?? geoKey,
+      displayName,
     },
   }
 }
 
 function setHoveredPoint(feature: GeoJsonFeature | null) {
   const nextId = feature ? pointFeatureStateId(feature) : null
-  if (hoveredPointId === nextId) return
+  const nextSourceId = feature ? pointFeatureSourceId(feature) : ''
+  if (hoveredPointId === nextId && hoveredPointSourceId === nextSourceId) return false
   clearHoveredPoint()
   hoveredPointId = nextId
-  if (nextId != null) {
-    map?.setFeatureState({ source: 'map-points', id: nextId }, { hover: true })
+  hoveredPointSourceId = nextId != null ? nextSourceId : ''
+  if (nextId != null && hoveredPointSourceId) {
+    map?.setFeatureState({ source: hoveredPointSourceId, id: nextId }, { hover: true })
   }
+  return true
 }
 
 function clearHoveredPoint() {
-  if (hoveredPointId != null) {
-    map?.setFeatureState({ source: 'map-points', id: hoveredPointId }, { hover: false })
+  if (hoveredPointId != null && hoveredPointSourceId) {
+    map?.setFeatureState({ source: hoveredPointSourceId, id: hoveredPointId }, { hover: false })
   }
   hoveredPointId = null
+  hoveredPointSourceId = ''
 }
 
 function setSelectedPoint(feature: GeoJsonFeature | null) {
   const nextId = feature ? pointFeatureStateId(feature) : null
-  if (selectedPointId != null && selectedPointId !== nextId) {
-    map?.setFeatureState({ source: 'map-points', id: selectedPointId }, { selected: false })
+  const nextSourceId = feature ? pointFeatureSourceId(feature) : ''
+  if (
+    selectedPointId != null &&
+    selectedPointSourceId &&
+    (selectedPointId !== nextId || selectedPointSourceId !== nextSourceId)
+  ) {
+    map?.setFeatureState({ source: selectedPointSourceId, id: selectedPointId }, { selected: false })
   }
   selectedPointId = nextId
+  selectedPointSourceId = nextId != null ? nextSourceId : ''
   selectedPointKey.value = feature ? regionFeatureKey(feature) : ''
-  if (nextId != null) {
-    map?.setFeatureState({ source: 'map-points', id: nextId }, { selected: true })
+  if (nextId != null && selectedPointSourceId) {
+    map?.setFeatureState({ source: selectedPointSourceId, id: nextId }, { selected: true })
   }
 }
 
@@ -3544,6 +4909,15 @@ function pointFeatureStateId(feature: GeoJsonFeature) {
   const id = feature.id ?? feature.properties.featureId
   if (typeof id === 'string' || typeof id === 'number') return id
   return null
+}
+
+function pointFeatureSourceId(feature: GeoJsonFeature) {
+  const sourceId = String(feature.properties.pointSourceId ?? '').trim()
+  if (sourceId) return sourceId
+  const displayLevel = normalizeMapLevel(feature.properties.displayLevel)
+  const featureLevel = normalizeMapLevel(feature.properties.level)
+  const level: MapDisplayLevel = displayLevel || featureLevel || activeMapLevel.value
+  return pointSourceId(level)
 }
 
 function setHoveredRegion(feature: GeoJsonFeature | null) {
@@ -3584,10 +4958,11 @@ function boundaryFeatureForStat(stat: MapRegionStat) {
 }
 
 function boundaryFeatureForProperties(props: Record<string, unknown>) {
-  const level = String(props.level ?? props.sourceLevel ?? '')
-  const geoKey = String(props.geoKey ?? props.sourceGeoKey ?? '')
+  const stat = statFromFeatureProperties(props)
+  const level = String(stat?.level ?? props.level ?? props.sourceLevel ?? '')
+  const geoKey = String(stat?.geoKey ?? props.geoKey ?? props.sourceGeoKey ?? '')
   if (!level || !geoKey) return null
-  return boundaryFeatureForLevelGeoKey(level, geoKey, statLikeFromProperties(props, level, geoKey))
+  return boundaryFeatureForLevelGeoKey(level, geoKey, stat ?? statLikeFromProperties(props, level, geoKey))
 }
 
 function statLikeFromProperties(
@@ -3595,30 +4970,35 @@ function statLikeFromProperties(
   level: string,
   geoKey: string,
 ): MapRegionStat | undefined {
-  const stat = buildStatIndex().get(`${level}|${geoKey}`)
+  const stat = findStatByLevelGeoKey(level, geoKey, props)
   if (stat) return stat
   if (level !== 'country' && props.parentGeoKey) {
-    return buildStatIndex().get(`${level}|${String(props.parentGeoKey)}`)
+    return findStatByLevelGeoKey(level, String(props.parentGeoKey), props)
   }
   return undefined
 }
 
 function regionReferenceFeatureFromProperties(props: Record<string, unknown>) {
-  const level = String(props.level ?? props.sourceLevel ?? props.boundaryLevel ?? '')
-  const geoKey = String(props.geoKey ?? props.sourceGeoKey ?? props.geo_key ?? '')
+  const rawLevel = normalizeMapLevel(props.boundaryLevel ?? props.level ?? props.sourceLevel)
+  const rawGeoKey = String(props.geoKey ?? props.sourceGeoKey ?? props.geo_key ?? '')
+  const stat = statFromFeatureProperties(props)
+  const level = stat?.level ?? rawLevel
+  const geoKey = stat?.geoKey ?? rawGeoKey
   if (!level || !geoKey) return null
   const regionId = `${level}|${geoKey}`
-  const stat = statLikeFromProperties(props, level, geoKey) ?? dataRegionStatById(regionId)
   return {
     type: 'Feature',
     properties: {
       ...(stat ? statProperties(stat) : {}),
       region_id: regionId,
-      boundaryLevel: level,
+      boundaryLevel: rawLevel || level,
+      sourceLevel: rawLevel || level,
+      sourceGeoKey: rawGeoKey || geoKey,
+      boundaryGeoKey: rawGeoKey || geoKey,
       level,
       geoKey,
       geo_key: geoKey,
-      displayName: stat?.displayName ?? props.displayName ?? props.display_name ?? geoKey,
+      displayName: stat ? localizedStatDisplayName(stat) : localizedPropertyName(props, geoKey),
       selected: true,
     },
     geometry: null,
@@ -3632,16 +5012,12 @@ function boundaryFeatureForLevelGeoKey(level: string, geoKey: string, stat?: Map
       ? (['countries'] as BoundaryName[])
       : level === 'city'
         ? (['chinaCities'] as BoundaryName[])
-        : geoKey.startsWith('china|')
+        : geoKey.startsWith('china|') || isChinaRegion(stat)
           ? (['chinaProvinces', 'admin1'] as BoundaryName[])
           : (['admin1'] as BoundaryName[])
   for (const name of names) {
-    const collection = getCleanBoundaryCollection(name)
-    if (!collection) continue
     const boundaryLevelValue = boundaryLevel(name)
-    const feature = collection.features.find(
-      (item) => featureGeoKey(item, boundaryLevelValue) === geoKey,
-    )
+    const feature = lookupBoundaryFeature(name, boundaryLevelValue, geoKey, stat)
     if (feature) return enrichSingleBoundaryFeature(feature, boundaryLevelValue, stat)
   }
   return null
@@ -3685,38 +5061,35 @@ function buildTooltipHtml(props: Record<string, unknown>) {
   if (isClusterFeature(props)) {
     const locationCount = formatNumber(Number(props.point_count ?? 0))
     const pointTotal = formatNumber(Number(props.clusterPointTotal ?? 0))
-    const recordTotal = formatNumber(Number(props.clusterRecordTotal ?? 0))
     const doiTotal = formatNumber(Number(props.clusterDoiTotal ?? 0))
     return `
       <div class="map-tooltip-card">
         <div class="map-tooltip-title">${escapeHtml(ui.value.clusterTitle)}</div>
         <div class="map-tooltip-sub">${escapeHtml(ui.value.points)} ${pointTotal} · ${escapeHtml(ui.value.clusterCount)} ${locationCount}</div>
-        <div class="map-tooltip-grid">
-          <div class="map-tooltip-metric"><span>${escapeHtml(ui.value.records)}</span><b>${recordTotal}</b></div>
+        <div class="map-tooltip-grid single">
           <div class="map-tooltip-metric"><span>${escapeHtml(ui.value.literature)}</span><b>${doiTotal}</b></div>
         </div>
         <div class="map-tooltip-hint">${escapeHtml(ui.value.clusterClickHint)}</div>
       </div>
     `
   }
-  const title = escapeHtml(String(props.displayName ?? ui.value.unnamedRegion))
-  if (props.pndlGeomean == null) {
-    return `
-      <div class="map-tooltip-card muted">
-        <strong>${title}</strong>
-        <span>${escapeHtml(ui.value.noPndlForSelection)}</span>
-      </div>
-    `
-  }
+  const title = escapeHtml(
+    singleLanguageLabel(String(props.displayName ?? ''), locale.value) ||
+      String(props.displayName ?? ui.value.unnamedRegion),
+  )
   const precision = escapeHtml(String(props.locationPrecision ?? ui.value.locationPrecision))
-  const biomarker = escapeHtml(
+  const biomarkerLabel = escapeHtml(
     displayOptionLabel(String(props.biomarkerLabel ?? selectedBiomarkerLabel.value)),
   )
-  const geomean = formatCompact(Number(props.pndlGeomean))
-  const records = formatNumber(Number(props.recordCount ?? 0))
+  const biomarkerCount = Number(props.biomarkerCount ?? 0)
+  const biomarker = biomarkerCount > 0 ? `${biomarkerLabel}（${formatNumber(biomarkerCount)}）` : biomarkerLabel
+  const median = formatCompact(Number(props.pndlMedian))
   const doi = formatNumber(Number(props.doiCount ?? 0))
   const points = formatNumber(Number(props.pointCount ?? 1))
-  const cities = formatNumber(Number(props.cityCount ?? 0))
+  const heatLine =
+    props.pndlMedian == null
+      ? ''
+      : `<div class="map-tooltip-heat"><span>${escapeHtml(ui.value.pndlMedian)}</span><b>${median} mg/day/1000 inh</b></div>`
   return `
     <div class="map-tooltip-card">
       <div class="map-tooltip-title">${title}</div>
@@ -3724,13 +5097,11 @@ function buildTooltipHtml(props: Record<string, unknown>) {
       <div class="map-tooltip-grid">
         <div class="map-tooltip-metric"><span>${escapeHtml(ui.value.points)}</span><b>${points}</b></div>
         <div class="map-tooltip-metric"><span>${escapeHtml(ui.value.literature)}</span><b>${doi}</b></div>
-        <div class="map-tooltip-metric"><span>${escapeHtml(ui.value.records)}</span><b>${records}</b></div>
       </div>
       <div class="map-tooltip-extra">
         <div>${escapeHtml(ui.value.biomarker)}：<b>${biomarker}</b></div>
-        <div>${escapeHtml(ui.value.cities)}：<b>${cities}</b></div>
       </div>
-      <div class="map-tooltip-heat"><span>${escapeHtml(ui.value.pndlGeomean)}</span><b>${geomean} mg/day/1000 inh</b></div>
+      ${heatLine}
       <div class="map-tooltip-hint">${escapeHtml(ui.value.clickExploreHint)}</div>
     </div>
   `
@@ -3743,6 +5114,7 @@ function closeDetail(options: { clearSelection?: boolean } = {}) {
     clickTimer = undefined
   }
   detailController?.abort()
+  detailRequestId += 1
   detailController = null
   isLoadingDetail.value = false
   selectedDetail.value = null
@@ -3780,7 +5152,11 @@ function detailBiomarkerPill(item: MapTopBiomarker) {
 }
 
 function detailBiomarkerMeta(item: MapTopBiomarker) {
-  const path = [displayOptionLabel(item.category), displayOptionLabel(item.subcategory)]
+  const path = [
+    displayOptionLabel(item.targetClass),
+    displayOptionLabel(item.category),
+    displayOptionLabel(item.subcategory),
+  ]
     .filter(Boolean)
     .join(' / ')
   const counts = [
@@ -3793,6 +5169,205 @@ function detailBiomarkerMeta(item: MapTopBiomarker) {
 
 function pndlRankingKey(item: MapPndlRankingItem) {
   return `${item.level}|${item.geoKey}`
+}
+
+function filteredPndlComparisonRows(
+  comparison: MapPndlComparison | null | undefined,
+  rows: MapPndlRankingItem[],
+) {
+  if (!shouldFilterToDetailAdmin(comparison)) return rows
+  void boundaryVersion.value
+  const selectedAdminKey = detailAdminComparisonKey()
+  if (!selectedAdminKey) return rows
+  const filteredRows = rows.filter(
+    (item) => item.level === 'city' && adminComparisonKeyForPndlItem(item) === selectedAdminKey,
+  )
+  return filteredRows.length ? rerankPndlRows(filteredRows) : rows
+}
+
+function shouldFilterToDetailAdmin(comparison: MapPndlComparison | null | undefined) {
+  if (!comparison || detailRegion.value?.level !== 'city') return false
+  const key = String(comparison.key ?? '').toLowerCase()
+  const label = `${comparison.label ?? ''} ${comparison.note ?? ''}`.toLowerCase()
+  return key === 'parent-city' || (/省|州|province|state|admin/.test(label) && /城市|city/.test(label))
+}
+
+function rerankPndlRows(rows: MapPndlRankingItem[]) {
+  return rows.map((item, index) => ({ ...item, rank: index + 1 }))
+}
+
+function detailAdminComparisonKey() {
+  const region = detailRegion.value
+  if (!region) return ''
+  return (
+    adminComparisonKeyForRegion(region) ||
+    adminGeoKeyFromCountryProvince(
+      region.country || detailSourceCountry(),
+      region.province || detailSourceProvince(),
+    )
+  )
+}
+
+function detailSourceCountry() {
+  return (
+    selectedDetail.value?.sourceRecords?.find((record) => record.country)?.country ||
+    selectedDetail.value?.sources?.find((record) => record.country)?.country ||
+    ''
+  )
+}
+
+function detailSourceProvince() {
+  return (
+    selectedDetail.value?.sourceRecords?.find((record) => record.province)?.province ||
+    selectedDetail.value?.sources?.find((record) => record.province)?.province ||
+    ''
+  )
+}
+
+function adminComparisonKeyForPndlItem(item: MapPndlRankingItem) {
+  const stat = findStatByLevelGeoKey(item.level, item.geoKey, {
+    display_name: item.displayName,
+    name: item.displayName,
+  })
+  return adminComparisonKeyForRegion(stat ?? pndlItemStatLike(item))
+}
+
+function pndlItemStatLike(item: MapPndlRankingItem) {
+  return {
+    level: item.level,
+    geoKey: item.geoKey,
+    parentGeoKey: null,
+    displayName: item.displayName,
+    country: item.geoKey.split('|')[0] || null,
+    province: null,
+    city: item.level === 'city' ? item.displayName : null,
+    category: selection.category,
+    subcategory: selection.subcategory,
+    biomarkerKey: selection.biomarkerKey,
+    biomarkerLabel: selectedBiomarkerLabel.value,
+    yearLabel: selection.year,
+    pndlMedianMgD1000inh: item.pndlMedianMgD1000inh,
+    recordCount: item.recordCount,
+    doiCount: item.doiCount,
+    pointCount: item.pointCount,
+    yearCount: item.yearCount,
+    pndlSources: item.pndlSources,
+  } as MapRegionStat
+}
+
+function adminComparisonKeyForRegion(row: MapRegionStat) {
+  if (row.level === 'admin1') return row.geoKey
+  if (row.level !== 'city') return ''
+  if (row.parentGeoKey?.includes('|')) return row.parentGeoKey
+  return (
+    inferredChinaCityAdminKey(row) ||
+    adminGeoKeyFromCountryProvince(row.country || countryGroupKey(row), row.province)
+  )
+}
+
+function adminGeoKeyFromCountryProvince(country: string | null | undefined, province: string | null | undefined) {
+  const countryKey = normalizeCountryComparisonKey(country)
+  const provinceAlias = normalizeGeoAlias(String(province ?? ''))
+  if (!countryKey || !provinceAlias) return ''
+  const collections = [getCleanBoundaryCollection('chinaProvinces'), getCleanBoundaryCollection('admin1')]
+  for (const collection of collections) {
+    const match = collection?.features.find((feature) => {
+      const props = feature.properties
+      const featureCountry = normalizeCountryComparisonKey(String(props.country_key ?? props.country_display ?? ''))
+      if (featureCountry && featureCountry !== countryKey) return false
+      return [featureGeoKey(feature, 'admin1'), props.region_key, props.display_name, props.name]
+        .filter(Boolean)
+        .map((value) => normalizeGeoAlias(String(value)))
+        .some((alias) => alias === provinceAlias)
+    })
+    if (match) return featureGeoKey(match, 'admin1')
+  }
+  return countryKey === 'china' ? `china|${provinceAlias}` : ''
+}
+
+function normalizeCountryComparisonKey(value: string | null | undefined) {
+  const alias = normalizeGeoAlias(String(value ?? ''))
+  if (!alias) return ''
+  if (alias === 'china' || alias === '中国') return 'china'
+  return alias
+}
+
+function inferredChinaCityAdminKey(row: MapRegionStat) {
+  if (row.level !== 'city' || countryGroupKey(row) !== 'china') return ''
+  if (cityAdminKeyCacheVersion !== boundaryVersion.value) {
+    cityAdminKeyCache.clear()
+    cityAdminKeyCacheVersion = boundaryVersion.value
+  }
+  const cacheKey = `${row.geoKey}|${normalizeGeoAlias(row.displayName)}|${normalizeGeoAlias(row.city ?? '')}`
+  if (cityAdminKeyCache.has(cacheKey)) return cityAdminKeyCache.get(cacheKey) ?? ''
+  const cityFeature = boundaryFeatureForLevelGeoKey(row.level, row.geoKey, row)
+  const candidatePoints = uniqueCoordinateCandidates([
+    row.longitude != null && row.latitude != null
+      ? ([Number(row.longitude), Number(row.latitude)] as [number, number])
+      : null,
+    cityFeature ? labelPointForGeometry(cityFeature.geometry) : null,
+    cityFeature ? bboxCenter(featureBbox(cityFeature.geometry)) : null,
+  ])
+  const provinces = getCleanBoundaryCollection('chinaProvinces')
+  const provinceFeature = provinces
+    ? candidatePoints
+        .map((point) =>
+          provinces.features.find((feature) => {
+            const bbox = geometryBbox(feature.geometry)
+            return bbox && pointWithinBbox(point, bbox) && pointInGeometry(point, feature.geometry)
+          }),
+        )
+        .find(Boolean)
+    : null
+  const adminKey = provinceFeature ? featureGeoKey(provinceFeature, 'admin1') : ''
+  cityAdminKeyCache.set(cacheKey, adminKey)
+  return adminKey
+}
+
+function uniqueCoordinateCandidates(points: Array<[number, number] | null>) {
+  const seen = new Set<string>()
+  return points.filter((point): point is [number, number] => {
+    if (!point || !Number.isFinite(point[0]) || !Number.isFinite(point[1])) return false
+    const key = `${point[0].toFixed(5)}|${point[1].toFixed(5)}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function ensureSelectedPndlChartRow(rows: MapPndlRankingItem[]) {
+  if (!hasSpecificBiomarker.value || activePndlComparison.value?.highlightSelected === false) {
+    return rows
+  }
+  const comparisonSelectedId = activePndlComparison.value?.selectedRegionId ?? ''
+  const region = detailRegion.value
+  const regionId = region ? `${region.level}|${region.geoKey}` : ''
+  const selectedId = comparisonSelectedId || regionId || selectedRegionId() || selectedPointKey.value
+  if (!selectedId || rows.some((item) => pndlRankingKey(item) === selectedId || item.selected)) {
+    return rows
+  }
+  if (!region || selectedId !== regionId) return rows
+  const value = Number(region.pndlMedianMgD1000inh ?? 0)
+  if (!Number.isFinite(value) || value <= 0) return rows
+  return [
+    ...rows,
+    {
+      rank: rows.length + 1,
+      level: region.level,
+      geoKey: region.geoKey,
+      displayName: localizedStatDisplayName(region),
+      pndlMedianMgD1000inh: value,
+      recordCount: region.recordCount,
+      doiCount: region.doiCount,
+      pointCount: region.pointCount,
+      yearCount: region.yearCount,
+      pndlRecordCount: region.pndlRecordCount,
+      pndlDoiCount: region.pndlDoiCount,
+      pndlPointCount: region.pndlPointCount,
+      pndlYearCount: region.pndlYearCount,
+      selected: true,
+    },
+  ]
 }
 
 function selectPndlChartDisplayRows(rows: MapPndlRankingItem[]) {
@@ -3821,10 +5396,35 @@ function isPndlChartItemSelected(item: MapPndlRankingItem) {
 
 function pndlColumnTooltip(item: MapPndlRankingItem) {
   return [
-    item.displayName,
-    `PNDL ${formatCompact(item.pndlGeomeanMgD1000inh)} mg/day/1000 inh`,
-    `${ui.value.records} ${formatNumber(item.recordCount ?? 0)}；${ui.value.literature} ${formatNumber(item.doiCount ?? 0)}；${ui.value.points} ${formatNumber(item.pointCount ?? 0)}；${ui.value.year} ${formatNumber(item.yearCount ?? 0)}`,
+    localizedPndlItemDisplayName(item),
+    `PNDL ${formatCompact(item.pndlMedianMgD1000inh)} mg/day/1000 inh`,
+    `${ui.value.records} ${formatNumber(item.pndlRecordCount ?? item.recordCount ?? 0)}；${ui.value.literature} ${formatNumber(item.pndlDoiCount ?? item.doiCount ?? 0)}；${ui.value.points} ${formatNumber(item.pndlPointCount ?? item.pointCount ?? 0)}；${ui.value.year} ${formatNumber(item.pndlYearCount ?? item.yearCount ?? 0)}`,
   ].join('\n')
+}
+
+function showPndlColumnTooltip(item: MapPndlRankingItem, event: MouseEvent) {
+  const container = pndlChartScrollRef.value
+  const containerRect = container?.getBoundingClientRect()
+  const tooltipWidth = 238
+  const tooltipHeight = 82
+  const rawX = containerRect ? event.clientX - containerRect.left : event.offsetX
+  const rawY = containerRect ? event.clientY - containerRect.top : event.offsetY
+  const maxX = Math.max(tooltipWidth / 2 + 8, (containerRect?.width ?? 320) - tooltipWidth / 2 - 8)
+  const maxY = Math.max(tooltipHeight + 12, (containerRect?.height ?? 300) - 10)
+  pndlColumnTooltipState.value = {
+    visible: true,
+    text: pndlColumnTooltip(item),
+    x: Math.min(Math.max(rawX, tooltipWidth / 2 + 8), maxX),
+    y: Math.min(Math.max(rawY - 16, tooltipHeight + 12), maxY),
+  }
+}
+
+function hidePndlColumnTooltip() {
+  if (!pndlColumnTooltipState.value.visible) return
+  pndlColumnTooltipState.value = {
+    ...pndlColumnTooltipState.value,
+    visible: false,
+  }
 }
 
 function scrollSelectedPndlColumnIntoView() {
@@ -3857,6 +5457,7 @@ function pndlChartPercent(value?: number | null) {
 
 async function applyDetailBiomarker(item: MapTopBiomarker) {
   if (!canApplyDetailBiomarker(item)) return
+  const nextTargetClass = item.targetClass || selection.targetClass || DEFAULT_SELECTION.targetClass
   const nextCategory = item.category || selection.category || ALL_CATEGORY_LABEL
   const nextSubcategory = item.subcategory || ALL_SUBCATEGORY_LABEL
   pinnedBiomarkerOption.value = {
@@ -3868,7 +5469,7 @@ async function applyDetailBiomarker(item: MapTopBiomarker) {
   preserveSelectionOnNextSelectionChange = true
   closeDetail({ clearSelection: false })
   Object.assign(selection, {
-    targetClass: selection.targetClass || DEFAULT_SELECTION.targetClass,
+    targetClass: nextTargetClass,
     category: nextCategory,
     subcategory: nextSubcategory,
     biomarkerKey: item.biomarkerKey,
@@ -3943,7 +5544,11 @@ function handleMapMouseMove(event: MapMouseEvent) {
   pendingCursorPoint = [event.lngLat.lng, event.lngLat.lat]
   pendingCursorPixel = [event.point.x, event.point.y]
   scheduleLiveMapStatusUpdate()
-  updateRegionHoverFromPoint(event)
+  if (hoveredPointId != null && !pointFeaturesAtPoint(event.point).length) {
+    clearHoveredPoint()
+    setHoveredRegion(null)
+    hideTooltip()
+  }
 }
 
 function handleMapContainerMouseMove(event: MouseEvent) {
@@ -4010,15 +5615,25 @@ function cursorCoordinatePoint() {
 }
 
 function countryAtPoint(point: [number, number]) {
-  const countries = getCleanBoundaryCollection('countries')
-  if (!countries) return null
-  const feature = countries.features.find((item) => {
-    const bbox = geometryBbox(item.geometry)
-    return bbox && pointWithinBbox(point, bbox) && pointInGeometry(point, item.geometry)
-  })
+  const feature = getBoundaryHitIndex('countries').find(
+    (item) => pointWithinBbox(point, item.bbox) && pointInGeometry(point, item.feature.geometry),
+  )?.feature
   if (!feature) return null
-  const name = String(feature.properties.display_name ?? feature.properties.name ?? '').trim()
+  const name = localizedBoundaryName(feature, 'country').trim()
   return name || null
+}
+
+function getBoundaryHitIndex(name: BoundaryName) {
+  const cached = boundaryHitIndexCache.get(name)
+  if (cached?.boundaryVersion === boundaryVersion.value) return cached.items
+  const collection = getCleanBoundaryCollection(name)
+  const items =
+    collection?.features.flatMap((feature) => {
+      const bbox = geometryBbox(feature.geometry)
+      return bbox ? [{ feature, bbox }] : []
+    }) ?? []
+  boundaryHitIndexCache.set(name, { boundaryVersion: boundaryVersion.value, items })
+  return items
 }
 
 function pointWithinBbox(
@@ -4029,6 +5644,7 @@ function pointWithinBbox(
 }
 
 function pointInGeometry(point: [number, number], geometry: unknown) {
+  if (!geometry || typeof geometry !== 'object') return false
   const typedGeometry = geometry as { type?: string; coordinates?: unknown }
   if (typedGeometry.type === 'Polygon' && Array.isArray(typedGeometry.coordinates)) {
     return pointInPolygon(point, typedGeometry.coordinates)
@@ -4074,8 +5690,9 @@ function setMapMode(mode: MapMode) {
     mapReady.value = true
     addMapSourcesAndLayers()
     bindLayerEvents()
-    void ensureBoundary('countries')
-    ensureFallbackBoundaries()
+    syncActiveMapLevel(nextZoom)
+    void ensureBoundary('countries', true)
+    ensureFallbackBoundaries(true)
     updateMapData()
     syncAtmosphereStyle()
     map.setMaxZoom(currentMapMaxZoom())
@@ -4142,12 +5759,12 @@ function applyViewLayerVisibility() {
 
 function layerIdsForViewGroup(group: 'labels' | 'boundaries') {
   const fallbackIds = group === 'labels' ? [...LABEL_LAYER_IDS] : [...BOUNDARY_LAYER_IDS]
-  if (basemapMode === 'geojson') return fallbackIds
+  if (basemapMode === 'geojson' || (group === 'labels' && locale.value === 'zh')) return fallbackIds
   const layers = map?.getStyle().layers ?? []
   return layers.flatMap((layer) => {
     if (!isStyleLayer(layer)) return []
     const id = String(layer.id)
-    if (PNDL_LAYER_IDS.includes(id as (typeof PNDL_LAYER_IDS)[number])) return []
+    if (PNDL_LAYER_IDS.includes(id)) return []
     const type = String((layer as { type?: string }).type ?? '')
     if (group === 'labels') return type === 'symbol' ? [id] : []
     return type === 'line' && /admin|boundar|border|country|province|state/i.test(id) ? [id] : []
@@ -4212,15 +5829,99 @@ function displayOptionLabel(value?: string | null) {
   return normalized
 }
 
+function localizedBackendLabel(value?: string | null) {
+  const normalized = String(value ?? '').trim()
+  if (!normalized) return ''
+  const compact = normalized.replace(/\s+/g, '')
+  return (
+    BACKEND_LABEL_TRANSLATIONS[locale.value][normalized] ||
+    BACKEND_LABEL_TRANSLATIONS[locale.value][compact] ||
+    displayOptionLabel(normalized)
+  )
+}
+
+function localizedPndlComparisonLabel(comparison: MapPndlComparison) {
+  return (
+    PNDL_COMPARISON_LABELS[locale.value][comparison.key] ||
+    localizedBackendLabel(comparison.label) ||
+    comparison.key
+  )
+}
+
+function localizedSummaryCardLabel(card: MapSummaryCard) {
+  return localizedBackendLabel(card.label)
+}
+
+function localizedSummaryCardNote(card: MapSummaryCard) {
+  return localizedBackendLabel(card.note)
+}
+
+function localizedPndlItemDisplayName(item: MapPndlRankingItem) {
+  const stat = findStatByLevelGeoKey(item.level, item.geoKey, {
+    display_name: item.displayName,
+    name: item.displayName,
+  })
+  if (stat) return localizedStatDisplayName(stat) || item.displayName
+  const feature = boundaryFeatureForLevelGeoKey(item.level, item.geoKey, pndlItemStatLike(item))
+  if (feature) return localizedBoundaryName(feature, item.level) || item.displayName
+  return singleLanguageLabel(item.displayName, locale.value) || item.displayName
+}
+
 function isClusterFeature(props: Record<string, unknown>) {
   return Boolean(props.cluster || props.point_count)
 }
 
 function detailTargetFromFeature(feature: GeoJsonFeature) {
+  return canonicalDetailTargetFromFeature(feature)
+}
+
+function canonicalDetailTargetFromFeature(feature: GeoJsonFeature) {
   const props = feature.properties ?? {}
-  const level = normalizeMapLevel(props.level ?? props.boundaryLevel ?? props.sourceLevel)
-  const geoKey = String(props.geoKey ?? props.geo_key ?? props.sourceGeoKey ?? '')
-  return level && geoKey ? { level, geoKey } : null
+  const featureStat = findStatByFeatureId(String(props.featureId ?? ''))
+  if (featureStat) {
+    return { level: featureStat.level, geoKey: featureStat.geoKey, stat: featureStat }
+  }
+  const explicitRegionId = String(props.region_id ?? '')
+  if (explicitRegionId) {
+    const [levelValue, ...geoKeyParts] = explicitRegionId.split('|')
+    const level = normalizeMapLevel(levelValue)
+    const geoKey = geoKeyParts.join('|')
+    const stat = level && geoKey ? buildStatIndex().get(`${level}|${geoKey}`) : undefined
+    if (level && geoKey) return { level, geoKey, stat }
+  }
+
+  const candidates: Array<[unknown, unknown]> = [
+    [props.level, props.geoKey],
+    [props.level, props.geo_key],
+    [props.sourceLevel, props.sourceGeoKey],
+    [props.boundaryLevel, props.geoKey],
+    [props.boundaryLevel, props.geo_key],
+  ]
+  for (const [levelValue, geoKeyValue] of candidates) {
+    const level = normalizeMapLevel(levelValue)
+    const geoKey = String(geoKeyValue ?? '')
+    if (!level || !geoKey) continue
+    return { level, geoKey, stat: buildStatIndex().get(`${level}|${geoKey}`) }
+  }
+  return null
+}
+
+function statHasBackendData(stat: MapRegionStat) {
+  return (
+    Number(stat.recordCount ?? 0) > 0 ||
+    Number(stat.pointCount ?? 0) > 0 ||
+    Number(stat.doiCount ?? 0) > 0 ||
+    Number(stat.pndlMedianMgD1000inh ?? 0) > 0
+  )
+}
+
+function detailHasBackendData(detail: MapDetailResponse | null) {
+  if (!detail) return false
+  if (detail.cluster && (detail.locations?.length ?? 0) > 0) return true
+  if (detail.topBiomarkers?.length) return true
+  const region = detail.region
+  if (!region) return false
+  return statHasBackendData(region)
 }
 
 function normalizeMapLevel(value: unknown): MapRegionStat['level'] | '' {
@@ -4280,6 +5981,7 @@ function labelPointForGeometry(geometry: unknown): [number, number] | null {
 }
 
 function primaryPolygonRings(geometry: unknown): unknown[] | null {
+  if (!geometry || typeof geometry !== 'object') return null
   const typedGeometry = geometry as { type?: string; coordinates?: unknown }
   if (typedGeometry.type === 'Polygon' && Array.isArray(typedGeometry.coordinates)) {
     return typedGeometry.coordinates
@@ -4387,6 +6089,7 @@ function pointInRing([lng, lat]: [number, number], ring: [number, number][]) {
 }
 
 function primaryGeometryPoints(geometry: unknown) {
+  if (!geometry || typeof geometry !== 'object') return []
   const typedGeometry = geometry as { type?: string; coordinates?: unknown }
   if (typedGeometry.type === 'MultiPolygon' && Array.isArray(typedGeometry.coordinates)) {
     const polygons = typedGeometry.coordinates
@@ -4551,7 +6254,8 @@ function escapeHtml(value: string) {
     <section
       class="map-stage"
       :class="{
-        'detail-open': isDetailOpen,
+        'compact-detail-open': isCompactDetailOpen,
+        'full-detail-open': isFullDetailOpen,
         'filters-closed': !isFilterOpen,
         switching: isMapStyleSwitching,
         globe: mapMode === 'globe',
@@ -4724,6 +6428,24 @@ function escapeHtml(value: string) {
         {{ boundaryLoadingMessage }}
       </p>
 
+      <aside
+        v-if="canShowHeatLegend"
+        class="map-heat-legend"
+        :style="{ '--heat-gradient': heatLegendGradient }"
+        aria-live="polite"
+      >
+        <strong>{{ ui.heatLegendTitle }}</strong>
+        <div class="heat-legend-strip" aria-hidden="true"></div>
+        <div class="heat-legend-scale">
+          <span v-for="band in heatLegendBands" :key="band.label">
+            <i>{{ band.label }}</i>
+            <b>{{ band.value }}</b>
+          </span>
+        </div>
+        <p>{{ ui.heatLegendNote }}</p>
+        <small>{{ ui.heatLegendUnit }}</small>
+      </aside>
+
       <div class="map-status-chip" aria-live="polite">
         <strong>{{ formattedMapStatus.label }}</strong>
         <span>{{ ui.latitude }} {{ formattedMapStatus.latitude }}</span>
@@ -4771,9 +6493,9 @@ function escapeHtml(value: string) {
           <p v-if="compactDetailCallout" class="detail-callout">{{ compactDetailCallout }}</p>
           <div v-if="compactSummaryCards.length" class="detail-summary-grid compact">
             <article v-for="card in compactSummaryCards" :key="card.label">
-              <span>{{ card.label }}</span>
+              <span>{{ localizedSummaryCardLabel(card) }}</span>
               <strong>{{ card.value }}</strong>
-              <small v-if="card.note">{{ card.note }}</small>
+              <small v-if="card.note">{{ localizedSummaryCardNote(card) }}</small>
             </article>
           </div>
 
@@ -4828,13 +6550,7 @@ function escapeHtml(value: string) {
 
             <div v-if="selectedDetail" class="full-detail-content">
               <section class="detail-callout-section">
-                <p class="detail-callout">
-                  {{
-                    isClusterDetail
-                      ? compactDetailCallout
-                      : `${detailSubtitle} · ${filterSummary}`
-                  }}
-                </p>
+                <p class="detail-callout">{{ isClusterDetail ? compactDetailCallout : detailSubtitle }}</p>
               </section>
 
               <section v-if="canShowPndlComparisonSection" class="pndl-chart-section">
@@ -4851,7 +6567,7 @@ function escapeHtml(value: string) {
                       :class="{ active: activePndlComparison?.key === mode.key }"
                       @click="activePndlComparisonKey = mode.key"
                     >
-                      {{ mode.label }}
+                      {{ localizedPndlComparisonLabel(mode) }}
                     </button>
                   </div>
                 </div>
@@ -4865,6 +6581,7 @@ function escapeHtml(value: string) {
                     ref="pndlChartScrollRef"
                     class="pndl-column-chart"
                     :style="pndlChartColumnStyle"
+                    @scroll="hidePndlColumnTooltip"
                   >
                     <article
                       v-for="item in pndlChartDisplayRows"
@@ -4872,104 +6589,115 @@ function escapeHtml(value: string) {
                       class="pndl-column-item"
                       :class="{ selected: isPndlChartItemSelected(item) }"
                       :data-chart-key="pndlRankingKey(item)"
-                      :data-tooltip="pndlColumnTooltip(item)"
+                      @mouseenter="showPndlColumnTooltip(item, $event)"
+                      @mousemove="showPndlColumnTooltip(item, $event)"
+                      @mouseleave="hidePndlColumnTooltip"
                     >
                       <div class="pndl-column-barbox">
                         <i
                           class="pndl-column-bar"
-                          :style="{ height: `${pndlChartPercent(item.pndlGeomeanMgD1000inh)}%` }"
+                          :style="{ height: `${pndlChartPercent(item.pndlMedianMgD1000inh)}%` }"
                         ></i>
                       </div>
-                      <strong>{{ item.displayName }}</strong>
-                      <span>{{ formatCompact(item.pndlGeomeanMgD1000inh) }}</span>
+                      <strong>{{ localizedPndlItemDisplayName(item) }}</strong>
+                      <span>{{ formatCompact(item.pndlMedianMgD1000inh) }}</span>
                     </article>
+                    <div
+                      v-if="pndlColumnTooltipState.visible"
+                      class="pndl-column-tooltip"
+                      :style="{
+                        left: `${pndlColumnTooltipState.x}px`,
+                        top: `${pndlColumnTooltipState.y}px`,
+                      }"
+                    >
+                      {{ pndlColumnTooltipState.text }}
+                    </div>
                   </div>
                 </div>
+                <p v-else class="pndl-status-card">{{ ui.pndlChartNoData }}</p>
               </section>
 
               <section v-if="!isClusterDetail || !selectedDetail.locations?.length">
                 <h3>{{ isClusterDetail ? ui.clusterOverview : ui.summaryOverview }}</h3>
                 <div class="detail-summary-grid">
                   <article v-for="card in fullDetailSummaryCards" :key="card.label">
-                    <span>{{ card.label }}</span>
+                    <span>{{ localizedSummaryCardLabel(card) }}</span>
                     <strong>{{ card.value }}</strong>
-                    <small v-if="card.note">{{ card.note }}</small>
+                    <small v-if="card.note">{{ localizedSummaryCardNote(card) }}</small>
                   </article>
                 </div>
               </section>
 
-              <section
-                v-if="
-                  hasSpecificBiomarker &&
-                  !isClusterDetail &&
-                  selectedDetail.categoryBreakdown?.length
-                "
-              >
-                <h3>{{ ui.categoryBreakdown }}</h3>
-                <div class="breakdown-list">
-                  <article v-for="item in selectedDetail.categoryBreakdown" :key="item.label">
-                    <span>{{ item.label }}</span>
-                    <strong>{{ formatNumber(item.recordCount) }}</strong>
-                    <i :style="{ width: `${Math.min(Number(item.percentage ?? 0), 100)}%` }"></i>
-                  </article>
-                </div>
-              </section>
-
-              <section v-if="!isClusterDetail && selectedDetail.topBiomarkers?.length">
-                <h3>{{ ui.topBiomarkers }}</h3>
-                <div class="detail-table">
-                  <div class="detail-table-row head biomarker">
-                    <span>biomarker</span>
-                    <span>CAS</span>
-                    <span>{{ ui.category }}</span>
-                    <span>{{ ui.records }}</span>
-                  </div>
-                  <div
-                    v-for="item in selectedDetail.topBiomarkers"
-                    :key="item.biomarkerKey"
-                    class="detail-table-row biomarker"
+              <section v-if="!isClusterDetail && selectedDetail.biomarkerProperties?.length">
+                <h3>{{ ui.physicochemicalProperties }}</h3>
+                <div class="physchem-grid">
+                  <article
+                    v-for="item in selectedDetail.biomarkerProperties"
+                    :key="`property-${item.biomarkerKey}`"
+                    class="physchem-card"
                   >
-                    <strong>{{ item.biomarkerLabel }}</strong>
-                    <span>{{ item.biomarkerCas || ui.noData }}</span>
-                    <span>{{ item.category || ui.noData }}</span>
-                    <span>{{ formatNumber(item.recordCount) }}</span>
-                  </div>
+                    <div class="physchem-card-head">
+                      <strong>{{ item.biomarkerLabel }}</strong>
+                      <span>{{ item.biomarkerCas || ui.noData }}</span>
+                    </div>
+                    <small>{{ displayOptionLabel(item.category) }} / {{ displayOptionLabel(item.subcategory) }}</small>
+                    <div class="physchem-values">
+                      <span
+                        v-for="value in item.values"
+                        :key="value.text"
+                        :title="value.text"
+                      >
+                        {{ value.text }}
+                      </span>
+                    </div>
+                  </article>
                 </div>
               </section>
 
               <section v-if="canRenderTrendChart" class="trend-chart-section">
                 <div class="section-title-row">
                   <div>
-                    <h3>{{ activeTrendSeries?.label || 'PNDL年度趋势' }}</h3>
+                    <h3>{{ ui.annualTrends }}</h3>
                     <span>{{ selectedBiomarkerLabel }}</span>
                   </div>
                 </div>
-                <div class="trend-chart-card">
-                  <svg viewBox="-24 -18 728 258" role="img" aria-label="PNDL年度趋势">
-                    <line x1="0" y1="210" x2="680" y2="210" class="trend-axis"></line>
-                    <line x1="0" y1="0" x2="0" y2="210" class="trend-axis"></line>
-                    <polyline :points="trendPolyline" class="trend-line"></polyline>
-                    <g
-                      v-for="point in trendChartPoints"
-                      :key="point.year"
-                      class="trend-point"
-                    >
-                      <circle :cx="point.x" :cy="point.y" r="5"></circle>
-                      <text :x="point.x" :y="point.y - 12">{{ point.label }}</text>
-                      <text :x="point.x" y="236">{{ point.year }}</text>
-                    </g>
-                  </svg>
+                <div class="trend-chart-grid">
+                  <article
+                    v-for="series in renderableTrendSeries"
+                    :key="series.metricKey"
+                    class="trend-chart-card"
+                  >
+                    <div class="trend-card-head">
+                      <strong>{{ localizedBackendLabel(series.label) }}</strong>
+                      <span>{{ series.unit }}</span>
+                    </div>
+                    <svg viewBox="-24 -18 728 258" role="img" :aria-label="localizedBackendLabel(series.label)">
+                      <line x1="0" y1="210" x2="680" y2="210" class="trend-axis"></line>
+                      <line x1="0" y1="0" x2="0" y2="210" class="trend-axis"></line>
+                      <polyline :points="trendPolylineForSeries(series)" class="trend-line"></polyline>
+                      <g
+                        v-for="point in trendChartPointsForSeries(series)"
+                        :key="point.year"
+                        class="trend-point"
+                      >
+                        <title>{{ trendPointTooltip(series, point) }}</title>
+                        <circle :cx="point.x" :cy="point.y" r="5"></circle>
+                        <text :x="point.x" :y="point.y - 12">{{ point.label }}</text>
+                        <text :x="point.x" y="236">{{ point.year }}</text>
+                      </g>
+                    </svg>
+                  </article>
                 </div>
               </section>
 
-              <section v-if="selectedDetail.locations?.length">
+              <section v-if="isClusterDetail && selectedDetail.locations?.length">
                 <h3>{{ ui.locationsInCluster }}</h3>
                 <div class="location-chip-list">
                   <span
                     v-for="item in selectedDetail.locations.slice(0, 40)"
                     :key="`${item.level}-${item.geoKey}`"
                   >
-                    {{ item.displayName }}
+                    {{ localizedStatDisplayName(item) || item.displayName }}
                   </span>
                 </div>
               </section>
@@ -4984,7 +6712,7 @@ function escapeHtml(value: string) {
                 <div class="pndl-ranking-table">
                   <div class="pndl-ranking-row head">
                     <span>{{ ui.pndlRanking }}</span>
-                    <span>{{ ui.pndlGeomean }}</span>
+                    <span>{{ ui.pndlMedian }}</span>
                     <span>{{ ui.records }}</span>
                     <span>{{ ui.literature }}</span>
                     <span>{{ ui.points }}</span>
@@ -4996,24 +6724,22 @@ function escapeHtml(value: string) {
                     class="pndl-ranking-row"
                     :class="{ selected: isPndlChartItemSelected(item) }"
                   >
-                    <strong>{{ item.rank }}. {{ item.displayName }}</strong>
-                    <span>{{ formatCompact(item.pndlGeomeanMgD1000inh) }}</span>
-                    <span>{{ formatNumber(item.recordCount) }}</span>
-                    <span>{{ formatNumber(item.doiCount) }}</span>
-                    <span>{{ formatNumber(item.pointCount) }}</span>
-                    <span>{{ formatNumber(item.yearCount) }}</span>
+                    <strong>{{ item.rank }}. {{ localizedPndlItemDisplayName(item) }}</strong>
+                    <span>{{ formatCompact(item.pndlMedianMgD1000inh) }}</span>
+                    <span>{{ formatNumber(item.pndlRecordCount ?? item.recordCount) }}</span>
+                    <span>{{ formatNumber(item.pndlDoiCount ?? item.doiCount) }}</span>
+                    <span>{{ formatNumber(item.pndlPointCount ?? item.pointCount) }}</span>
+                    <span>{{ formatNumber(item.pndlYearCount ?? item.yearCount) }}</span>
                   </div>
                 </div>
               </details>
 
               <details class="detail-note-section">
                 <summary>
-                  <h3>数据说明</h3>
+                  <h3>{{ ui.dataNotes }}</h3>
                 </summary>
                 <ul>
-                  <li>PNDL 对比和年度趋势仅在选择具体 biomarker 后展示。</li>
-                  <li>地图气泡数字表示当前筛选下可映射点位数。</li>
-                  <li>详情统计来自后端聚合接口，前端只负责展示。</li>
+                  <li v-for="note in detailNoteItems" :key="note">{{ note }}</li>
                 </ul>
               </details>
 
@@ -5026,12 +6752,30 @@ function escapeHtml(value: string) {
 </template>
 
 <style scoped>
+:global(body) {
+  margin: 0;
+}
+
+:global(#app) {
+  min-height: 100vh;
+}
+
 .map-page {
+  --map-header-offset: 88px;
+  --map-blue-900: #092b4f;
+  --map-blue-800: #0b3f73;
+  --map-blue-700: #115ea8;
+  --map-blue-600: #1f75c9;
+  --map-blue-100: #dcecff;
+  --map-panel: rgba(255, 255, 255, 0.92);
+  height: 100vh;
   min-height: 100vh;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  color: #173247;
-  background: #f6f8f9;
+  align-content: stretch;
+  overflow: hidden;
+  color: var(--map-blue-900);
+  background: linear-gradient(180deg, #f2f7fc 0%, #eaf2fb 100%);
 }
 
 .site-header {
@@ -5045,9 +6789,9 @@ function escapeHtml(value: string) {
   background:
     linear-gradient(
       90deg,
-      rgba(235, 248, 246, 0.96),
+      rgba(225, 240, 255, 0.96),
       rgba(255, 255, 255, 0.98) 42%,
-      rgba(244, 249, 251, 0.96)
+      rgba(235, 245, 255, 0.96)
     ),
     #ffffff;
   box-shadow: 0 8px 26px rgba(21, 52, 72, 0.07);
@@ -5073,7 +6817,7 @@ function escapeHtml(value: string) {
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.76);
   border-radius: 8px;
-  background: linear-gradient(135deg, rgba(15, 101, 145, 0.94), rgba(14, 143, 119, 0.92)), #0f6591;
+  background: linear-gradient(135deg, rgba(11, 63, 115, 0.98), rgba(31, 117, 201, 0.92)), #0f5fa8;
   box-shadow: 0 14px 30px rgba(15, 101, 145, 0.2);
 }
 
@@ -5176,7 +6920,7 @@ function escapeHtml(value: string) {
   min-width: 0;
   margin: 0;
   padding-left: 14px;
-  border-left: 4px solid #229384;
+  border-left: 4px solid var(--map-blue-600);
   color: #173247;
   font-size: 22px;
   font-weight: 900;
@@ -5209,9 +6953,9 @@ function escapeHtml(value: string) {
 }
 
 .location-search input:focus {
-  border-color: rgba(34, 147, 132, 0.42);
+  border-color: rgba(31, 117, 201, 0.42);
   box-shadow:
-    0 0 0 3px rgba(34, 147, 132, 0.08),
+    0 0 0 3px rgba(31, 117, 201, 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.76);
 }
 
@@ -5332,16 +7076,16 @@ function escapeHtml(value: string) {
   width: 13px;
   height: 13px;
   fill: none;
-  stroke: #229384;
+  stroke: var(--map-blue-600);
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
 .language-menu.open > button {
-  border-color: rgba(34, 147, 132, 0.34);
+  border-color: rgba(31, 117, 201, 0.34);
   box-shadow:
-    0 0 0 3px rgba(34, 147, 132, 0.08),
+    0 0 0 3px rgba(31, 117, 201, 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.82);
 }
 
@@ -5375,7 +7119,7 @@ function escapeHtml(value: string) {
 .language-popover button:hover,
 .language-popover button.active {
   color: #173247;
-  background: rgba(34, 147, 132, 0.1);
+  background: rgba(31, 117, 201, 0.1);
 }
 
 .login-button {
@@ -5387,7 +7131,7 @@ function escapeHtml(value: string) {
   padding: 0 16px;
   border-radius: 8px;
   color: #ffffff;
-  background: #173247;
+  background: var(--map-blue-900);
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5396,8 +7140,13 @@ function escapeHtml(value: string) {
 
 .map-stage {
   position: relative;
-  min-height: calc(100vh - 70px);
+  height: 100%;
+  min-height: 0;
+  margin: 0;
   overflow: hidden;
+  border: 0;
+  border-top: 1px solid rgba(66, 111, 160, 0.18);
+  border-radius: 0;
   --detail-panel-width: min(420px, calc(50vw - 30px));
   --detail-panel-right: 22px;
   --detail-panel-gap: 18px;
@@ -5405,11 +7154,12 @@ function escapeHtml(value: string) {
   --map-control-top: 18px;
   --map-control-right: 18px;
   --map-control-gap: 7px;
-  background: #dcecf5;
+  background: #d9e8f6;
+  box-shadow: none;
   transition: background 0.28s ease;
 }
 
-.map-stage.detail-open {
+.map-stage.compact-detail-open {
   --map-control-right: calc(
     var(--detail-panel-right) + var(--detail-panel-width) + var(--detail-panel-gap)
   );
@@ -5431,19 +7181,15 @@ function escapeHtml(value: string) {
 
 .map-stage.ambience:not(.globe)::before {
   background:
-    linear-gradient(115deg, transparent 0 35%, rgba(26, 143, 132, 0.13) 44%, transparent 53%),
-    radial-gradient(circle at 18% 32%, rgba(34, 147, 132, 0.15), transparent 24%),
-    radial-gradient(circle at 78% 24%, rgba(57, 125, 161, 0.1) 0 2px, transparent 2.8px),
-    radial-gradient(circle at 34% 72%, rgba(34, 147, 132, 0.1) 0 1.8px, transparent 2.8px),
-    repeating-linear-gradient(145deg, rgba(23, 86, 105, 0.04) 0 1px, transparent 1px 46px);
+    linear-gradient(115deg, transparent 0 36%, rgba(31, 117, 201, 0.11) 44%, transparent 54%),
+    repeating-linear-gradient(0deg, rgba(9, 43, 79, 0.045) 0 1px, transparent 1px 58px),
+    repeating-linear-gradient(90deg, rgba(9, 43, 79, 0.04) 0 1px, transparent 1px 64px);
   background-size:
     620px 620px,
-    760px 760px,
-    380px 380px,
-    520px 520px,
-    430px 430px;
+    580px 580px,
+    640px 640px;
   mix-blend-mode: soft-light;
-  opacity: 0.38;
+  opacity: 0.32;
   animation: monitorFlow 34s linear infinite;
 }
 
@@ -5490,7 +7236,7 @@ function escapeHtml(value: string) {
   animation: mapOverlayIn 0.26s ease 0.14s both;
 }
 
-.detail-open .map-tool-stack {
+.compact-detail-open .map-tool-stack {
   z-index: 9;
 }
 
@@ -5842,7 +7588,7 @@ function escapeHtml(value: string) {
 .boundary-loading-chip {
   position: absolute;
   left: 18px;
-  bottom: 58px;
+  bottom: 150px;
   z-index: 3;
   margin: 0;
   padding: 7px 10px;
@@ -5858,7 +7604,7 @@ function escapeHtml(value: string) {
 }
 
 .map-status-chip {
-  position: fixed;
+  position: absolute;
   right: 18px;
   bottom: 18px;
   z-index: 6;
@@ -5881,6 +7627,93 @@ function escapeHtml(value: string) {
     opacity 0.18s ease;
 }
 
+.map-heat-legend {
+  position: absolute;
+  left: 18px;
+  bottom: 18px;
+  z-index: 6;
+  box-sizing: border-box;
+  width: min(228px, calc(100% - 36px));
+  display: grid;
+  gap: 5px;
+  padding: 8px 9px;
+  border: 1px solid rgba(52, 98, 145, 0.18);
+  border-radius: 9px;
+  color: var(--map-blue-900);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 14px 34px rgba(19, 64, 108, 0.14);
+  pointer-events: none;
+  backdrop-filter: blur(14px);
+  transition:
+    left 0.24s ease,
+    bottom 0.24s ease,
+    opacity 0.18s ease;
+}
+
+.compact-detail-open .map-heat-legend {
+  left: 18px;
+}
+
+.map-heat-legend strong {
+  font-size: 11.5px;
+  font-weight: 950;
+}
+
+.heat-legend-strip {
+  height: 9px;
+  overflow: hidden;
+  border: 1px solid rgba(52, 98, 145, 0.16);
+  border-radius: 999px;
+  background: var(--heat-gradient);
+}
+
+.heat-legend-scale {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.heat-legend-scale span {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.heat-legend-scale span:nth-child(2) {
+  text-align: center;
+}
+
+.heat-legend-scale span:last-child {
+  text-align: right;
+}
+
+.heat-legend-scale i,
+.map-heat-legend p,
+.map-heat-legend small {
+  color: #5f7489;
+  font-style: normal;
+  font-size: 9.5px;
+  font-weight: 850;
+  line-height: 1.25;
+}
+
+.heat-legend-scale b {
+  overflow: hidden;
+  color: var(--map-blue-800);
+  font-size: 10.5px;
+  font-weight: 950;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-heat-legend p {
+  margin: 0;
+}
+
+.map-heat-legend small {
+  color: #7d8fa2;
+}
+
 .map-status-chip span,
 .map-status-chip strong {
   font-size: 11px;
@@ -5897,7 +7730,7 @@ function escapeHtml(value: string) {
   font-weight: 900;
 }
 
-.detail-open .map-status-chip {
+.compact-detail-open .map-status-chip {
   right: calc(var(--detail-panel-right) + var(--detail-panel-width) + var(--detail-panel-gap));
   max-width: min(360px, calc(100% - var(--detail-panel-width) - 92px));
 }
@@ -6051,7 +7884,7 @@ function escapeHtml(value: string) {
 
 .detail-summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -6138,7 +7971,10 @@ function escapeHtml(value: string) {
 }
 
 .pndl-column-wrap {
+  box-sizing: border-box;
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
   min-height: 360px;
   display: grid;
   grid-template-columns: 54px minmax(0, 1fr);
@@ -6169,9 +8005,12 @@ function escapeHtml(value: string) {
 
 .pndl-column-chart {
   --pndl-column-count: 1;
+  position: relative;
+  box-sizing: border-box;
   width: 100%;
   min-width: 0;
   max-width: 100%;
+  contain: layout paint;
   display: grid;
   grid-template-columns: repeat(var(--pndl-column-count), minmax(96px, 1fr));
   align-items: end;
@@ -6180,11 +8019,27 @@ function escapeHtml(value: string) {
   overflow-y: hidden;
   padding: 46px 4px 2px;
   scroll-padding-inline: 48px;
+  scrollbar-color: rgba(154, 52, 18, 0.38) transparent;
+  scrollbar-width: thin;
   overscroll-behavior-inline: contain;
+}
+
+.pndl-column-chart::-webkit-scrollbar {
+  height: 6px;
+}
+
+.pndl-column-chart::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.pndl-column-chart::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(154, 52, 18, 0.38);
 }
 
 .pndl-column-item {
   position: relative;
+  min-width: 0;
   min-height: 286px;
   display: grid;
   grid-template-rows: minmax(220px, 1fr) auto auto;
@@ -6196,35 +8051,23 @@ function escapeHtml(value: string) {
   font-weight: 850;
 }
 
-.pndl-column-item::after {
+.pndl-column-tooltip {
   position: absolute;
-  left: 50%;
-  bottom: calc(100% - 34px);
-  z-index: 8;
-  width: max-content;
-  max-width: min(260px, calc(100vw - 96px));
+  z-index: 12;
+  width: 238px;
   padding: 9px 11px;
   border-radius: 7px;
   color: #ffffff;
   background: rgba(22, 29, 48, 0.96);
   box-shadow: 0 16px 36px rgba(19, 46, 63, 0.24);
-  content: attr(data-tooltip);
   font-size: 11px;
   font-weight: 850;
   line-height: 1.55;
-  opacity: 0;
   pointer-events: none;
   text-align: left;
-  transform: translate(-50%, 6px);
-  transition:
-    opacity 0.14s ease,
-    transform 0.14s ease;
+  transform: translate(-50%, -100%);
   white-space: pre-line;
-}
-
-.pndl-column-item:hover::after {
-  opacity: 1;
-  transform: translate(-50%, 0);
+  animation: tooltipIn 0.12s ease both;
 }
 
 .pndl-column-barbox {
@@ -6238,13 +8081,7 @@ function escapeHtml(value: string) {
 }
 
 .pndl-column-item.selected .pndl-column-barbox {
-  border: 2px solid rgba(38, 88, 240, 0.88);
-  border-bottom-color: rgba(38, 88, 240, 0.88);
-  border-radius: 9px;
-  background: rgba(48, 109, 255, 0.12);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.72),
-    0 10px 26px rgba(44, 82, 190, 0.18);
+  border-bottom: 2px solid #c2410c;
 }
 
 .pndl-column-bar {
@@ -6256,10 +8093,15 @@ function escapeHtml(value: string) {
 }
 
 .pndl-column-item.selected .pndl-column-bar {
-  background: linear-gradient(180deg, #ffb11a 0%, #ff7a1a 48%, #ef4444 100%);
+  background: linear-gradient(180deg, #fbbf24 0%, #f97316 55%, #dc2626 100%);
   box-shadow:
     inset 0 0 0 1px rgba(133, 54, 11, 0.28),
-    0 0 0 3px rgba(45, 96, 255, 0.16);
+    0 0 0 3px rgba(249, 115, 22, 0.18);
+}
+
+.pndl-column-item.selected strong,
+.pndl-column-item.selected span {
+  color: #9a3412;
 }
 
 .pndl-column-item strong {
@@ -6331,6 +8173,72 @@ function escapeHtml(value: string) {
   white-space: nowrap;
 }
 
+.physchem-grid,
+.trend-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.trend-chart-card:only-child {
+  grid-column: 1 / -1;
+}
+
+.physchem-card {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(91, 117, 132, 0.16);
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.physchem-card-head,
+.trend-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.physchem-card-head strong,
+.trend-card-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #173247;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.physchem-card-head span,
+.trend-card-head span,
+.physchem-card > small {
+  color: #647789;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.physchem-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.physchem-values span {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 5px 7px;
+  border: 1px solid rgba(44, 123, 182, 0.18);
+  border-radius: 6px;
+  color: #334e5c;
+  background: rgba(44, 123, 182, 0.07);
+  font-size: 11px;
+  font-weight: 780;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .trend-chart-section {
   display: grid;
   gap: 10px;
@@ -6346,6 +8254,10 @@ function escapeHtml(value: string) {
   border: 1px solid rgba(91, 117, 132, 0.14);
   border-radius: 9px;
   background: linear-gradient(180deg, #f8fbff, #ffffff);
+}
+
+.trend-card-head {
+  margin-bottom: 8px;
 }
 
 .pndl-ranking-section,
@@ -6594,22 +8506,27 @@ function escapeHtml(value: string) {
 }
 
 .full-detail-backdrop {
-  position: absolute;
-  inset: 0;
-  z-index: 12;
-  display: grid;
-  place-items: center;
-  padding: 16px 28px;
+  position: fixed;
+  top: var(--map-header-offset);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12px 24px 16px;
   box-sizing: border-box;
   background: rgba(9, 28, 44, 0.22);
   backdrop-filter: blur(3px);
 }
 
 .full-detail-panel {
-  width: min(1360px, calc(100% - 56px));
-  max-width: none;
-  height: calc(100% - 32px);
-  max-height: calc(100% - 32px);
+  box-sizing: border-box;
+  width: min(1320px, calc(100vw - 48px));
+  height: 100%;
+  max-height: 100%;
+  margin: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
@@ -6658,13 +8575,20 @@ function escapeHtml(value: string) {
 }
 
 .full-detail-panel header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 20px;
-  padding: 20px 22px 16px;
+  gap: 14px;
+  padding: 12px 18px 11px;
   border-bottom: 1px solid rgba(91, 117, 132, 0.14);
   background: linear-gradient(90deg, rgba(232, 248, 249, 0.74), rgba(255, 255, 255, 0.86));
+}
+
+.full-detail-panel header > div {
+  min-width: 0;
 }
 
 .full-detail-panel header span {
@@ -6680,20 +8604,32 @@ function escapeHtml(value: string) {
 }
 
 .full-detail-panel header h2 {
-  margin-top: 4px;
+  max-width: min(880px, 72vw);
+  margin-top: 3px;
+  overflow: hidden;
   color: #173247;
-  font-size: 25px;
+  font-size: 21px;
+  line-height: 1.22;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .full-detail-panel header p {
-  margin-top: 5px;
+  max-width: min(960px, 74vw);
+  display: -webkit-box;
+  overflow: hidden;
+  margin-top: 4px;
   color: #647789;
   font-weight: 800;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .full-detail-panel header button {
-  width: 36px;
-  height: 36px;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
   border: 1px solid rgba(91, 117, 132, 0.22);
   border-radius: 8px;
   color: #173247;
@@ -6706,6 +8642,7 @@ function escapeHtml(value: string) {
 .full-detail-content {
   display: grid;
   gap: 18px;
+  min-width: 0;
   padding: 18px 22px 24px;
   overflow: auto;
 }
@@ -6713,6 +8650,8 @@ function escapeHtml(value: string) {
 .full-detail-content section {
   display: grid;
   gap: 10px;
+  min-width: 0;
+  overflow: visible;
 }
 
 .full-detail-content h3 {
@@ -6881,7 +8820,7 @@ function escapeHtml(value: string) {
   transition: right 0.24s ease;
 }
 
-.detail-open :deep(.maplibregl-ctrl-top-right) {
+.compact-detail-open :deep(.maplibregl-ctrl-top-right) {
   z-index: 9;
 }
 
@@ -6960,9 +8899,13 @@ function escapeHtml(value: string) {
 
 :deep(.map-tooltip-grid) {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   border-top: 1px solid #e2e8f0;
   border-bottom: 1px solid #e2e8f0;
+}
+
+:deep(.map-tooltip-grid.single) {
+  grid-template-columns: 1fr;
 }
 
 :deep(.map-tooltip-metric) {
@@ -7007,16 +8950,16 @@ function escapeHtml(value: string) {
 :deep(.map-tooltip-heat) {
   margin: 0 10px 8px;
   padding: 7px 8px;
-  border: 1px solid #dbeafe;
+  border: 1px solid #fed7aa;
   border-radius: 7px;
-  color: #23386f;
-  background: #eff6ff;
+  color: #7c2d12;
+  background: #fff7ec;
   font-weight: 850;
 }
 
 :deep(.map-tooltip-heat span) {
   display: block;
-  color: #3f55aa;
+  color: #9a3412;
   font-size: 10px;
 }
 
@@ -7063,6 +9006,18 @@ function escapeHtml(value: string) {
 
   to {
     opacity: 1;
+  }
+}
+
+@keyframes tooltipIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% + 5px));
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, -100%);
   }
 }
 
@@ -7119,6 +9074,10 @@ function escapeHtml(value: string) {
 }
 
 @media (max-width: 860px) {
+  .map-page {
+    --map-header-offset: 106px;
+  }
+
   .site-header {
     grid-template-columns: 1fr;
     gap: 12px;
@@ -7143,12 +9102,16 @@ function escapeHtml(value: string) {
   }
 
   .map-stage {
-    min-height: calc(100vh - 106px);
+    height: calc(100vh - 106px);
+    margin: 0;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
     --map-control-top: 12px;
     --map-control-right: 12px;
   }
 
-  .map-stage.detail-open {
+  .map-stage.compact-detail-open {
     --map-control-right: 12px;
   }
 
@@ -7171,11 +9134,11 @@ function escapeHtml(value: string) {
     right: var(--map-control-right);
   }
 
-  .detail-open .map-tool-stack {
+  .compact-detail-open .map-tool-stack {
     z-index: 9;
   }
 
-  .detail-open :deep(.maplibregl-ctrl-top-right) {
+  .compact-detail-open :deep(.maplibregl-ctrl-top-right) {
     right: var(--map-control-right);
   }
 
@@ -7205,19 +9168,21 @@ function escapeHtml(value: string) {
   }
 
   .full-detail-backdrop {
-    padding: 12px;
-    place-items: end center;
+    align-items: flex-end;
+    padding: 10px 12px 12px;
   }
 
   .full-detail-panel {
     width: 100%;
     max-width: none;
-    height: min(78vh, calc(100vh - 24px));
+    height: 100%;
+    max-height: 100%;
+    margin: 0;
     transform-origin: bottom center;
   }
 
   .full-detail-panel header {
-    padding: 16px;
+    padding: 12px 14px 10px;
   }
 
   .full-detail-content {
@@ -7227,6 +9192,11 @@ function escapeHtml(value: string) {
   .detail-summary-grid,
   .detail-summary-grid.compact {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .physchem-grid,
+  .trend-chart-grid {
+    grid-template-columns: 1fr;
   }
 
   .detail-table-row,
@@ -7246,9 +9216,20 @@ function escapeHtml(value: string) {
     justify-content: flex-end;
   }
 
-  .detail-open .map-status-chip {
+  .compact-detail-open .map-status-chip {
     right: 12px;
     bottom: calc(46vh + 24px);
+  }
+
+  .map-heat-legend,
+  .compact-detail-open .map-heat-legend {
+    left: 12px;
+    bottom: 70px;
+    width: min(232px, calc(100% - 24px));
+  }
+
+  .compact-detail-open .map-heat-legend {
+    bottom: calc(46vh + 76px);
   }
 
   :deep(.maplibregl-ctrl-top-right) {

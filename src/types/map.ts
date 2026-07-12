@@ -64,8 +64,9 @@ export interface MapRegionStat {
   biomarkerLabel: string
   biomarkerCas?: string | null
   yearLabel: string
+  pndlMedianMgD1000inh?: number | null
+  /** Legacy API fallback. New responses should use pndlMedianMgD1000inh. */
   pndlGeomeanMgD1000inh?: number | null
-  pndlMeanMgD1000inh?: number | null
   pndlMinMgD1000inh?: number | null
   pndlMaxMgD1000inh?: number | null
   recordCount?: number | null
@@ -73,6 +74,11 @@ export interface MapRegionStat {
   yearCount?: number | null
   cityCount?: number | null
   pointCount?: number | null
+  biomarkerCount?: number | null
+  pndlRecordCount?: number | null
+  pndlDoiCount?: number | null
+  pndlPointCount?: number | null
+  pndlYearCount?: number | null
   pndlSources?: string | null
 }
 
@@ -111,6 +117,7 @@ export interface MapTopBiomarker {
   biomarkerKey: string
   biomarkerLabel: string
   biomarkerCas?: string | null
+  targetClass?: string | null
   category?: string | null
   subcategory?: string | null
   recordCount?: number | null
@@ -124,11 +131,17 @@ export interface MapPndlRankingItem {
   level: MapRegionStat['level']
   geoKey: string
   displayName: string
+  pndlMedianMgD1000inh?: number | null
+  /** Legacy API fallback. New responses should use pndlMedianMgD1000inh. */
   pndlGeomeanMgD1000inh?: number | null
   recordCount?: number | null
   doiCount?: number | null
   pointCount?: number | null
   yearCount?: number | null
+  pndlRecordCount?: number | null
+  pndlDoiCount?: number | null
+  pndlPointCount?: number | null
+  pndlYearCount?: number | null
   pndlSources?: string | null
   selected?: boolean | null
 }
@@ -148,6 +161,7 @@ export interface MapTrendPoint {
   year: number
   value?: number | null
   recordCount?: number | null
+  valueCount?: number | null
 }
 
 export interface MapTrendSeries {
@@ -161,6 +175,23 @@ export interface MapBreakdownItem {
   label: string
   recordCount: number
   percentage?: number | null
+}
+
+export interface MapPropertyValue {
+  text: string
+  count?: number | null
+}
+
+export interface MapBiomarkerProperty {
+  biomarkerKey: string
+  biomarkerLabel: string
+  biomarkerCas?: string | null
+  targetClass?: string | null
+  category?: string | null
+  subcategory?: string | null
+  recordCount?: number | null
+  variantCount?: number | null
+  values: MapPropertyValue[]
 }
 
 export interface MapClusterLocationRequest {
@@ -179,6 +210,7 @@ export interface MapDetailResponse {
   pndlRanking?: MapPndlRankingItem[] | null
   pndlComparisons?: MapPndlComparison[] | null
   trendSeries?: MapTrendSeries[] | null
+  biomarkerProperties?: MapBiomarkerProperty[] | null
   categoryBreakdown?: MapBreakdownItem[] | null
   sources: MapSourceRecord[]
   sourceRecords?: MapSourceRecord[] | null

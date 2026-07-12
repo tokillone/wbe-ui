@@ -9,7 +9,7 @@ export interface RelationShareItem {
   pathIds: string[]
 }
 
-export type Level2DrugShare = RelationShareItem
+export type Level2Level3Share = RelationShareItem
 
 export interface RelationPieSection {
   id: string
@@ -44,12 +44,12 @@ export function sortSankeyPaths(paths: Icd11SankeyPath[]) {
 
 export function relationShareItems(
   paths: Icd11SankeyPath[],
-  groupBy: (path: Icd11SankeyPath) => string,
+  groupBy: (path: Icd11SankeyPath) => string | null | undefined,
 ): RelationShareItem[] {
   const totalWeight = paths.reduce((sum, path) => sum + Number(path.weight || 0), 0)
   const shareMap = new Map<string, { value: number; pathIds: string[] }>()
   for (const path of paths) {
-    const name = groupBy(path).trim()
+    const name = String(groupBy(path) ?? '').trim()
     if (!name) continue
     const current = shareMap.get(name) ?? { value: 0, pathIds: [] }
     current.value += Number(path.weight || 0)
@@ -66,8 +66,8 @@ export function relationShareItems(
     .sort((a, b) => b.value - a.value || a.name.localeCompare(b.name, 'zh-Hans-CN'))
 }
 
-export function level2DrugShares(paths: Icd11SankeyPath[]): RelationShareItem[] {
-  return relationShareItems(paths, (path) => path.drug)
+export function level2Level3Shares(paths: Icd11SankeyPath[]): RelationShareItem[] {
+  return relationShareItems(paths.filter((path) => path.mappingLevel === 'Level3'), (path) => path.level3)
 }
 
 export function relationPieSectionsForNode(
@@ -92,13 +92,39 @@ export function relationPieSectionsForNode(
   if (nodeKind === 'level2') {
     return [
       relationPieSection(
-        'level2-drug',
-        '关联药物占比',
-        '按当前 ICD11_Level2 关联路径聚合药物，百分比基于该 Level2 的权重合计。',
-        '关联药物',
-        'Level2 关联药物占比图',
+        'level2-mapping-depth',
+        '映射深度分布',
+        '区分精确到 ICD11_Level3 的路径与正式终止于 ICD11_Level2 的路径。',
+        '映射层级',
+        'Level2 映射深度分布图',
         '占该 Level2',
-        'drug',
+        'mapping-depth',
+        paths,
+        (path) => path.mappingLevel === 'Level3' ? '精确到 Level3' : '止于 Level2',
+      ),
+      relationPieSection(
+        'level2-level3',
+        'Level3 占比',
+        '仅对真实 Level3 路径聚合，正式终止于 Level2 的路径不进入该统计。',
+        'Level3',
+        'Level2 到 Level3 占比图',
+        '占该 Level2',
+        'level3',
+        paths.filter((path) => path.mappingLevel === 'Level3'),
+        (path) => path.level3,
+      ),
+    ]
+  }
+  if (nodeKind === 'level3') {
+    return [
+      relationPieSection(
+        'level3-drug',
+        '关联药物占比',
+        '按当前 ICD11_Level3 关联路径聚合药物，百分比基于该 Level3 的权重合计。',
+        '关联药物',
+        'Level3 关联药物占比图',
+        '占该 Level3',
+        'level3-drug',
         paths,
         (path) => path.drug,
       ),
@@ -107,15 +133,26 @@ export function relationPieSectionsForNode(
   if (nodeKind === 'drug') {
     return [
       relationPieSection(
-        'drug-level2',
-        '关联 Level2 占比',
-        '按当前药物关联路径聚合 ICD11_Level2，百分比基于该药物的权重合计。',
-        'Level2',
-        '药物关联 Level2 占比图',
+        'drug-mapping-depth',
+        '上游映射深度',
+        '区分该药物来自真实 Level3 或直接来自 Level2 的路径。',
+        '映射层级',
+        '药物上游映射深度图',
         '占该药物',
-        'drug-level2',
+        'drug-mapping-depth',
         paths,
-        (path) => path.level2,
+        (path) => path.mappingLevel === 'Level3' ? '来自 Level3' : '直接来自 Level2',
+      ),
+      relationPieSection(
+        'drug-disease-node',
+        '关联疾病节点',
+        '真实 Level3 与直接连接的 Level2 分开标记，不补造层级。',
+        '疾病节点',
+        '药物关联疾病节点占比图',
+        '占该药物',
+        'drug-disease-node',
+        paths,
+        (path) => path.level3 ?? `Level2 · ${path.level2}`,
       ),
       relationPieSection(
         'drug-biomarker',
@@ -130,7 +167,30 @@ export function relationPieSectionsForNode(
       ),
     ]
   }
-  return []
+  return [
+    relationPieSection(
+      'biomarker-drug',
+      '上游药物占比',
+      '按当前生物标记物关联路径聚合药物，百分比基于该生物标记物的权重合计。',
+      '上游药物',
+      '生物标记物上游药物占比图',
+      '占该生物标记物',
+      'biomarker-drug',
+      paths,
+      (path) => path.drug,
+    ),
+    relationPieSection(
+      'biomarker-disease-node',
+      '关联疾病节点',
+      '真实 Level3 与直接连接的 Level2 分开标记，不补造层级。',
+      '疾病节点',
+      '生物标记物关联疾病节点占比图',
+      '占该生物标记物',
+      'biomarker-disease-node',
+      paths,
+      (path) => path.level3 ?? `Level2 · ${path.level2}`,
+    ),
+  ]
 }
 
 export function sankeyHoverTargetKey(prefix: string, pathIds: Iterable<string>) {
@@ -139,7 +199,7 @@ export function sankeyHoverTargetKey(prefix: string, pathIds: Iterable<string>) 
 }
 
 function pathText(path: Icd11SankeyPath) {
-  return `${path.level1} → ${path.level2} → ${path.drug} → ${path.biomarker}`
+  return [path.level1, path.level2, path.level3, path.drug, path.biomarker].filter(Boolean).join(' → ')
 }
 
 function relationPieSection(
@@ -151,7 +211,7 @@ function relationPieSection(
   shareLabel: string,
   hoverPrefix: string,
   paths: Icd11SankeyPath[],
-  groupBy: (path: Icd11SankeyPath) => string,
+  groupBy: (path: Icd11SankeyPath) => string | null | undefined,
 ): RelationPieSection {
   return {
     id,

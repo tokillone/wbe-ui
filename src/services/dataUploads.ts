@@ -26,12 +26,23 @@ export interface DataUploadBatch {
 
 export interface DataUploadRow {
   rowId: number
+  sheetName: string
   excelRowNumber: number
   status: string
   errors: string[]
   warnings: string[]
   syncedMeasurementId?: number | null
+  syncedEntityType?: string | null
+  syncedEntityId?: number | null
   data: Record<string, string>
+}
+
+export interface DataUploadSheetSummary {
+  sheetName: string
+  totalRows: number
+  validRows: number
+  warningRows: number
+  errorRows: number
 }
 
 export interface DataUploadPreview {
@@ -41,6 +52,8 @@ export interface DataUploadPreview {
   headerErrors: string[]
   batchWarnings: string[]
   previewRows: DataUploadRow[]
+  sheetSummaries: DataUploadSheetSummary[]
+  previewRowsBySheet: Record<string, DataUploadRow[]>
 }
 
 export interface DataUploadRowsPage {
@@ -63,6 +76,7 @@ export interface DataUploadSyncResult {
   batch: DataUploadBatch
   insertedRows: number
   skippedRows: number
+  insertedRowsBySheet: Record<string, number>
   warnings: string[]
 }
 
@@ -77,6 +91,12 @@ export function uploadPreview(file: File) {
 
 export function syncUpload(uploadId: number) {
   return requestApi<DataUploadSyncResult>(`/data-uploads/${uploadId}/sync`, {
+    method: 'POST',
+  })
+}
+
+export function approveUpload(uploadId: number) {
+  return requestApi<DataUploadBatch>(`/data-uploads/${uploadId}/approve`, {
     method: 'POST',
   })
 }
