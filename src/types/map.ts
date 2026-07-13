@@ -105,6 +105,10 @@ export interface MapSourceRecord {
   originalRowNumber?: number | null
   pndlMgD1000inh?: number | null
   pndlSource?: string | null
+  concentrationValue?: number | null
+  concentrationUnit?: string | null
+  dailyLoadValue?: number | null
+  dailyLoadUnit?: string | null
 }
 
 export interface MapSummaryCard {

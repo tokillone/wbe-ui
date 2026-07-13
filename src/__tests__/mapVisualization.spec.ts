@@ -7,6 +7,7 @@ import {
   compactExplorerSummaryCards,
   displayLevelForZoom,
   overviewSummaryCards,
+  regionFillOpacityExpression,
   resolveStableHeatRange,
   selectRowsForDisplayLevel,
   selectionYearRange,
@@ -31,6 +32,7 @@ describe('map visualization hierarchy', () => {
   it('switches from country to admin1 to city at the configured thresholds', () => {
     expect(displayLevelForZoom(3.9)).toBe('country')
     expect(displayLevelForZoom(4.4)).toBe('admin1')
+    expect(displayLevelForZoom(6.2)).toBe('admin1')
     expect(displayLevelForZoom(6.3)).toBe('city')
   })
 
@@ -60,6 +62,24 @@ describe('map visualization hierarchy', () => {
 
   it('falls back to all hierarchy values when a legacy response has no legend range', () => {
     expect(resolveStableHeatRange(null, null, [100, 50, 5478])).toEqual({ min: 50, max: 5478 })
+  })
+
+  it('keeps coverage regions visible when a selected biomarker has no PNDL value', () => {
+    const expression = regionFillOpacityExpression(true)
+    expect(expression).toEqual([
+      'case',
+      ['==', ['get', 'hasPndlValue'], true],
+      [
+        'case',
+        ['==', ['get', 'level'], 'city'],
+        0.82,
+        ['==', ['get', 'level'], 'admin1'],
+        0.8,
+        0.78,
+      ],
+      ['case', ['==', ['get', 'hasCoverage'], true], 0.2, 0],
+    ])
+    expect(regionFillOpacityExpression(false)).toBe(0)
   })
 
   it('keeps a per-country fallback when the map reaches city zoom', () => {

@@ -8,7 +8,7 @@ export type MapHierarchyRow = {
 
 export const MAP_LEVEL_ZOOM = {
   countryActiveEnd: 4.2,
-  adminActiveEnd: 6.1,
+  adminActiveEnd: 6.3,
   countryFadeStart: 4,
   countryFadeEnd: 4.4,
   cityFadeStart: 5.9,
@@ -85,6 +85,23 @@ export function resolveStableHeatRange(
     return { min, max }
   }
   return { min: fallbackMin, max: fallbackMax }
+}
+
+export function regionFillOpacityExpression(hasSpecificBiomarker: boolean) {
+  if (!hasSpecificBiomarker) return 0
+  return [
+    'case',
+    ['==', ['get', 'hasPndlValue'], true],
+    [
+      'case',
+      ['==', ['get', 'level'], 'city'],
+      0.82,
+      ['==', ['get', 'level'], 'admin1'],
+      0.8,
+      0.78,
+    ],
+    ['case', ['==', ['get', 'hasCoverage'], true], 0.2, 0],
+  ]
 }
 
 const PNDL_VALUE_CARD_LABELS = new Set(['当前PNDL', 'PNDL几何均值', '同层PNDL排名', '当前排名'])

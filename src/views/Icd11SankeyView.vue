@@ -158,22 +158,32 @@ const HEADER_HEIGHT = 70
 const HEADER_FADE_DISTANCE = 190
 const HOVER_INTENT_DELAY = 85
 const HOVER_RESTORE_DELAY = 110
+// Nature/NPG-inspired scientific palette, softened for dense alluvial diagrams.
 const LEVEL1_FALLBACK_COLORS = [
-  '#416FB8',
-  '#2B9D91',
-  '#D98C42',
-  '#8A6FC5',
-  '#C95F6C',
-  '#689E55',
-  '#4B8EA1',
-  '#B96D43',
-  '#5C7EBA',
-  '#B05D8A',
-  '#798E43',
-  '#5F76A8',
+  '#D86F5E',
+  '#55A6BF',
+  '#4DA58D',
+  '#7185B3',
+  '#E49A68',
+  '#8F7BB5',
+  '#82B7A8',
+  '#C97D91',
+  '#91A66E',
+  '#A58470',
+  '#D3AD5D',
+  '#7695A6',
 ]
-const PIE_COLORS = ['#326FB4', '#16857C', '#D98C42', '#8A6FC5', '#C95F6C', '#689E55', '#4B8EA1', '#B05D8A']
-const PIE_OTHER_COLOR = '#8795A1'
+const PIE_COLORS = [
+  '#55A6BF',
+  '#4DA58D',
+  '#D86F5E',
+  '#E49A68',
+  '#7185B3',
+  '#8F7BB5',
+  '#82B7A8',
+  '#C97D91',
+]
+const PIE_OTHER_COLOR = '#A4ADB3'
 const MAX_RELATION_PIE_ITEMS = 8
 const TOP_RELATION_PIE_ITEMS = 7
 
@@ -751,16 +761,16 @@ function chartLink(link: Icd11SankeyLink, active: boolean, highlighted: boolean)
   const color = level2DisplayColor(link.level1, link.level2, link.color)
   const crossesLevel3 = link.edgeType === 'ICD11_Level2 → 药物'
   const isRelatedContext = link.level1 !== selectedLevel1.value
-  const activeAlpha = isRelatedContext ? 0.38 : crossesLevel3 ? 0.54 : 0.62
-  const activeOpacity = isRelatedContext ? 0.56 : crossesLevel3 ? 0.72 : 0.8
+  const activeAlpha = isRelatedContext ? 0.22 : crossesLevel3 ? 0.32 : 0.4
+  const activeOpacity = isRelatedContext ? 0.5 : crossesLevel3 ? 0.64 : 0.72
   return {
     ...link,
     lineStyle: {
-      color: hexToRgba(color, highlighted ? 0.9 : active ? activeAlpha : 0.06),
-      opacity: highlighted ? 0.98 : active ? activeOpacity : 0.08,
+      color: hexToRgba(color, highlighted ? 0.72 : active ? activeAlpha : 0.05),
+      opacity: highlighted ? 0.94 : active ? activeOpacity : 0.07,
       curveness: 0.52,
-      shadowBlur: highlighted ? 5 : 0,
-      shadowColor: highlighted ? hexToRgba(color, 0.34) : 'transparent',
+      shadowBlur: highlighted ? 3 : 0,
+      shadowColor: highlighted ? hexToRgba(color, 0.2) : 'transparent',
     },
     emphasis: {
       lineStyle: {
@@ -797,9 +807,9 @@ function nodeDepthColor(node: Icd11SankeyNode) {
   const baseColor = level1DisplayColor(node.level1, node.color)
   if (node.kind === 'level2') return level2DisplayColor(node.level1, node.displayName, node.color)
   if (node.kind === 'drug' || node.kind === 'biomarker') {
-    return node.kind === 'drug' ? '#2F6977' : '#526D78'
+    return node.kind === 'drug' ? '#7896A3' : '#91A9A1'
   }
-  const depthMix = [0, 0.03, 0.08, 0.1, 0.12][node.depth] ?? 0.08
+  const depthMix = [0, 0.05, 0.11, 0.14, 0.16][node.depth] ?? 0.1
   return mixHex(baseColor, '#ffffff', depthMix)
 }
 
@@ -1030,7 +1040,7 @@ function decorateRelationPieItem(
 function relationItemColor(item: RelationPieSourceItem, index: number) {
   if (item.isOther) return PIE_OTHER_COLOR
   const seed = stableTextHash(item.name)
-  return PIE_COLORS[(seed + index) % PIE_COLORS.length] ?? '#326FB4'
+  return PIE_COLORS[(seed + index) % PIE_COLORS.length] ?? '#55A6BF'
 }
 
 function stableTextHash(value: string) {
@@ -1512,8 +1522,8 @@ function sankeyLinkTooltipHtml(link: ChartLink) {
       <div class="sankey-tip__title">${escapeHtml(link.sourceLabel)}<span>→</span>${escapeHtml(link.targetLabel)}</div>
       <div class="sankey-tip__type">${escapeHtml(link.edgeType)}</div>
       <div class="sankey-tip__metrics">
-        <div><span>权重</span><strong>${formatNumber(link.value)}</strong><small>涉及文献数</small></div>
-        <div><span>聚合路径</span><strong>${formatNumber(link.pathIds.length)}</strong><small>条</small></div>
+        <div><span>涉及文献数</span><strong>${formatNumber(link.value)}</strong></div>
+        <div><span>聚合路径</span><strong>${formatNumber(link.pathIds.length)}<small>条</small></strong></div>
       </div>
       <div class="sankey-tip__color"><i style="background:${color}"></i><span>Level2 路径色</span><strong>${escapeHtml(link.level2)}</strong></div>
       ${mappingNote}
@@ -1531,17 +1541,8 @@ function sankeyNodeTooltipHtml(node: ChartNode) {
     </div>`
 }
 
-function level1DisplayColor(level1: string, rawColor: string): string {
-  const fallbackColor = fallbackLevel1Color(level1)
-  const normalized = normalizeHexColor(rawColor)
-  const baseColor = normalized || fallbackColor
-  const hsl = rgbToHsl(hexToRgb(baseColor))
-  if (!normalized || hsl.s < 0.32 || hsl.l > 0.72) return fallbackColor
-  return hslToHex({
-    h: hsl.h,
-    s: Math.max(0.56, Math.min(0.82, hsl.s + 0.2)),
-    l: Math.max(0.37, Math.min(0.5, hsl.l - 0.05)),
-  })
+function level1DisplayColor(level1: string, _rawColor: string): string {
+  return fallbackLevel1Color(level1)
 }
 
 function fallbackLevel1Color(level1: string): string {
@@ -1549,38 +1550,25 @@ function fallbackLevel1Color(level1: string): string {
   for (const char of String(level1 || 'level1')) {
     hash = (hash * 31 + char.charCodeAt(0)) % 100000
   }
-  return LEVEL1_FALLBACK_COLORS[hash % LEVEL1_FALLBACK_COLORS.length] ?? '#416FB8'
+  return LEVEL1_FALLBACK_COLORS[hash % LEVEL1_FALLBACK_COLORS.length] ?? '#7185B3'
 }
 
 function level2DisplayColor(level1: string, level2: string, rawColor: string): string {
   const base = level1DisplayColor(level1, rawColor)
   const hsl = rgbToHsl(hexToRgb(base))
   const variants = [
-    { hue: -0.075, saturation: 0.08, lightness: -0.04 },
-    { hue: -0.038, saturation: -0.02, lightness: 0.03 },
-    { hue: 0.015, saturation: 0.07, lightness: 0.06 },
-    { hue: 0.052, saturation: -0.03, lightness: -0.02 },
-    { hue: 0.09, saturation: 0.04, lightness: 0.03 },
+    { hue: -0.035, saturation: -0.03, lightness: 0.02 },
+    { hue: -0.018, saturation: -0.08, lightness: 0.07 },
+    { hue: 0.012, saturation: 0.01, lightness: 0.1 },
+    { hue: 0.028, saturation: -0.06, lightness: 0.04 },
+    { hue: 0.045, saturation: -0.01, lightness: 0.08 },
   ]
   const variant = variants[stableTextHash(level2) % variants.length] ?? variants[0]!
   return hslToHex({
     h: (hsl.h + variant.hue + 1) % 1,
-    s: Math.max(0.54, Math.min(0.84, hsl.s + variant.saturation)),
-    l: Math.max(0.35, Math.min(0.54, hsl.l + variant.lightness)),
+    s: Math.max(0.38, Math.min(0.62, hsl.s + variant.saturation)),
+    l: Math.max(0.5, Math.min(0.64, hsl.l + variant.lightness)),
   })
-}
-
-function normalizeHexColor(value: string) {
-  const raw = String(value || '').trim()
-  if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw
-  if (/^#[0-9a-fA-F]{3}$/.test(raw)) {
-    return `#${raw
-      .slice(1)
-      .split('')
-      .map((char) => `${char}${char}`)
-      .join('')}`
-  }
-  return ''
 }
 
 function mixHex(hex: string, targetHex: string, amount: number) {
@@ -4152,13 +4140,14 @@ function exportPng() {
 
 :global(.sankey-tip__metrics > div) {
   display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: baseline;
-  gap: 1px 5px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
   padding: 6px 7px;
   border: 1px solid rgba(105, 127, 140, 0.1);
   border-radius: 6px;
   background: rgba(246, 250, 251, 0.86);
+  white-space: nowrap;
 }
 
 :global(.sankey-tip__metrics span),
@@ -4169,6 +4158,9 @@ function exportPng() {
 }
 
 :global(.sankey-tip__metrics strong) {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
   justify-self: end;
   color: #173247;
   font-size: 14px;
@@ -4176,7 +4168,7 @@ function exportPng() {
 }
 
 :global(.sankey-tip__metrics small) {
-  grid-column: 1 / -1;
+  font-size: 9px;
 }
 
 :global(.sankey-tip__color) {
@@ -4407,9 +4399,9 @@ function exportPng() {
   bottom: 44px;
   left: calc(var(--series-left) - 7px);
   width: 28px;
-  border: 1px solid rgba(50, 111, 180, 0.07);
+  border: 1px solid rgba(113, 133, 179, 0.07);
   border-radius: 7px;
-  background: linear-gradient(180deg, rgba(50, 111, 180, 0.035), rgba(22, 133, 124, 0.065));
+  background: linear-gradient(180deg, rgba(85, 166, 191, 0.03), rgba(130, 183, 168, 0.055));
   pointer-events: none;
 }
 
