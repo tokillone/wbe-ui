@@ -6,6 +6,9 @@ import {
   canExploreBiomarker,
   compactExplorerSummaryCards,
   displayLevelForZoom,
+  excludeGeometryFromFilter,
+  heatRegionLevelForDisplayLevel,
+  isMainlandChinaCity,
   overviewSummaryCards,
   regionFillOpacityExpression,
   resolveStableHeatRange,
@@ -29,6 +32,26 @@ const legacyChinaRegion: MapRegionStat = {
 }
 
 describe('map visualization hierarchy', () => {
+  it('identifies mainland cities without treating Hong Kong, Macao, or Taiwan as mainland', () => {
+    expect(isMainlandChinaCity('china|sichuan|chengdu', 'china|sichuan', 'china|sichuan')).toBe(
+      true,
+    )
+    expect(isMainlandChinaCity('china|taiwan|taipei', 'china|taiwan')).toBe(false)
+    expect(isMainlandChinaCity('china|hongkong|hongkong', 'china|hongkong')).toBe(false)
+    expect(isMainlandChinaCity('china|aomen|macao', 'china|aomen')).toBe(false)
+    expect(isMainlandChinaCity('japan|tokyo')).toBe(false)
+  })
+
+  it('preserves the original basemap filter when excluding mainland geometry', () => {
+    const original = ['==', 'kind', 'locality']
+    const geometry = { type: 'Polygon', coordinates: [] }
+    const expected = ['all', original, ['!', ['within', geometry]]]
+
+    expect(excludeGeometryFromFilter(original, geometry)).toEqual(expected)
+    expect(excludeGeometryFromFilter(original, geometry)).toEqual(expected)
+    expect(excludeGeometryFromFilter(null, geometry)).toEqual(['!', ['within', geometry]])
+  })
+
   it('switches from country to admin1 to city at the configured thresholds', () => {
     expect(displayLevelForZoom(3.9)).toBe('country')
     expect(displayLevelForZoom(4.4)).toBe('admin1')
@@ -42,6 +65,12 @@ describe('map visualization hierarchy', () => {
     expect(visibleLevelsForZoom(5.2)).toEqual(['admin1'])
     expect(visibleLevelsForZoom(6.1)).toEqual(['admin1', 'city'])
     expect(visibleLevelsForZoom(6.4)).toEqual(['city'])
+  })
+
+  it('uses one finer hierarchy for the heat fill while keeping bubble levels unchanged', () => {
+    expect(heatRegionLevelForDisplayLevel('country')).toBe('admin1')
+    expect(heatRegionLevelForDisplayLevel('admin1')).toBe('city')
+    expect(heatRegionLevelForDisplayLevel('city')).toBe('city')
   })
 
   it('maps low and high values to opposite temperature bands', () => {
@@ -64,7 +93,7 @@ describe('map visualization hierarchy', () => {
     expect(resolveStableHeatRange(null, null, [100, 50, 5478])).toEqual({ min: 50, max: 5478 })
   })
 
-  it('keeps coverage regions visible when a selected biomarker has no PNDL value', () => {
+  it('limits heat fill to regions with a PNDL value', () => {
     const expression = regionFillOpacityExpression(true)
     expect(expression).toEqual([
       'case',
@@ -77,7 +106,7 @@ describe('map visualization hierarchy', () => {
         0.8,
         0.78,
       ],
-      ['case', ['==', ['get', 'hasCoverage'], true], 0.2, 0],
+      0,
     ])
     expect(regionFillOpacityExpression(false)).toBe(0)
   })
@@ -92,10 +121,12 @@ describe('map visualization hierarchy', () => {
       { level: 'city' as const, key: 'china|guangdong|guangzhou', country: 'china' },
     ]
 
-    expect(selectRowsForDisplayLevel(rows, 'admin1', (row) => row.country).map((row) => row.key))
-      .toEqual(['canada', 'usa|california', 'china|guangdong'])
-    expect(selectRowsForDisplayLevel(rows, 'city', (row) => row.country).map((row) => row.key))
-      .toEqual(['canada', 'usa|california', 'china|guangdong|guangzhou'])
+    expect(
+      selectRowsForDisplayLevel(rows, 'admin1', (row) => row.country).map((row) => row.key),
+    ).toEqual(['canada', 'usa|california', 'china|guangdong'])
+    expect(
+      selectRowsForDisplayLevel(rows, 'city', (row) => row.country).map((row) => row.key),
+    ).toEqual(['canada', 'usa|california', 'china|guangdong|guangzhou'])
   })
 
   it('keeps exactly the three compact coverage metrics', () => {
@@ -186,7 +217,14 @@ describe('map visualization hierarchy', () => {
   it('keeps the new median value when both API generations are present', () => {
     const response = normalizeMapStatsResponse({
       legend: { min: 1, max: 500, unit: 'mg/day/1000 inh', colors: [] },
-      summary: { countryCount: 1, admin1Count: 0, cityCount: 0, pointCount: 1, recordCount: 1, doiCount: 1 },
+      summary: {
+        countryCount: 1,
+        admin1Count: 0,
+        cityCount: 0,
+        pointCount: 1,
+        recordCount: 1,
+        doiCount: 1,
+      },
       regions: [{ ...legacyChinaRegion, pndlMedianMgD1000inh: 244 }],
       points: [{ ...legacyChinaRegion, pndlMedianMgD1000inh: 244 }],
     } satisfies MapStatsResponse)

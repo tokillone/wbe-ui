@@ -6,6 +6,46 @@ export type MapHierarchyRow = {
   level: MapDisplayLevel
 }
 
+const NON_MAINLAND_CHINA_GEO_SEGMENTS = new Set([
+  'aomen',
+  'hongkong',
+  'macao',
+  'macau',
+  'taiwan',
+  'xianggang',
+  '台湾',
+  '澳门',
+  '香港',
+])
+
+function normalizedGeoSegments(value: string | null | undefined) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .split('|')
+    .map((segment) => segment.replace(/[\s_-]+/g, ''))
+    .filter(Boolean)
+}
+
+export function isMainlandChinaCity(
+  geoKey: string | null | undefined,
+  parentGeoKey?: string | null,
+  provinceKey?: string | null,
+) {
+  const candidates = [geoKey, parentGeoKey, provinceKey]
+    .map(normalizedGeoSegments)
+    .filter((segments) => segments.length > 0)
+  if (!candidates.some((segments) => segments[0] === 'china')) return false
+  return !candidates.some((segments) =>
+    segments.slice(1).some((segment) => NON_MAINLAND_CHINA_GEO_SEGMENTS.has(segment)),
+  )
+}
+
+export function excludeGeometryFromFilter(originalFilter: unknown, geometry: unknown) {
+  const outsideGeometry = ['!', ['within', geometry]]
+  return originalFilter == null ? outsideGeometry : ['all', originalFilter, outsideGeometry]
+}
+
 export const MAP_LEVEL_ZOOM = {
   countryActiveEnd: 4.2,
   adminActiveEnd: 6.3,
@@ -29,6 +69,11 @@ export function visibleLevelsForZoom(zoom: number): MapDisplayLevel[] {
   }
   if (zoom >= MAP_LEVEL_ZOOM.cityFadeStart) levels.push('city')
   return levels
+}
+
+export function heatRegionLevelForDisplayLevel(level: MapDisplayLevel): MapDisplayLevel {
+  if (level === 'country') return 'admin1'
+  return 'city'
 }
 
 export function selectRowsForDisplayLevel<T extends MapHierarchyRow>(
@@ -59,7 +104,13 @@ export function selectRowsForDisplayLevel<T extends MapHierarchyRow>(
 }
 
 export function temperatureBandIndex(value: number, min: number, max: number, bandCount: number) {
-  if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(min) || !Number.isFinite(max) || bandCount <= 1) {
+  if (
+    !Number.isFinite(value) ||
+    value <= 0 ||
+    !Number.isFinite(min) ||
+    !Number.isFinite(max) ||
+    bandCount <= 1
+  ) {
     return 0
   }
   if (max <= min) return Math.floor(bandCount / 2)
@@ -92,15 +143,8 @@ export function regionFillOpacityExpression(hasSpecificBiomarker: boolean) {
   return [
     'case',
     ['==', ['get', 'hasPndlValue'], true],
-    [
-      'case',
-      ['==', ['get', 'level'], 'city'],
-      0.82,
-      ['==', ['get', 'level'], 'admin1'],
-      0.8,
-      0.78,
-    ],
-    ['case', ['==', ['get', 'hasCoverage'], true], 0.2, 0],
+    ['case', ['==', ['get', 'level'], 'city'], 0.82, ['==', ['get', 'level'], 'admin1'], 0.8, 0.78],
+    0,
   ]
 }
 
@@ -120,7 +164,9 @@ function compactCardLabel(label: string) {
 }
 
 export function compactExplorerSummaryCards(cards: MapSummaryCard[]) {
-  return cards.filter((card) => COMPACT_EXPLORER_CARD_LABELS.has(compactCardLabel(card.label))).slice(0, 3)
+  return cards
+    .filter((card) => COMPACT_EXPLORER_CARD_LABELS.has(compactCardLabel(card.label)))
+    .slice(0, 3)
 }
 
 export function canExploreBiomarker(
@@ -131,10 +177,10 @@ export function canExploreBiomarker(
 ) {
   return Boolean(
     item.biomarkerKey &&
-      (Number(item.recordCount ?? 0) > 0 ||
-        Number(item.doiCount ?? 0) > 0 ||
-        Number(item.pointCount ?? 0) > 0 ||
-        item.hasPndl),
+    (Number(item.recordCount ?? 0) > 0 ||
+      Number(item.doiCount ?? 0) > 0 ||
+      Number(item.pointCount ?? 0) > 0 ||
+      item.hasPndl),
   )
 }
 

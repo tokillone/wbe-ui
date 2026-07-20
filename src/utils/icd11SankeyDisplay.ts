@@ -23,6 +23,14 @@ export interface RelationPieSection {
   items: RelationShareItem[]
 }
 
+export interface UpstreamContext {
+  pathCount: number
+  level1: string[]
+  level2: string[]
+  level3: string[]
+  level2OnlyPathCount: number
+}
+
 export function smartSankeyLimit(pathCount: number) {
   if (pathCount > 200) return 100
   if (pathCount >= 80) return 50
@@ -228,6 +236,32 @@ export function relationPieSectionsForNode(
 export function sankeyHoverTargetKey(prefix: string, pathIds: Iterable<string>) {
   const normalized = [...new Set(pathIds)].sort()
   return `${prefix}:${normalized.join('|')}`
+}
+
+export function upstreamContext(paths: Icd11SankeyPath[]): UpstreamContext {
+  return {
+    pathCount: paths.length,
+    level1: uniqueSorted(paths.map((path) => path.level1)),
+    level2: uniqueSorted(paths.map((path) => path.level2)),
+    level3: uniqueSorted(paths.map((path) => path.level3)),
+    level2OnlyPathCount: paths.filter((path) => path.mappingLevel === 'Level2').length,
+  }
+}
+
+export function upstreamLayerText(names: string[], maxNames = 3) {
+  if (!names.length) return '无'
+  if (names.length > maxNames) return `共 ${names.length} 项`
+  return names.join('、')
+}
+
+export function resolveUpstreamPathIds(hoverPathIds: string[], persistentPathIds: string[]) {
+  return [...new Set(hoverPathIds.length ? hoverPathIds : persistentPathIds)]
+}
+
+function uniqueSorted(values: Array<string | null | undefined>) {
+  return [...new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b, 'zh-Hans-CN'),
+  )
 }
 
 function pathText(path: Icd11SankeyPath) {

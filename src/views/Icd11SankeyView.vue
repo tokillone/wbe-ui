@@ -17,8 +17,11 @@ import {
   displayModeLimit,
   pathsForLevel1Scope,
   relationPieSectionsForNode,
+  resolveUpstreamPathIds,
   sankeyHoverTargetKey,
   sortSankeyPaths,
+  upstreamContext as summarizeUpstreamContext,
+  upstreamLayerText,
   type RelationPieSection as BaseRelationPieSection,
   type RelationShareItem,
   type Icd11SankeyDisplayMode,
@@ -151,9 +154,14 @@ const MIN_WEIGHT_OPTIONS = [
 ]
 const STAGE_TITLES = ['ICD11_Level1', 'ICD11_Level2', 'ICD11_Level3', '药物', '生物标记物']
 const SERIES_LEFT = 96
-const SERIES_RIGHT = 94
+const SERIES_RIGHT = 156
 const SERIES_TOP = 10
 const SERIES_BOTTOM = 44
+const MOBILE_CHART_MIN_WIDTH = 900
+const LONG_CHART_HEIGHT_RATIO = 1.35
+const LONG_CHART_MIN_NODES = 60
+const UPSTREAM_CONTEXT_ENTRY_MIN = 780
+const UPSTREAM_CONTEXT_ENTRY_VIEWPORT_RATIO = 1.05
 const HEADER_HEIGHT = 70
 const HEADER_FADE_DISTANCE = 190
 const HOVER_INTENT_DELAY = 85
@@ -173,6 +181,20 @@ const LEVEL1_FALLBACK_COLORS = [
   '#D3AD5D',
   '#7695A6',
 ]
+const LEVEL2_QUALITATIVE_COLORS = [
+  '#4E79A7',
+  '#D86F5E',
+  '#4DA58D',
+  '#8F7BB5',
+  '#D39B42',
+  '#55A6BF',
+  '#C97D91',
+  '#91A66E',
+  '#A58470',
+  '#7185B3',
+  '#E49A68',
+  '#82B7A8',
+]
 const PIE_COLORS = [
   '#55A6BF',
   '#4DA58D',
@@ -190,6 +212,8 @@ const TOP_RELATION_PIE_ITEMS = 7
 use([SankeyChart, PieChart, TooltipComponent, CanvasRenderer])
 
 const chartEl = ref<HTMLElement | null>(null)
+const chartShellEl = ref<HTMLElement | null>(null)
+const chartScrollEl = ref<HTMLElement | null>(null)
 const modalPieChartEl = ref<HTMLElement | null>(null)
 const currentCategory = ref('')
 const graph = ref<Icd11SankeyGraph | null>(null)
@@ -203,6 +227,11 @@ const selectedLevel1 = ref('')
 const level1Scope = ref<Level1Scope>('linked')
 const minWeight = ref(0)
 const chartHeight = ref(760)
+const viewportHeight = ref(720)
+const chartScrollLeft = ref(0)
+const upstreamContextVisible = ref(false)
+const hoverContextPathIds = ref<string[]>([])
+const hoverContextTitle = ref('')
 const lockLabel = ref('')
 const lockText = ref('当前未锁定路径')
 const lockedEdge = ref<Icd11SankeyLink | null>(null)
@@ -257,7 +286,13 @@ const headerStyle = computed(() => ({
 const chartPanelStyle = computed(() => ({
   '--series-left': `${SERIES_LEFT}px`,
   '--series-right': `${SERIES_RIGHT}px`,
+  '--chart-min-width': `${MOBILE_CHART_MIN_WIDTH}px`,
 }))
+const stageAxisCanvasStyle = computed(() => ({
+  transform: `translate3d(${-chartScrollLeft.value}px, 0, 0)`,
+}))
+const level2ColorMap = computed(() => buildLevel2ColorMap(graph.value?.paths ?? []))
+const level3ColorMap = computed(() => buildLevel3ColorMap(graph.value?.paths ?? [], level2ColorMap.value))
 const level1Options = computed(() => {
   if (!graph.value) return []
   const weights = new Map<string, number>()
@@ -288,6 +323,67 @@ const relationPieSections = computed<RelationPieSection[]>(() => {
 const activePieSection = computed(
   () => relationPieSections.value.find((section) => section.id === activePieId.value) ?? null,
 )
+const isLongChart = computed(() => {
+  const maxNodes = activeBaseGraph.value?.stats.maxNodes ?? 0
+  return (
+    chartHeight.value > viewportHeight.value * LONG_CHART_HEIGHT_RATIO ||
+    maxNodes > LONG_CHART_MIN_NODES
+  )
+})
+const persistentContextPathIds = computed(() => {
+  const baseGraph = activeBaseGraph.value
+  if (!baseGraph) return []
+  if (currentFocus.value) return pathIdsForNode(baseGraph, currentFocus.value)
+  if (lockedEdge.value) return lockedEdge.value.pathIds
+  if (lockedPathId.value) return [lockedPathId.value]
+  return []
+})
+const upstreamContextPathIds = computed(() =>
+  resolveUpstreamPathIds(hoverContextPathIds.value, persistentContextPathIds.value),
+)
+const upstreamContextPaths = computed(() => {
+  const baseGraph = activeBaseGraph.value
+  if (!baseGraph) return []
+  const pathIds = upstreamContextPathIds.value
+  return pathIds.length ? selectedPaths(baseGraph, pathIds) : baseGraph.paths
+})
+const upstreamContextData = computed(() => summarizeUpstreamContext(upstreamContextPaths.value))
+const upstreamContextFocused = computed(() => upstreamContextPathIds.value.length > 0)
+const upstreamContextTitle = computed(() => {
+  if (hoverContextTitle.value) return hoverContextTitle.value
+  const baseGraph = activeBaseGraph.value
+  if (currentFocus.value && baseGraph) {
+    return baseGraph.nodes.find((node) => node.name === currentFocus.value)?.displayName ?? '已锁定节点'
+  }
+  if (lockedEdge.value) return `${lockedEdge.value.sourceLabel} → ${lockedEdge.value.targetLabel}`
+  if (lockedPathId.value && baseGraph) {
+    const path = pathMap(baseGraph).get(lockedPathId.value)
+    if (path) return pathText(path)
+  }
+  return '当前筛选范围'
+})
+const upstreamContextRows = computed(() => {
+  const context = upstreamContextData.value
+  const focused = upstreamContextFocused.value
+  const relatedLevel1Count = context.level1.filter((name) => name !== selectedLevel1.value).length
+  const level1Text = focused
+    ? upstreamLayerText(context.level1)
+    : relatedLevel1Count > 0
+      ? `${selectedLevel1.value} · 含关联 ${relatedLevel1Count} 项`
+      : selectedLevel1.value || upstreamLayerText(context.level1)
+  const level2Text = focused ? upstreamLayerText(context.level2) : `${context.level2.length} 项`
+  let level3Text = focused ? upstreamLayerText(context.level3) : `${context.level3.length} 项`
+  if (!context.level3.length && context.level2OnlyPathCount > 0) {
+    level3Text = '止于 Level2'
+  } else if (context.level2OnlyPathCount > 0) {
+    level3Text = `${level3Text} · 含直接 Level2`
+  }
+  return [
+    { label: 'Level1', value: level1Text },
+    { label: 'Level2', value: level2Text },
+    { label: 'Level3', value: level3Text },
+  ]
+})
 
 watch([searchQuery, displayMode, selectedLevel1, level1Scope, minWeight], () => {
   if (!graph.value) return
@@ -318,6 +414,7 @@ watch(pieModalOpen, async (isOpen) => {
 
 onMounted(async () => {
   window.scrollTo({ top: 0, left: 0 })
+  viewportHeight.value = window.innerHeight
   await nextTick()
   initChart()
   window.addEventListener('resize', handleResize)
@@ -443,7 +540,7 @@ function render(focusName: string | null = null) {
           right: SERIES_RIGHT,
           top: SERIES_TOP,
           bottom: SERIES_BOTTOM,
-          nodeWidth: 14,
+          nodeWidth: 22,
           nodeGap: nodeGap(baseGraph),
           nodeAlign: 'justify',
           layoutIterations: 0,
@@ -454,7 +551,7 @@ function render(focusName: string | null = null) {
             itemStyle: {
               opacity: 1,
               borderColor: 'rgba(255,255,255,0.96)',
-              borderWidth: 1.4,
+              borderWidth: 1,
             },
             label: {
               color: '#102a3d',
@@ -692,28 +789,23 @@ function styledForSearch(baseGraph: Icd11SankeyGraph, seeds: Set<string>): Chart
 
 function chartNode(node: Icd11SankeyNode, active: boolean, highlighted: boolean): ChartNode {
   const label = nodeLabel(node)
-  const position = node.depth === 4 ? 'left' : 'right'
+  const position = 'right'
+  const fillColor = nodeDepthColor(node)
   const isRelatedContext =
     (node.kind === 'level1' || node.kind === 'level2') && node.level1 !== selectedLevel1.value
   return {
     ...node,
     itemStyle: {
-      color: nodeDepthColor(node),
+      color: fillColor,
       opacity: active ? (isRelatedContext && !highlighted ? 0.7 : 1) : 0.2,
-      borderColor: highlighted
-        ? 'rgba(255,255,255,0.98)'
-        : active
-          ? 'rgba(255,255,255,0.92)'
-          : 'rgba(255,255,255,0.54)',
-      borderWidth: highlighted ? 1.6 : 1.2,
-      shadowBlur: 0,
-      shadowColor: 'transparent',
+      borderColor: active ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.5)',
+      borderWidth: 1,
     },
     emphasis: {
       itemStyle: {
         opacity: active ? 1 : 0.58,
         borderColor: 'rgba(255,255,255,0.96)',
-        borderWidth: 1.4,
+        borderWidth: 1,
       },
       label: {
         color: active ? '#102a3d' : 'rgba(23, 50, 71, 0.56)',
@@ -769,8 +861,6 @@ function chartLink(link: Icd11SankeyLink, active: boolean, highlighted: boolean)
       color: hexToRgba(color, highlighted ? 0.72 : active ? activeAlpha : 0.05),
       opacity: highlighted ? 0.94 : active ? activeOpacity : 0.07,
       curveness: 0.52,
-      shadowBlur: highlighted ? 3 : 0,
-      shadowColor: highlighted ? hexToRgba(color, 0.2) : 'transparent',
     },
     emphasis: {
       lineStyle: {
@@ -806,11 +896,11 @@ function singleLineLabel(value: string) {
 function nodeDepthColor(node: Icd11SankeyNode) {
   const baseColor = level1DisplayColor(node.level1, node.color)
   if (node.kind === 'level2') return level2DisplayColor(node.level1, node.displayName, node.color)
+  if (node.kind === 'level3') return level3ColorMap.value.get(node.name) ?? mixHex(baseColor, '#ffffff', 0.16)
   if (node.kind === 'drug' || node.kind === 'biomarker') {
     return node.kind === 'drug' ? '#7896A3' : '#91A9A1'
   }
-  const depthMix = [0, 0.05, 0.11, 0.14, 0.16][node.depth] ?? 0.1
-  return mixHex(baseColor, '#ffffff', depthMix)
+  return baseColor
 }
 
 function sankeyLabelFontSize(baseGraph: Icd11SankeyGraph) {
@@ -861,7 +951,7 @@ async function handleChartClick(params: unknown) {
 function handleSankeyMouseOver(params: unknown) {
   const target = previewTargetFromEvent(params)
   if (!target) return
-  schedulePreviewHighlight(target.key, target.pathIds)
+  schedulePreviewHighlight(target.key, target.pathIds, target.title)
 }
 
 function previewTargetFromEvent(params: unknown) {
@@ -874,6 +964,7 @@ function previewTargetFromEvent(params: unknown) {
     return {
       key: sankeyHoverTargetKey(`edge:${edge.linkId}`, edge.pathIds),
       pathIds: edge.pathIds,
+      title: `${edge.sourceLabel} → ${edge.targetLabel}`,
     }
   }
   if (event.dataType === 'node') {
@@ -883,6 +974,7 @@ function previewTargetFromEvent(params: unknown) {
     return {
       key: sankeyHoverTargetKey(`node:${node.name}`, pathIds),
       pathIds,
+      title: node.displayName,
     }
   }
   return null
@@ -944,7 +1036,7 @@ function updateSeriesGraph(nextGraph: ChartGraph) {
   })
 }
 
-function schedulePreviewHighlight(key: string, pathIds: string[]) {
+function schedulePreviewHighlight(key: string, pathIds: string[], contextTitle = '') {
   if (!renderedGraph.value || !pathIds.length) return
   if (key === activePreviewKey && !hoverPreviewTimer) return
   clearTimer('restore')
@@ -953,6 +1045,8 @@ function schedulePreviewHighlight(key: string, pathIds: string[]) {
     hoverPreviewTimer = null
     if (!renderedGraph.value || key === activePreviewKey) return
     activePreviewKey = key
+    hoverContextPathIds.value = [...pathIds]
+    hoverContextTitle.value = contextTitle
     updateSeriesGraph(styledForPathIds(renderedGraph.value, pathIds))
   }, HOVER_INTENT_DELAY)
 }
@@ -969,6 +1063,8 @@ function scheduleRestoreHighlight() {
 function clearHoverPreview() {
   clearHoverTimers()
   activePreviewKey = ''
+  hoverContextPathIds.value = []
+  hoverContextTitle.value = ''
   restoreLockedHighlight()
 }
 
@@ -1083,6 +1179,7 @@ function handleRelationItemMouseOver(section: RelationPieSection, item: Relation
   schedulePreviewHighlight(
     sankeyHoverTargetKey(`relation:${section.hoverPrefix}:${item.name}`, item.pathIds),
     item.pathIds,
+    item.name,
   )
 }
 
@@ -1277,6 +1374,7 @@ function handleRelationPieMouseOver(params: unknown) {
   schedulePreviewHighlight(
     sankeyHoverTargetKey(`pie:${section?.hoverPrefix ?? 'relation'}:${data.name}`, data.pathIds),
     data.pathIds,
+    data.name,
   )
 }
 
@@ -1332,6 +1430,8 @@ function clearSelectionFromBlank() {
 function clearLockedState() {
   clearHoverTimers()
   activePreviewKey = ''
+  hoverContextPathIds.value = []
+  hoverContextTitle.value = ''
   pieModalOpen.value = false
   activePieId.value = ''
   lockedEdge.value = null
@@ -1428,17 +1528,20 @@ function searchSeeds(baseGraph: Icd11SankeyGraph, keyword: string) {
 }
 
 function setChartHeight(baseGraph: Icd11SankeyGraph) {
-  const viewportHeight = Math.max(720, window.innerHeight - HEADER_HEIGHT)
+  const availableViewportHeight = Math.max(720, window.innerHeight - HEADER_HEIGHT)
   const maxNodes = Math.max(1, baseGraph.stats.maxNodes)
   const pathCount = baseGraph.paths.length
   const dense = pathCount > 200 || maxNodes > 90
   const medium = pathCount > 80 || maxNodes > 28
-  const perNode = dense ? 16 : medium ? 17 : 16
-  const extraSpace = dense ? 240 : medium ? 200 : 160
-  const maxHeight = dense ? 3000 : medium ? 2100 : 1200
+  const perNode = dense ? 22 : medium ? 28 : 16
+  const extraSpace = dense ? 320 : medium ? 260 : 160
+  const maxHeight = dense ? 5500 : medium ? 3000 : 1200
   const contentHeight = maxNodes * perNode + extraSpace
-  chartHeight.value = Math.max(viewportHeight, Math.min(maxHeight, contentHeight))
-  void nextTick(() => chart?.resize())
+  chartHeight.value = Math.max(availableViewportHeight, Math.min(maxHeight, contentHeight))
+  void nextTick(() => {
+    chart?.resize()
+    updateUpstreamContextVisibility()
+  })
 }
 
 function nodeGap(baseGraph: Icd11SankeyGraph) {
@@ -1447,14 +1550,20 @@ function nodeGap(baseGraph: Icd11SankeyGraph) {
   const dense = pathCount > 200 || maxNodes > 90
   const medium = pathCount > 80 || maxNodes > 28
   const availableHeight = Math.max(360, chartHeight.value - SERIES_TOP - SERIES_BOTTOM)
-  const density = Math.floor((availableHeight / maxNodes) * (dense ? 0.72 : medium ? 0.72 : 0.6))
-  const minGap = dense ? 11 : medium ? 12 : 8
-  const maxGap = dense ? 21 : medium ? 24 : 22
+  const density = Math.floor((availableHeight / maxNodes) * (dense ? 0.68 : medium ? 0.7 : 0.6))
+  const minGap = dense ? 4 : medium ? 6 : 8
+  const maxGap = dense ? 9 : medium ? 14 : 20
   return Math.max(minGap, Math.min(maxGap, density))
 }
 
 function handleResize() {
+  viewportHeight.value = window.innerHeight
   applyChartLayout()
+  updateUpstreamContextVisibility()
+}
+
+function handleChartScroll(event: Event) {
+  chartScrollLeft.value = (event.currentTarget as HTMLElement).scrollLeft
 }
 
 function openDetailPanel() {
@@ -1481,6 +1590,21 @@ function applyChartLayout() {
 function handleWindowScroll() {
   const scrollTop = Math.max(window.scrollY, document.documentElement.scrollTop, 0)
   headerScrollProgress.value = Math.min(1, scrollTop / HEADER_FADE_DISTANCE)
+  updateUpstreamContextVisibility()
+}
+
+function updateUpstreamContextVisibility() {
+  const shell = chartShellEl.value
+  if (!shell || !isLongChart.value) {
+    upstreamContextVisible.value = false
+    return
+  }
+  const bounds = shell.getBoundingClientRect()
+  const entryOffset = Math.max(
+    UPSTREAM_CONTEXT_ENTRY_MIN,
+    viewportHeight.value * UPSTREAM_CONTEXT_ENTRY_VIEWPORT_RATIO,
+  )
+  upstreamContextVisible.value = bounds.top < -entryOffset && bounds.bottom > 220
 }
 
 function pathText(path: Icd11SankeyPath) {
@@ -1553,21 +1677,86 @@ function fallbackLevel1Color(level1: string): string {
   return LEVEL1_FALLBACK_COLORS[hash % LEVEL1_FALLBACK_COLORS.length] ?? '#7185B3'
 }
 
-function level2DisplayColor(level1: string, level2: string, rawColor: string): string {
-  const base = level1DisplayColor(level1, rawColor)
-  const hsl = rgbToHsl(hexToRgb(base))
-  const variants = [
-    { hue: -0.035, saturation: -0.03, lightness: 0.02 },
-    { hue: -0.018, saturation: -0.08, lightness: 0.07 },
-    { hue: 0.012, saturation: 0.01, lightness: 0.1 },
-    { hue: 0.028, saturation: -0.06, lightness: 0.04 },
-    { hue: 0.045, saturation: -0.01, lightness: 0.08 },
-  ]
-  const variant = variants[stableTextHash(level2) % variants.length] ?? variants[0]!
+function level2DisplayColor(level1: string, level2: string, _rawColor: string): string {
+  const key = level2PaletteKey(level1, level2)
+  return level2ColorMap.value.get(key) ?? fallbackLevel2Color(key)
+}
+
+function buildLevel2ColorMap(paths: Icd11SankeyPath[]) {
+  const groups = new Map<string, Map<string, number>>()
+  for (const path of paths) {
+    const weights = groups.get(path.level1) ?? new Map<string, number>()
+    weights.set(path.level2, (weights.get(path.level2) ?? 0) + Number(path.weight || 0))
+    groups.set(path.level1, weights)
+  }
+  const colors = new Map<string, string>()
+  for (const [level1, weights] of [...groups.entries()].sort(([a], [b]) =>
+    a.localeCompare(b, 'zh-Hans-CN'),
+  )) {
+    const offset = stableTextHash(level1) % LEVEL2_QUALITATIVE_COLORS.length
+    const level2Entries = [...weights.entries()].sort(
+      ([nameA, weightA], [nameB, weightB]) =>
+        weightB - weightA || nameA.localeCompare(nameB, 'zh-Hans-CN'),
+    )
+    level2Entries.forEach(([level2], index) => {
+      const base =
+        LEVEL2_QUALITATIVE_COLORS[(offset + index) % LEVEL2_QUALITATIVE_COLORS.length] ?? '#4E79A7'
+      const cycle = Math.floor(index / LEVEL2_QUALITATIVE_COLORS.length)
+      colors.set(level2PaletteKey(level1, level2), level2Tone(base, cycle))
+    })
+  }
+  return colors
+}
+
+function buildLevel3ColorMap(paths: Icd11SankeyPath[], level2Colors: Map<string, string>) {
+  const parentKeys = new Map<string, Set<string>>()
+  for (const path of paths) {
+    if (path.mappingLevel !== 'Level3') continue
+    const level3NodeId = path.nodeIds[2]
+    if (!level3NodeId) continue
+    const keys = parentKeys.get(level3NodeId) ?? new Set<string>()
+    keys.add(level2PaletteKey(path.level1, path.level2))
+    parentKeys.set(level3NodeId, keys)
+  }
+  const colors = new Map<string, string>()
+  for (const [nodeId, keys] of parentKeys) {
+    if (keys.size !== 1) {
+      colors.set(nodeId, '#9AA9AC')
+      continue
+    }
+    const parentKey = [...keys][0] ?? ''
+    const parentColor = level2Colors.get(parentKey) ?? fallbackLevel2Color(parentKey)
+    colors.set(nodeId, tintHex(parentColor, 0.14))
+  }
+  return colors
+}
+
+function level2PaletteKey(level1: string, level2: string) {
+  return `${level1}::${level2}`
+}
+
+function fallbackLevel2Color(key: string) {
+  const base = LEVEL2_QUALITATIVE_COLORS[stableTextHash(key) % LEVEL2_QUALITATIVE_COLORS.length]
+  return base ?? '#4E79A7'
+}
+
+function level2Tone(baseColor: string, cycle: number) {
+  if (cycle <= 0) return baseColor
+  const hsl = rgbToHsl(hexToRgb(baseColor))
+  const lighten = cycle % 2 === 1
   return hslToHex({
-    h: (hsl.h + variant.hue + 1) % 1,
-    s: Math.max(0.38, Math.min(0.62, hsl.s + variant.saturation)),
-    l: Math.max(0.5, Math.min(0.64, hsl.l + variant.lightness)),
+    h: hsl.h,
+    s: Math.max(0.38, hsl.s - cycle * 0.04),
+    l: Math.max(0.42, Math.min(0.68, hsl.l + (lighten ? 0.1 : -0.06))),
+  })
+}
+
+function tintHex(hex: string, amount: number) {
+  const hsl = rgbToHsl(hexToRgb(hex))
+  return hslToHex({
+    h: hsl.h,
+    s: Math.max(0.34, hsl.s - amount * 0.22),
+    l: Math.min(0.72, hsl.l + amount),
   })
 }
 
@@ -1760,12 +1949,25 @@ function exportPng() {
         <p v-if="errorMessage" class="state-message error-state">{{ errorMessage }}</p>
         <p v-else-if="isLoading && !graph" class="state-message">正在加载 ICD11 桑基图数据</p>
         <div class="stage-axis" aria-hidden="true">
-          <div class="stage-axis-track">
-            <span v-for="title in STAGE_TITLES" :key="title">{{ title }}</span>
+          <div class="stage-axis-canvas" :style="stageAxisCanvasStyle">
+            <div class="stage-axis-track">
+              <span
+                v-for="(title, index) in STAGE_TITLES"
+                :key="title"
+                :data-stage-index="index"
+                :style="{ left: `${index * 25}%` }"
+              >
+                {{ title }}
+              </span>
+            </div>
           </div>
         </div>
-        <div class="sankey-chart-scroll">
-          <div class="sankey-chart-shell" :style="{ height: `${chartHeight}px` }">
+        <div ref="chartScrollEl" class="sankey-chart-scroll" @scroll.passive="handleChartScroll">
+          <div
+            ref="chartShellEl"
+            class="sankey-chart-shell"
+            :style="{ height: `${chartHeight}px` }"
+          >
             <div class="level1-column-rail" aria-hidden="true"></div>
             <div ref="chartEl" class="sankey-chart"></div>
           </div>
@@ -1780,6 +1982,23 @@ function exportPng() {
         }"
         aria-label="ICD11 桑基图说明区"
       >
+        <section
+          v-if="upstreamContextVisible"
+          class="upstream-context is-visible"
+          aria-label="当前上游层级上下文"
+          aria-live="polite"
+        >
+          <header>
+            <span>上游上下文</span>
+            <strong :title="upstreamContextTitle">{{ upstreamContextTitle }}</strong>
+          </header>
+          <dl>
+            <template v-for="row in upstreamContextRows" :key="row.label">
+              <dt>{{ row.label }}</dt>
+              <dd :title="row.value">{{ row.value }}</dd>
+            </template>
+          </dl>
+        </section>
         <template v-if="detail.kind === 'category' && categoryStats">
           <header class="overview-header">
             <h2>{{ selectedCategoryLabel }}</h2>
@@ -1792,7 +2011,7 @@ function exportPng() {
           </header>
           <section class="detail-block">
             <h3>图例说明</h3>
-            <p><b>颜色</b>：Level1 确定主色家族，Level2 用同色系中的路径色区分；<b>带宽</b> 代表涉及文献数权重。</p>
+            <p><b>颜色</b>：Level1 使用类别锚点色，Level2 使用稳定定性色作为主路径色，Level3 继承父 Level2 的浅色；<b>带宽</b> 代表涉及文献数权重。</p>
             <p><b>Level1 轨道</b>：浅色纵向轨道仅用于层级定位，不代表权重。</p>
             <p><b>关联展开</b>：选中 Level1 后，同时显示与其共享下游节点的其他 Level1 相关路径。</p>
             <p><b>完整路径</b>：ICD11_Level1 → ICD11_Level2 → ICD11_Level3 → 药物 → 生物标记物。</p>
@@ -4397,8 +4616,8 @@ function exportPng() {
   z-index: 0;
   top: 10px;
   bottom: 44px;
-  left: calc(var(--series-left) - 7px);
-  width: 28px;
+  left: calc(var(--series-left) - 10px);
+  width: 42px;
   border: 1px solid rgba(113, 133, 179, 0.07);
   border-radius: 7px;
   background: linear-gradient(180deg, rgba(85, 166, 191, 0.03), rgba(130, 183, 168, 0.055));
@@ -4504,19 +4723,24 @@ function exportPng() {
   z-index: 18;
   width: 100%;
   box-sizing: border-box;
-  padding: 7px var(--series-right) 0 var(--series-left);
+  overflow: hidden;
+  padding: 7px 0 0;
   border-bottom: 1px solid rgba(105, 127, 140, 0.08);
   background:
     linear-gradient(180deg, rgba(250, 255, 254, 0.98), rgba(248, 253, 252, 0.92)),
     var(--sankey-chart-bg);
 }
 
+.stage-axis-canvas {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 var(--series-right) 0 var(--series-left);
+  will-change: transform;
+}
+
 .stage-axis-track {
   position: relative;
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
-  min-height: 23px;
+  min-height: 26px;
 }
 
 .stage-axis-track::before,
@@ -4525,7 +4749,11 @@ function exportPng() {
 }
 
 .stage-axis-track span {
+  position: absolute;
+  top: 0;
+  width: clamp(112px, 19%, 210px);
   min-width: 0;
+  box-sizing: border-box;
   display: grid;
   place-items: center;
   padding: 3px 5px;
@@ -4541,10 +4769,81 @@ function exportPng() {
     0 1px 0 rgba(255, 255, 255, 0.86),
     0 6px 14px rgba(33, 63, 78, 0.08);
   white-space: nowrap;
+  transform: translateX(-50%);
 }
 
 .stage-axis-track span::after {
   display: none;
+}
+
+.upstream-context {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 12px;
+  padding: 10px 11px;
+  border: 1px solid rgba(91, 125, 137, 0.2);
+  border-left: 3px solid rgba(113, 133, 179, 0.72);
+  border-radius: 7px;
+  background: rgba(245, 250, 252, 0.96);
+  pointer-events: none;
+}
+
+.upstream-context.is-visible {
+  animation: upstream-context-enter 0.18s ease both;
+}
+
+@keyframes upstream-context-enter {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.upstream-context header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid rgba(105, 127, 140, 0.11);
+}
+
+.upstream-context header span {
+  color: #6a808b;
+  font-size: 10px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.upstream-context header strong,
+.upstream-context dd {
+  min-width: 0;
+  overflow: hidden;
+  color: #173247;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upstream-context header strong {
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.upstream-context dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 8px;
+  margin: 8px 0 0;
+}
+
+.upstream-context dt {
+  color: #718792;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.upstream-context dd {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .sankey-chart {
@@ -4582,35 +4881,46 @@ function exportPng() {
   }
 
   .stage-axis {
-    min-width: 760px;
-    padding: 10px 12px 8px;
+    padding: 9px 0 7px;
   }
 
-  .stage-axis-track {
-    height: auto;
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 4px;
+  .stage-axis-canvas {
+    width: var(--chart-min-width);
+    min-width: var(--chart-min-width);
+    padding-right: var(--series-right);
+    padding-left: var(--series-left);
   }
 
   .stage-axis-track span {
-    position: static;
-    display: grid;
-    min-height: 30px;
-    place-items: center;
+    width: 118px;
+    min-height: 28px;
     padding: 4px 3px;
     border: 1px solid rgba(105, 127, 140, 0.12);
     border-radius: 7px;
     background: rgba(255, 255, 255, 0.72);
     font-size: 10px;
     line-height: 1.15;
-    overflow-wrap: anywhere;
     white-space: nowrap;
-    transform: none !important;
   }
 
   .sankey-chart-shell {
-    min-width: 760px;
+    min-width: var(--chart-min-width);
+  }
+
+  .upstream-context {
+    width: 100%;
+    margin: 0 0 10px;
+    padding: 8px 9px;
+  }
+
+  .upstream-context header {
+    padding-bottom: 6px;
+  }
+
+  .upstream-context dl {
+    grid-template-columns: repeat(3, auto minmax(0, 1fr));
+    gap: 4px 6px;
+    margin-top: 6px;
   }
 
   .stats-summary {

@@ -8,10 +8,13 @@ import {
 import {
   relationPieSectionsForNode,
   relationShareItems,
+  resolveUpstreamPathIds,
   pathsForLevel1Context,
   pathsForLevel1Scope,
   sankeyHoverTargetKey,
   smartSankeyLimit,
+  upstreamContext,
+  upstreamLayerText,
 } from '../utils/icd11SankeyDisplay'
 import type { Icd11SankeyPath } from '../types/icd11Sankey'
 
@@ -135,6 +138,34 @@ describe('icd11Sankey display helpers', () => {
     expect(sankeyHoverTargetKey('edge:a', ['p2', 'p1', 'p2'])).toBe(
       sankeyHoverTargetKey('edge:a', ['p1', 'p2']),
     )
+  })
+
+  it('summarizes truthful upstream levels without inventing Level3 values', () => {
+    const level3Path = path('p1', '糖尿病', '2型糖尿病', '二甲双胍', '二甲双胍', 4)
+    const level2Path = {
+      ...path('p2', '糖尿病', null, '二甲双胍', '乳酸', 2),
+      level1: '泌尿生殖系统疾病',
+    }
+
+    expect(upstreamContext([level3Path, level2Path])).toEqual({
+      pathCount: 2,
+      level1: ['泌尿生殖系统疾病', '内分泌、营养或代谢疾病'],
+      level2: ['糖尿病'],
+      level3: ['2型糖尿病'],
+      level2OnlyPathCount: 1,
+    })
+  })
+
+  it('shows every small upstream set and collapses larger sets to a count', () => {
+    expect(upstreamLayerText(['A', 'B', 'C'])).toBe('A、B、C')
+    expect(upstreamLayerText(['A', 'B', 'C', 'D'])).toBe('共 4 项')
+    expect(upstreamLayerText([])).toBe('无')
+  })
+
+  it('prefers hover context and falls back to the persistent lock context', () => {
+    expect(resolveUpstreamPathIds(['hover', 'hover'], ['locked'])).toEqual(['hover'])
+    expect(resolveUpstreamPathIds([], ['locked', 'locked'])).toEqual(['locked'])
+    expect(resolveUpstreamPathIds([], [])).toEqual([])
   })
 
   it('builds pie sections based on locked node kind', () => {

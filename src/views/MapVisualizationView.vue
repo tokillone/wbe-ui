@@ -40,6 +40,9 @@ import {
   canExploreBiomarker,
   compactExplorerSummaryCards,
   displayLevelForZoom,
+  excludeGeometryFromFilter,
+  heatRegionLevelForDisplayLevel,
+  isMainlandChinaCity,
   overviewSummaryCards,
   regionFillOpacityExpression,
   resolveStableHeatRange,
@@ -256,6 +259,7 @@ const PNDL_LAYER_IDS = MAP_DISPLAY_LEVELS.flatMap((level) => [
   `pndl-${level}-bubble-count`,
   `pndl-${level}-point-labels`,
 ])
+const PNDL_POINT_LABEL_LAYER_IDS = MAP_DISPLAY_LEVELS.map((level) => `pndl-${level}-point-labels`)
 const MAP_LOCALE_STORAGE_KEY = 'wbe.map.locale'
 const BOUNDARY_NOISE_AREA_THRESHOLDS: Record<BoundaryName, number> = {
   countries: 0.08,
@@ -477,15 +481,15 @@ const UI_TEXT = {
     heatLegendLow: '低',
     heatLegendMedium: '中',
     heatLegendHigh: '高',
-    heatLegendNote: '颜色由蓝到红表示 PNDL 由低到高；气泡数字表示点位数。',
+    heatLegendNote: '颜色由蓝到红表示 PNDL 由低到高；气泡数字表示污水厂/采样点覆盖数。',
     heatLegendUnit: 'mg/day/1000 inh',
     pndlTrend: 'PNDL 年度趋势',
     annualTrends: '年度趋势',
     physicochemicalProperties: 'biomarker 理化性质',
     dataNotes: '数据说明',
     dataNotePndl: 'PNDL 对比仅在选择具体生物标记物后展示；年度趋势节点使用同年同单位数据的中位数。',
-    dataNoteBubble: '地图气泡数字表示当前筛选下可映射点位数。',
-    dataNoteCoverage: '点位、文献、记录和 biomarker 数均按当前区域与筛选条件统计。',
+    dataNoteBubble: '点位数按文献报告的污水厂/采样点位计算；跨文献点位仅在有明确证据确认同一真实污水厂时合并，否则按独立点位处理。',
+    dataNoteCoverage: '国家、省/州、市的点位、文献、记录和 biomarker 数均按当前区域与筛选条件重新统计。',
     points: '点位',
     cities: '城市',
     records: '记录数',
@@ -606,7 +610,7 @@ const UI_TEXT = {
     heatLegendLow: 'Low',
     heatLegendMedium: 'Medium',
     heatLegendHigh: 'High',
-    heatLegendNote: 'Colors run from blue to red as PNDL rises; bubbles show site count.',
+    heatLegendNote: 'Colors run from blue to red as PNDL rises; bubbles show reported plant/sampling-site coverage.',
     heatLegendUnit: 'mg/day/1000 inh',
     pndlTrend: 'PNDL yearly trend',
     annualTrends: 'Yearly trends',
@@ -614,9 +618,10 @@ const UI_TEXT = {
     dataNotes: 'Data notes',
     dataNotePndl:
       'PNDL comparison requires a specific biomarker; yearly trend points use same-unit annual medians.',
-    dataNoteBubble: 'Map bubble numbers show mappable site counts under the current filters.',
+    dataNoteBubble:
+      'Sites follow literature-reported wastewater plants or sampling points. Cross-paper sites merge only after evidence-based confirmation; otherwise they remain independent.',
     dataNoteCoverage:
-      'Site, literature, record, and biomarker counts follow the current region and filters.',
+      'Country, state/province, and city counts are recalculated for the current region and filters.',
     points: 'Sites',
     cities: 'Cities',
     records: 'Records',
@@ -2025,6 +2030,7 @@ function vectorTextHaloWidth(layerId: string) {
 function isStyleLayer(layer: unknown): layer is {
   id: string
   type?: string
+  filter?: unknown
   layout?: Record<string, unknown>
   paint?: Record<string, unknown>
 } {
@@ -2055,12 +2061,16 @@ function regionLayerBeforeId(layer: unknown) {
 function addPndlLabelLayer(level: MapDisplayLevel) {
   const minzoom =
     level === 'country' ? 1.35 : level === 'admin1' ? 4.4 : CITY_BOUNDARY_MIN_ZOOM + 0.4
+  const filters: unknown[] = [['==', ['get', 'labelVisible'], true]]
+  if (level === 'city' && basemapMode === 'vector') {
+    filters.push(['==', ['get', 'isMainlandCity'], true])
+  }
   addMapLayer({
     id: pndlLayerId(level, 'point-labels'),
     type: 'symbol',
     source: pointLabelSourceId(level),
     ...pndlLayerZoomRange(level, minzoom),
-    filter: ['==', ['get', 'labelVisible'], true],
+    filter: filters.length === 1 ? filters[0] : ['all', ...filters],
     layout: {
       'text-field': ['get', 'displayName'],
       'text-font': ['Noto Sans Medium'],
@@ -2171,8 +2181,8 @@ function addMapSourcesAndLayers() {
     addGeoSource('country-label-points')
     addGeoSource('admin1-label-points')
     addGeoSource('china-province-label-points')
-    addGeoSource('china-city-label-points')
   }
+  addGeoSource('china-city-label-points')
   MAP_DISPLAY_LEVELS.forEach((level) => {
     addPointSource(level)
     addPointLabelSource(level)
@@ -2200,17 +2210,19 @@ function addMapSourcesAndLayers() {
       5.8,
       10,
     )
-    addLabelLayer(
-      'china-city-label',
-      'china-city-label-points',
-      CITY_BOUNDARY_MIN_ZOOM + 0.3,
-      undefined,
-      10,
-    )
     addLabelLayer('continent-label', 'continent-label-points', 0, 1.75, 16)
     addLabelLayer('country-label', 'country-label-points', 1.35, LEVEL_FADE_COUNTRY_END, 12)
     updateContinentLabels()
   }
+  addLabelLayer(
+    'china-city-label',
+    'china-city-label-points',
+    CITY_BOUNDARY_MIN_ZOOM + 0.3,
+    undefined,
+    10,
+    true,
+    true,
+  )
   addRegionHitLayers()
   addRegionDataLayers()
   addRegionHighlightLayers()
@@ -2219,6 +2231,7 @@ function addMapSourcesAndLayers() {
 
   addBubbleImages()
   MAP_DISPLAY_LEVELS.forEach(addPndlPointLayers)
+  applyMainlandCityLabelAuthority()
   applyViewLayerVisibility()
 }
 
@@ -2744,6 +2757,7 @@ function addLabelLayer(
   maxzoom: number | undefined,
   textSize: number,
   includeChina = true,
+  mainlandCitiesOnly = false,
 ) {
   addMapLayer({
     id,
@@ -2751,7 +2765,7 @@ function addLabelLayer(
     source,
     minzoom,
     ...(maxzoom ? { maxzoom } : {}),
-    filter: labelLayerFilter(includeChina),
+    filter: labelLayerFilter(includeChina, mainlandCitiesOnly),
     layout: {
       'text-field': ['get', 'display_name'],
       'text-font': ['Noto Sans Regular'],
@@ -2769,13 +2783,47 @@ function addLabelLayer(
   })
 }
 
-function labelLayerFilter(includeChina: boolean) {
+function labelLayerFilter(includeChina: boolean, mainlandCitiesOnly: boolean) {
   const filters: unknown[] = [
     ['==', ['get', 'labelVisible'], true],
     ['!=', ['get', 'hasPndlRegion'], true],
   ]
   if (!includeChina) filters.push(['!=', ['get', 'country_key'], 'china'])
+  if (basemapMode === 'vector' && mainlandCitiesOnly) {
+    filters.push(['==', ['get', 'isMainlandCity'], true])
+  }
   return filters.length === 1 ? filters[0] : ['all', ...filters]
+}
+
+function mainlandChinaGeometry() {
+  const countries = boundaryCache.get('countries')
+  const feature = countries?.features.find((item) => {
+    const properties = item.properties ?? {}
+    return (
+      String(
+        properties['ISO3166-1-Alpha-3'] ?? properties.iso_a3 ?? properties.ISO_A3 ?? '',
+      ).toUpperCase() === 'CHN'
+    )
+  })
+  return feature?.geometry ?? null
+}
+
+function originalVectorLayerFilter(layerId: string) {
+  if (activeBasemapConfig.mode !== 'vector') return null
+  const layer = activeBasemapConfig.layers.find((item) => isStyleLayer(item) && item.id === layerId)
+  return isStyleLayer(layer) ? (layer.filter ?? null) : null
+}
+
+function applyMainlandCityLabelAuthority() {
+  if (!map || basemapMode !== 'vector' || !boundaryCache.has('chinaCities')) return
+  const layerId = 'places_locality'
+  if (!map.getLayer(layerId)) return
+  const geometry = mainlandChinaGeometry()
+  if (!geometry) return
+  map.setFilter(
+    layerId,
+    excludeGeometryFromFilter(originalVectorLayerFilter(layerId), geometry) as never,
+  )
 }
 
 function bindLayerEvents() {
@@ -2822,6 +2870,7 @@ async function ensureBoundary(name: BoundaryName, refreshCached = false) {
     if (refreshCached) {
       updateBoundarySource(name)
       updateRegionDataSource()
+      applyMainlandCityLabelAuthority()
     }
     return
   }
@@ -2841,6 +2890,7 @@ async function ensureBoundary(name: BoundaryName, refreshCached = false) {
     updateBoundarySource(name)
     updatePointSource()
     updateRegionDataSource()
+    applyMainlandCityLabelAuthority()
     if (name === 'countries') updateMapStatus()
   } catch {
     mapError.value = ui.value.boundaryLoadFailed
@@ -2852,14 +2902,16 @@ async function ensureBoundary(name: BoundaryName, refreshCached = false) {
 function ensureStagedBoundariesForCurrentZoom(refreshCached = false) {
   if (!mapReady.value) return
   const zoom = map?.getZoom() ?? mapZoomLevel.value
+  const heatLevel = heatRegionLevelForDisplayLevel(activeMapLevel.value)
   void ensureBoundary('countries', refreshCached)
-  if (zoom >= 3.2) {
+  if (zoom >= 3.2 || (hasSpecificBiomarker.value && heatLevel === 'admin1')) {
     void ensureBoundary('admin1', refreshCached)
     void ensureBoundary('chinaProvinces', refreshCached)
   }
   const shouldLoadCities =
     zoom >= CITY_BOUNDARY_MIN_ZOOM ||
     activeMapLevel.value === 'city' ||
+    (hasSpecificBiomarker.value && heatLevel === 'city' && hasChinaCityRows()) ||
     (zoom >= LEVEL_FADE_CITY_START - 0.15 && hasChinaCityRows())
   if (shouldLoadCities) {
     void ensureBoundary('chinaCities', refreshCached)
@@ -3299,7 +3351,7 @@ function dataRegionIds() {
 }
 
 function dataRegionIdSet() {
-  return new Set(displayMapRegionRows().map(regionIdForStat).filter(Boolean))
+  return new Set(displayHeatRegionRows().map(regionIdForStat).filter(Boolean))
 }
 
 function pointRegionIdSet() {
@@ -3352,7 +3404,7 @@ function buildRegionDataCollection(): FeatureCollection {
   }
   const collection: FeatureCollection = {
     type: 'FeatureCollection',
-    features: displayMapRegionRows(level).flatMap((stat) => {
+    features: displayHeatRegionRows(level).flatMap((stat) => {
       const feature = boundaryFeatureForStat(stat)
       if (!feature) return []
       return [cloneHighlightFeature(feature, stat)]
@@ -3579,6 +3631,13 @@ function buildLabelPointCollection(
     const stat = findStatByLevelGeoKey(level, geoKey, feature.properties)
     const statRegionId = stat ? regionIdForStat(stat) : ''
     const displayName = localizedBoundaryName(feature, level)
+    const isMainlandCity =
+      level === 'city' &&
+      isMainlandChinaCity(
+        geoKey,
+        String(feature.properties.parent_geo_key ?? ''),
+        String(feature.properties.province_key ?? ''),
+      )
     return [
       {
         type: 'Feature',
@@ -3590,6 +3649,7 @@ function buildLabelPointCollection(
           geoKey,
           region_id: statRegionId || regionId,
           hasPndlRegion: activeRegionIds.has(statRegionId || regionId),
+          isMainlandCity,
         },
         geometry: {
           type: 'Point',
@@ -3666,6 +3726,10 @@ function buildPointCollection(level: MapDisplayLevel) {
 
 function displayPointRows() {
   return displayMapRegionRows()
+}
+
+function displayHeatRegionRows(level: MapDisplayLevel = activeMapLevel.value) {
+  return displayMapRegionRows(heatRegionLevelForDisplayLevel(level))
 }
 
 function displayMapRegionRows(level: MapDisplayLevel = activeMapLevel.value) {
@@ -3911,6 +3975,9 @@ function statProperties(stat: MapRegionStat) {
     countryKey: countryGroupKey(stat),
     displayName,
     labelVisible: Boolean(displayName),
+    isMainlandCity:
+      stat.level === 'city' &&
+      isMainlandChinaCity(stat.geoKey, stat.parentGeoKey, adminGroupKey(stat)),
     biomarkerLabel: stat.biomarkerLabel,
     locationPrecision: locationPrecisionLabel(stat.level),
     pndlMedian: numberOrNull(stat.pndlMedianMgD1000inh),
@@ -6017,6 +6084,7 @@ function applyViewLayerVisibility() {
   if (!map) return
   setLayerVisibility([...PNDL_LAYER_IDS], viewLayers.pndl)
   setLayerVisibility(layerIdsForViewGroup('labels'), viewLayers.labels)
+  setLayerVisibility([...PNDL_POINT_LABEL_LAYER_IDS], viewLayers.pndl && viewLayers.labels)
   setLayerVisibility([...REGION_FILL_LAYER_IDS], true)
   setLayerVisibility(
     [...layerIdsForViewGroup('boundaries'), ...REGION_LINE_LAYER_IDS],
@@ -6026,10 +6094,13 @@ function applyViewLayerVisibility() {
 }
 
 function layerIdsForViewGroup(group: 'labels' | 'boundaries') {
-  const fallbackIds = group === 'labels' ? [...LABEL_LAYER_IDS] : [...BOUNDARY_LAYER_IDS]
-  if (basemapMode === 'geojson' || (group === 'labels' && locale.value === 'zh')) return fallbackIds
+  const fallbackIds =
+    group === 'labels'
+      ? [...LABEL_LAYER_IDS, ...PNDL_POINT_LABEL_LAYER_IDS]
+      : [...BOUNDARY_LAYER_IDS]
+  if (basemapMode === 'geojson') return fallbackIds
   const layers = map?.getStyle().layers ?? []
-  return layers.flatMap((layer) => {
+  const vectorIds = layers.flatMap((layer) => {
     if (!isStyleLayer(layer)) return []
     const id = String(layer.id)
     if (PNDL_LAYER_IDS.includes(id)) return []
@@ -6037,6 +6108,7 @@ function layerIdsForViewGroup(group: 'labels' | 'boundaries') {
     if (group === 'labels') return type === 'symbol' ? [id] : []
     return type === 'line' && /admin|boundar|border|country|province|state/i.test(id) ? [id] : []
   })
+  return group === 'labels' ? [...new Set([...fallbackIds, ...vectorIds])] : vectorIds
 }
 
 function setLayerVisibility(layerIds: string[], visible: boolean) {
