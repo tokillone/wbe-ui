@@ -1,3 +1,5 @@
+import { API_BASE_URL } from '../config/api'
+
 export interface LoginPayload {
   account: string
   password: string
@@ -56,8 +58,6 @@ interface ApiResponse<T = unknown> {
   message: string
   data: T
 }
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
 type AuthRequestBody = LoginPayload | RegisterPayload | ResetPasswordPayload | { email: string }
 

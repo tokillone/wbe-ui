@@ -5,6 +5,7 @@ import { init, use, type ECharts } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
+import { ApiTimeoutError } from '../services/api'
 import { fetchIcd11SankeyCategories, fetchIcd11SankeyGraph } from '../services/icd11Sankey'
 import type {
   Icd11SankeyGraph,
@@ -27,6 +28,12 @@ import {
   type Icd11SankeyDisplayMode,
   type Level1Scope,
 } from '../utils/icd11SankeyDisplay'
+import {
+  buildDynamicLevel2ColorMap,
+  SANKEY_LEVEL2_FALLBACK_COLOR,
+  sankeyLevel2ColorKey,
+} from '../utils/icd11SankeyColors'
+import { icd11SankeyGraphIndex } from '../utils/icd11SankeyGraphIndex'
 
 type DetailState =
   | { kind: 'category' }
@@ -42,6 +49,7 @@ type DetailState =
     }
 
 type ChartNode = Icd11SankeyNode & {
+  cursor?: 'pointer'
   itemStyle?: {
     color?: string
     opacity?: number
@@ -52,6 +60,7 @@ type ChartNode = Icd11SankeyNode & {
   }
   emphasis?: {
     itemStyle?: {
+      color?: string
       opacity?: number
       borderColor?: string
       borderWidth?: number
@@ -112,6 +121,21 @@ type ChartGraph = Omit<Icd11SankeyGraph, 'nodes' | 'links'> & {
   links: ChartLink[]
 }
 
+type LoadState = 'idle' | 'loading' | 'ready' | 'empty' | 'timeout' | 'error'
+
+interface DisplayPathSummary {
+  paths: Icd11SankeyPath[]
+  totalPathCount: number
+  candidatePathCount: number
+  shownPathCount: number
+  totalWeight: number
+  candidateWeight: number
+  shownWeight: number
+  weightCoverage: number
+  linkedLevel1Count: number
+  modeLabel: string
+}
+
 type RelationPieSourceItem = RelationShareItem & {
   isOther?: boolean
   hiddenItemCount?: number
@@ -166,48 +190,26 @@ const HEADER_HEIGHT = 70
 const HEADER_FADE_DISTANCE = 190
 const HOVER_INTENT_DELAY = 85
 const HOVER_RESTORE_DELAY = 110
-// Nature/NPG-inspired scientific palette, softened for dense alluvial diagrams.
-const LEVEL1_FALLBACK_COLORS = [
-  '#D86F5E',
-  '#55A6BF',
-  '#4DA58D',
-  '#7185B3',
-  '#E49A68',
-  '#8F7BB5',
-  '#82B7A8',
-  '#C97D91',
-  '#91A66E',
-  '#A58470',
-  '#D3AD5D',
-  '#7695A6',
-]
-const LEVEL2_QUALITATIVE_COLORS = [
-  '#4E79A7',
-  '#D86F5E',
-  '#4DA58D',
-  '#8F7BB5',
-  '#D39B42',
-  '#55A6BF',
-  '#C97D91',
-  '#91A66E',
-  '#A58470',
-  '#7185B3',
-  '#E49A68',
-  '#82B7A8',
-]
+const SANKEY_NODE_COLOR = '#668C8E'
+const SANKEY_NODE_HOVER_COLOR = '#4F777A'
+const SANKEY_NODE_LOCKED_COLOR = '#315F62'
 const PIE_COLORS = [
-  '#55A6BF',
-  '#4DA58D',
-  '#D86F5E',
-  '#E49A68',
-  '#7185B3',
-  '#8F7BB5',
-  '#82B7A8',
-  '#C97D91',
+  '#4C78A8',
+  '#66A182',
+  '#8A7EB5',
+  '#5CA7A9',
+  '#B79A4A',
+  '#7E8A98',
+  '#B67A9C',
+  '#E39A65',
 ]
-const PIE_OTHER_COLOR = '#A4ADB3'
+const PIE_OTHER_COLOR = '#A5ADB1'
 const MAX_RELATION_PIE_ITEMS = 8
 const TOP_RELATION_PIE_ITEMS = 7
+const MAX_FILTER_CACHE_ENTRIES = 24
+const MAX_HIGHLIGHT_CACHE_ENTRIES = 12
+const MAX_CHART_HEIGHT = 4_200
+const MAX_CHART_DEVICE_PIXEL_RATIO = 1.5
 
 use([SankeyChart, PieChart, TooltipComponent, CanvasRenderer])
 
@@ -216,10 +218,12 @@ const chartShellEl = ref<HTMLElement | null>(null)
 const chartScrollEl = ref<HTMLElement | null>(null)
 const modalPieChartEl = ref<HTMLElement | null>(null)
 const currentCategory = ref('')
+const categories = ref<string[]>([])
 const graph = ref<Icd11SankeyGraph | null>(null)
 const activeBaseGraph = ref<Icd11SankeyGraph | null>(null)
 const renderedGraph = ref<Icd11SankeyGraph | null>(null)
 const isLoading = ref(false)
+const loadState = ref<LoadState>('idle')
 const errorMessage = ref('')
 const searchQuery = ref('')
 const displayMode = ref<Icd11SankeyDisplayMode>('all')
@@ -246,28 +250,35 @@ let chart: ECharts | null = null
 let pieCharts = new Map<string, ECharts>()
 const pieChartElements = new Map<string, HTMLElement>()
 let modalPieChart: ECharts | null = null
+let categoryController: AbortController | null = null
 let graphController: AbortController | null = null
 let hoverPreviewTimer: number | null = null
 let hoverRestoreTimer: number | null = null
 let activePreviewKey = ''
+const displaySummaryCache = new WeakMap<Icd11SankeyGraph, Map<string, DisplayPathSummary>>()
+const filteredGraphCache = new WeakMap<Icd11SankeyGraph, Map<string, Icd11SankeyGraph>>()
+const chartGraphCache = new WeakMap<Icd11SankeyGraph, ChartGraph>()
+const highlightGraphCache = new WeakMap<Icd11SankeyGraph, Map<string, ChartGraph>>()
 
 const statsSummaryItems = computed(() => {
   const stats = graph.value?.stats
   if (!stats) return []
   return [
     { label: '总权重', value: formatNumber(stats.totalWeight) },
+    { label: '源映射', value: formatNumber(stats.mappingRows ?? stats.relations) },
+    { label: '聚合关系', value: formatNumber(stats.relations) },
     { label: 'Level1', value: formatNumber(stats.level1) },
     { label: 'Level2', value: formatNumber(stats.level2) },
     { label: 'Level3', value: formatNumber(stats.level3) },
     { label: '止于 Level2', value: formatNumber(stats.level2OnlyPaths) },
     { label: '药物', value: formatNumber(stats.drug) },
     { label: '生物标记物', value: formatNumber(stats.biomarker) },
-    { label: '源映射', value: formatNumber(stats.mappingRows ?? stats.relations) },
-    { label: '聚合关系', value: formatNumber(stats.relations) },
   ]
 })
 const isCompactDetail = computed(
-  () => detail.value.kind === 'node' || (detail.value.kind === 'paths' && detail.value.paths.length > 1),
+  () =>
+    detail.value.kind === 'node' ||
+    (detail.value.kind === 'paths' && detail.value.paths.length > 1),
 )
 const detailPathSum = computed(() => {
   if (detail.value.kind === 'category') return 0
@@ -278,7 +289,10 @@ const shownDetailPaths = computed(() => {
   return detail.value.paths.slice(0, detail.value.limit)
 })
 const categoryStats = computed(() => graph.value?.stats ?? null)
-const selectedCategoryLabel = computed(() => graph.value?.category || currentCategory.value || 'ICD11 桑基图')
+const hasRenderableGraph = computed(() => Boolean(graph.value?.paths.length))
+const selectedCategoryLabel = computed(
+  () => graph.value?.category || currentCategory.value || 'ICD11 桑基图',
+)
 const headerStyle = computed(() => ({
   '--header-offset': `${(-76 * headerScrollProgress.value).toFixed(1)}px`,
   '--header-opacity': (1 - headerScrollProgress.value * 0.95).toFixed(3),
@@ -291,8 +305,6 @@ const chartPanelStyle = computed(() => ({
 const stageAxisCanvasStyle = computed(() => ({
   transform: `translate3d(${-chartScrollLeft.value}px, 0, 0)`,
 }))
-const level2ColorMap = computed(() => buildLevel2ColorMap(graph.value?.paths ?? []))
-const level3ColorMap = computed(() => buildLevel3ColorMap(graph.value?.paths ?? [], level2ColorMap.value))
 const level1Options = computed(() => {
   if (!graph.value) return []
   const weights = new Map<string, number>()
@@ -311,14 +323,16 @@ const displaySummaryText = computed(() => {
     summary.candidatePathCount === summary.totalPathCount
       ? `展示 ${summary.shownPathCount}/${summary.totalPathCount} 条路径`
       : `展示 ${summary.shownPathCount}/${summary.candidatePathCount} 条候选路径，总计 ${summary.totalPathCount} 条`
-  const linkedText = summary.linkedLevel1Count > 0 ? ` · 关联 ${summary.linkedLevel1Count} 个其他 Level1` : ''
+  const linkedText =
+    summary.linkedLevel1Count > 0 ? ` · 关联 ${summary.linkedLevel1Count} 个其他 Level1` : ''
   const scopeText = level1Scope.value === 'linked' ? '含关联' : '仅当前'
   return `${baseText} · 权重覆盖 ${formatPercent(summary.weightCoverage)}${linkedText} · ${scopeText} · ${summary.modeLabel}`
 })
 const relationPieSections = computed<RelationPieSection[]>(() => {
   if (detail.value.kind !== 'node') return []
-  return relationPieSectionsForNode(detail.value.nodeKind, detail.value.paths)
-    .map((section) => normalizeRelationPieSection(section))
+  return relationPieSectionsForNode(detail.value.nodeKind, detail.value.paths).map((section) =>
+    normalizeRelationPieSection(section),
+  )
 })
 const activePieSection = computed(
   () => relationPieSections.value.find((section) => section.id === activePieId.value) ?? null,
@@ -353,7 +367,9 @@ const upstreamContextTitle = computed(() => {
   if (hoverContextTitle.value) return hoverContextTitle.value
   const baseGraph = activeBaseGraph.value
   if (currentFocus.value && baseGraph) {
-    return baseGraph.nodes.find((node) => node.name === currentFocus.value)?.displayName ?? '已锁定节点'
+    return (
+      baseGraph.nodes.find((node) => node.name === currentFocus.value)?.displayName ?? '已锁定节点'
+    )
   }
   if (lockedEdge.value) return `${lockedEdge.value.sourceLabel} → ${lockedEdge.value.targetLabel}`
   if (lockedPathId.value && baseGraph) {
@@ -425,6 +441,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  categoryController?.abort()
   graphController?.abort()
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('scroll', handleWindowScroll)
@@ -437,19 +454,35 @@ onBeforeUnmount(() => {
 })
 
 async function loadCategories() {
+  categoryController?.abort()
+  const controller = new AbortController()
+  categoryController = controller
   isLoading.value = true
+  loadState.value = 'loading'
   errorMessage.value = ''
   try {
-    const response = await fetchIcd11SankeyCategories()
-    const initialCategory = response.defaultCategory || response.categories[0] || ''
+    const response = await fetchIcd11SankeyCategories(controller.signal)
+    if (controller.signal.aborted) return
+    categories.value = response.categories.filter((category) => Boolean(category?.trim()))
+    if (!categories.value.length) {
+      graph.value = null
+      currentCategory.value = ''
+      activeBaseGraph.value = null
+      renderedGraph.value = null
+      chart?.clear()
+      loadState.value = 'empty'
+      return
+    }
+    const initialCategory = response.defaultCategory || categories.value[0] || ''
     currentCategory.value = initialCategory
     if (initialCategory) {
       await loadGraph(initialCategory)
     }
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'ICD11 桑基图数据暂时不可用'
+    if (controller.signal.aborted) return
+    setLoadError(error, 'ICD11 分类列表加载失败')
   } finally {
-    isLoading.value = false
+    if (!controller.signal.aborted) isLoading.value = false
   }
 }
 
@@ -458,18 +491,21 @@ async function loadGraph(category: string) {
   const controller = new AbortController()
   graphController = controller
   isLoading.value = true
+  loadState.value = 'loading'
   errorMessage.value = ''
   try {
     const response = await fetchIcd11SankeyGraph(category, controller.signal)
     if (controller.signal.aborted) return
     graph.value = response
     currentCategory.value = response.category
+    loadState.value = response.paths.length ? 'ready' : 'empty'
     resetInteractionState()
     await nextTick()
     render()
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return
-    errorMessage.value = error instanceof Error ? error.message : 'ICD11 桑基图加载失败'
+    if (controller.signal.aborted) return
+    setLoadError(error, 'ICD11 桑基图加载失败')
   } finally {
     if (!controller.signal.aborted) {
       isLoading.value = false
@@ -477,9 +513,31 @@ async function loadGraph(category: string) {
   }
 }
 
+function setLoadError(error: unknown, fallback: string) {
+  if (error instanceof ApiTimeoutError) {
+    loadState.value = 'timeout'
+    errorMessage.value = '请求超时，服务可能繁忙或网络不稳定'
+    return
+  }
+  loadState.value = 'error'
+  errorMessage.value = error instanceof Error ? error.message : fallback
+}
+
+function retryLoad() {
+  if (categories.value.length && currentCategory.value) {
+    void loadGraph(currentCategory.value)
+  } else {
+    void loadCategories()
+  }
+}
+
 function initChart() {
   if (!chartEl.value || chart) return
-  chart = init(chartEl.value, null, { renderer: 'canvas' })
+  chart = init(chartEl.value, null, {
+    renderer: 'canvas',
+    devicePixelRatio: Math.min(window.devicePixelRatio || 1, MAX_CHART_DEVICE_PIXEL_RATIO),
+    useDirtyRect: true,
+  })
   chart.on('click', (params) => {
     void handleChartClick(params)
   })
@@ -521,9 +579,9 @@ function render(focusName: string | null = null) {
         backgroundColor: 'rgba(255,255,255,0.98)',
         borderColor: 'rgba(71,102,119,0.16)',
         borderWidth: 1,
-        borderRadius: 8,
+        borderRadius: 2,
         padding: 0,
-        extraCssText: 'box-shadow:0 14px 34px rgba(20,47,65,0.16);overflow:hidden;',
+        extraCssText: 'box-shadow:0 4px 12px rgba(20,47,65,0.12);overflow:hidden;',
         formatter(params: { dataType?: string; data: ChartNode | ChartLink }) {
           if (params.dataType === 'edge') {
             return sankeyLinkTooltipHtml(params.data as ChartLink)
@@ -556,7 +614,7 @@ function render(focusName: string | null = null) {
             label: {
               color: '#102a3d',
               textBorderColor: 'rgba(255,255,255,0.95)',
-              textBorderWidth: 3,
+              textBorderWidth: 2,
             },
             lineStyle: { opacity: 0.74 },
           },
@@ -574,8 +632,7 @@ function render(focusName: string | null = null) {
           label: {
             color: '#20242a',
             fontSize: sankeyLabelFontSize(baseGraph),
-            fontFamily:
-              'Microsoft YaHei, Noto Sans CJK SC, Source Han Sans CN, SimHei, Arial, sans-serif',
+            fontFamily: 'Arial, Noto Sans CJK SC, Source Han Sans CN, Microsoft YaHei, sans-serif',
           },
           lineStyle: {
             color: 'source',
@@ -596,10 +653,24 @@ function render(focusName: string | null = null) {
 }
 
 function currentActiveGraph(baseGraph: Icd11SankeyGraph): Icd11SankeyGraph {
-  return buildGraphFromPaths(baseGraph, displayPaths(baseGraph))
+  const key = displayTransformKey()
+  const cached = filteredGraphCache.get(baseGraph)?.get(key)
+  if (cached) return cached
+  const transformed = buildGraphFromPaths(baseGraph, displayPaths(baseGraph))
+  setBoundedWeakCacheEntry(
+    filteredGraphCache,
+    baseGraph,
+    key,
+    transformed,
+    MAX_FILTER_CACHE_ENTRIES,
+  )
+  return transformed
 }
 
-function buildGraphFromPaths(baseGraph: Icd11SankeyGraph, paths: Icd11SankeyPath[]): Icd11SankeyGraph {
+function buildGraphFromPaths(
+  baseGraph: Icd11SankeyGraph,
+  paths: Icd11SankeyPath[],
+): Icd11SankeyGraph {
   if (!paths.length) {
     return {
       ...baseGraph,
@@ -615,6 +686,7 @@ function buildGraphFromPaths(baseGraph: Icd11SankeyGraph, paths: Icd11SankeyPath
   const nodeByName = new Map(baseGraph.nodes.map((node) => [node.name, node]))
   const nodeWeights = new Map<string, number>()
   const links = new Map<string, Icd11SankeyLink>()
+  const visibleLevel2Colors = buildDynamicLevel2ColorMap(paths, selectedLevel1.value)
 
   function addNodeWeight(nodeName: string, weight: number) {
     nodeWeights.set(nodeName, (nodeWeights.get(nodeName) ?? 0) + weight)
@@ -633,7 +705,8 @@ function buildGraphFromPaths(baseGraph: Icd11SankeyGraph, paths: Icd11SankeyPath
     const key = `${source}@@${target}@@${edgeType}@@${level1}@@${level2}@@${mappingLevel}`
     const sourceLabel = nodeByName.get(source)?.displayName ?? source
     const targetLabel = nodeByName.get(target)?.displayName ?? target
-    const color = baseGraph.level1Colors[level1] ?? '#8F9CAA'
+    const color =
+      visibleLevel2Colors.get(sankeyLevel2ColorKey(level1, level2)) ?? SANKEY_LEVEL2_FALLBACK_COLOR
     if (!links.has(key)) {
       links.set(key, {
         linkId: key,
@@ -720,9 +793,7 @@ function buildGraphFromPaths(baseGraph: Icd11SankeyGraph, paths: Icd11SankeyPath
   }
 
   const primaryNodeIds = new Set(
-    paths
-      .filter((path) => path.level1 === selectedLevel1.value)
-      .flatMap((path) => path.nodeIds),
+    paths.filter((path) => path.level1 === selectedLevel1.value).flatMap((path) => path.nodeIds),
   )
   const nodes = baseGraph.nodes
     .filter((node) => nodeWeights.has(node.name))
@@ -749,20 +820,27 @@ function buildGraphFromPaths(baseGraph: Icd11SankeyGraph, paths: Icd11SankeyPath
 }
 
 function asChartGraph(baseGraph: Icd11SankeyGraph): ChartGraph {
-  return {
+  const cached = chartGraphCache.get(baseGraph)
+  if (cached) return cached
+  const transformed = {
     ...baseGraph,
     nodes: baseGraph.nodes.map((node) => chartNode(node, true, false)),
     links: baseGraph.links.map((link) => chartLink(link, true, false)),
   }
+  chartGraphCache.set(baseGraph, transformed)
+  return transformed
 }
 
 function styledForPathIds(baseGraph: Icd11SankeyGraph, pathIds: Iterable<string>): ChartGraph {
   const activePathIds = new Set(pathIds)
+  const cacheKey = [...activePathIds].sort().join('\u001f')
+  const cached = highlightGraphCache.get(baseGraph)?.get(cacheKey)
+  if (cached) return cached
   const activeNodes = new Set<string>()
   for (const path of selectedPaths(baseGraph, activePathIds)) {
     for (const nodeName of path.nodeIds) activeNodes.add(nodeName)
   }
-  return {
+  const transformed = {
     ...baseGraph,
     nodes: baseGraph.nodes.map((node) => {
       const highlighted = activeNodes.has(node.name)
@@ -773,6 +851,14 @@ function styledForPathIds(baseGraph: Icd11SankeyGraph, pathIds: Iterable<string>
       return chartLink(link, highlighted, highlighted)
     }),
   }
+  setBoundedWeakCacheEntry(
+    highlightGraphCache,
+    baseGraph,
+    cacheKey,
+    transformed,
+    MAX_HIGHLIGHT_CACHE_ENTRIES,
+  )
+  return transformed
 }
 
 function styledForNode(baseGraph: Icd11SankeyGraph, nodeName: string): ChartGraph {
@@ -790,19 +876,20 @@ function styledForSearch(baseGraph: Icd11SankeyGraph, seeds: Set<string>): Chart
 function chartNode(node: Icd11SankeyNode, active: boolean, highlighted: boolean): ChartNode {
   const label = nodeLabel(node)
   const position = 'right'
-  const fillColor = nodeDepthColor(node)
   const isRelatedContext =
     (node.kind === 'level1' || node.kind === 'level2') && node.level1 !== selectedLevel1.value
   return {
     ...node,
+    cursor: 'pointer',
     itemStyle: {
-      color: fillColor,
+      color: highlighted ? SANKEY_NODE_LOCKED_COLOR : SANKEY_NODE_COLOR,
       opacity: active ? (isRelatedContext && !highlighted ? 0.7 : 1) : 0.2,
       borderColor: active ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.5)',
       borderWidth: 1,
     },
     emphasis: {
       itemStyle: {
+        color: highlighted ? SANKEY_NODE_LOCKED_COLOR : SANKEY_NODE_HOVER_COLOR,
         opacity: active ? 1 : 0.58,
         borderColor: 'rgba(255,255,255,0.96)',
         borderWidth: 1,
@@ -810,7 +897,7 @@ function chartNode(node: Icd11SankeyNode, active: boolean, highlighted: boolean)
       label: {
         color: active ? '#102a3d' : 'rgba(23, 50, 71, 0.56)',
         textBorderColor: 'rgba(255,255,255,0.95)',
-        textBorderWidth: active ? 3 : 2,
+        textBorderWidth: active ? 2 : 1,
       },
     },
     blur: {
@@ -830,46 +917,51 @@ function chartNode(node: Icd11SankeyNode, active: boolean, highlighted: boolean)
       color: highlighted
         ? '#0b3441'
         : active
-        ? isRelatedContext
-          ? 'rgba(23, 50, 71, 0.68)'
-          : '#173247'
-        : 'rgba(23, 50, 71, 0.58)',
+          ? isRelatedContext
+            ? 'rgba(23, 50, 71, 0.68)'
+            : '#173247'
+          : 'rgba(23, 50, 71, 0.58)',
       width: label.width,
       lineHeight: label.lineHeight,
       overflow: 'truncate',
       align: position === 'right' ? 'left' : 'right',
-      fontWeight: highlighted ? 950 : active ? 800 : 700,
+      fontWeight: highlighted ? 700 : active ? 600 : 500,
       textBorderColor: highlighted
         ? 'rgba(255,255,255,0.98)'
         : active
           ? 'rgba(255,255,255,0.92)'
           : 'rgba(255,255,255,0.58)',
-      textBorderWidth: highlighted ? 4 : active ? 3 : 2,
+      textBorderWidth: highlighted ? 2 : 1,
     },
   }
 }
 
 function chartLink(link: Icd11SankeyLink, active: boolean, highlighted: boolean): ChartLink {
-  const color = level2DisplayColor(link.level1, link.level2, link.color)
+  const color = link.color || SANKEY_LEVEL2_FALLBACK_COLOR
   const crossesLevel3 = link.edgeType === 'ICD11_Level2 → 药物'
   const isRelatedContext = link.level1 !== selectedLevel1.value
-  const activeAlpha = isRelatedContext ? 0.22 : crossesLevel3 ? 0.32 : 0.4
-  const activeOpacity = isRelatedContext ? 0.5 : crossesLevel3 ? 0.64 : 0.72
+  const activeOpacity = crossesLevel3
+    ? isRelatedContext
+      ? 0.16
+      : 0.2
+    : isRelatedContext
+      ? 0.28
+      : 0.34
   return {
     ...link,
     lineStyle: {
-      color: hexToRgba(color, highlighted ? 0.72 : active ? activeAlpha : 0.05),
-      opacity: highlighted ? 0.94 : active ? activeOpacity : 0.07,
+      color,
+      opacity: highlighted ? 0.78 : active ? activeOpacity : 0.08,
       curveness: 0.52,
     },
     emphasis: {
       lineStyle: {
-        opacity: active ? 0.92 : 0.56,
+        opacity: active ? 0.62 : 0.42,
       },
     },
     blur: {
       lineStyle: {
-        opacity: active ? 0.07 : 0.03,
+        opacity: active ? 0.08 : 0.04,
       },
     },
   }
@@ -890,17 +982,9 @@ function nodeLabel(node: Icd11SankeyNode) {
 }
 
 function singleLineLabel(value: string) {
-  return String(value || '').replace(/\s+/g, ' ').trim()
-}
-
-function nodeDepthColor(node: Icd11SankeyNode) {
-  const baseColor = level1DisplayColor(node.level1, node.color)
-  if (node.kind === 'level2') return level2DisplayColor(node.level1, node.displayName, node.color)
-  if (node.kind === 'level3') return level3ColorMap.value.get(node.name) ?? mixHex(baseColor, '#ffffff', 0.16)
-  if (node.kind === 'drug' || node.kind === 'biomarker') {
-    return node.kind === 'drug' ? '#7896A3' : '#91A9A1'
-  }
-  return baseColor
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function sankeyLabelFontSize(baseGraph: Icd11SankeyGraph) {
@@ -1106,7 +1190,10 @@ function normalizeRelationPieSection(section: BaseRelationPieSection): RelationP
   }
 }
 
-function collapsedOtherRelationItem(items: RelationShareItem[], totalWeight: number): RelationPieSourceItem {
+function collapsedOtherRelationItem(
+  items: RelationShareItem[],
+  totalWeight: number,
+): RelationPieSourceItem {
   const value = items.reduce((sum, item) => sum + Number(item.value || 0), 0)
   const pathIds = items.flatMap((item) => item.pathIds)
   return {
@@ -1185,18 +1272,18 @@ function handleRelationItemMouseOver(section: RelationPieSection, item: Relation
 
 function relationPieTooltipHtml(section: RelationPieSection, item: RelationPieDatum) {
   const otherLine = item.isOther
-    ? `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:6px;color:#647985;font-size:12px;font-weight:800;"><span>合并项数</span><strong style="color:#173247;">${formatNumber(item.hiddenItemCount)}</strong></div>`
+    ? `<div style="display:flex;justify-content:space-between;gap:16px;margin-top:6px;color:#647985;font-size:12px;font-weight:500;"><span>合并项数</span><strong style="color:#173247;font-weight:700;">${formatNumber(item.hiddenItemCount)}</strong></div>`
     : ''
   return `
     <div style="min-width:188px;max-width:260px;">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-        <i style="width:10px;height:10px;border-radius:3px;background:${item.itemStyle.color};box-shadow:0 0 0 3px rgba(255,255,255,0.86);"></i>
-        <strong style="min-width:0;overflow:hidden;color:#173247;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:950;">${escapeHtml(item.name)}</strong>
+        <i style="width:10px;height:10px;border-radius:1px;background:${item.itemStyle.color};"></i>
+        <strong style="min-width:0;overflow:hidden;color:#173247;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:700;">${escapeHtml(item.name)}</strong>
       </div>
       <div style="display:grid;gap:6px;padding-top:8px;border-top:1px solid rgba(105,127,140,0.14);">
-        <div style="display:flex;justify-content:space-between;gap:16px;color:#647985;font-size:12px;font-weight:800;"><span>权重</span><strong style="color:#173247;">${formatNumber(item.value)}</strong></div>
-        <div style="display:flex;justify-content:space-between;gap:16px;color:#647985;font-size:12px;font-weight:800;"><span>${escapeHtml(section.shareLabel)}</span><strong style="color:#173247;">${formatPercent(item.share)}</strong></div>
-        <div style="display:flex;justify-content:space-between;gap:16px;color:#647985;font-size:12px;font-weight:800;"><span>关联路径</span><strong style="color:#173247;">${formatNumber(item.pathIds.length)} 条</strong></div>
+        <div style="display:flex;justify-content:space-between;gap:16px;color:#647985;font-size:12px;font-weight:500;"><span>权重</span><strong style="color:#173247;font-weight:700;">${formatNumber(item.value)}</strong></div>
+        <div style="display:flex;justify-content:space-between;gap:16px;color:#647985;font-size:12px;font-weight:500;"><span>${escapeHtml(section.shareLabel)}</span><strong style="color:#173247;font-weight:700;">${formatPercent(item.share)}</strong></div>
+        <div style="display:flex;justify-content:space-between;gap:16px;color:#647985;font-size:12px;font-weight:500;"><span>关联路径</span><strong style="color:#173247;font-weight:700;">${formatNumber(item.pathIds.length)} 条</strong></div>
         ${otherLine}
       </div>
     </div>
@@ -1220,7 +1307,12 @@ function renderRelationPieCharts() {
   }
   for (const section of relationPieSections.value) {
     const element = pieChartElements.get(section.id) ?? null
-    const nextChart = renderPieChartInstance(pieCharts.get(section.id) ?? null, element, section, false)
+    const nextChart = renderPieChartInstance(
+      pieCharts.get(section.id) ?? null,
+      element,
+      section,
+      false,
+    )
     if (nextChart) {
       pieCharts.set(section.id, nextChart)
     } else {
@@ -1265,18 +1357,15 @@ function renderPieChartInstance(
         backgroundColor: 'rgba(255, 255, 255, 0.98)',
         borderColor: 'rgba(105, 127, 140, 0.16)',
         borderWidth: 1,
-        borderRadius: 10,
+        borderRadius: 2,
         padding: [12, 13],
         textStyle: {
           color: '#173247',
-          fontFamily:
-            'Microsoft YaHei, Noto Sans CJK SC, Source Han Sans CN, SimHei, Arial, sans-serif',
+          fontFamily: 'Arial, Noto Sans CJK SC, Source Han Sans CN, Microsoft YaHei, sans-serif',
         },
-        extraCssText: [
-          'box-shadow: 0 16px 36px rgba(13, 34, 50, 0.18);',
-          'backdrop-filter: blur(10px);',
-          'line-height: 1.35;',
-        ].join(''),
+        extraCssText: ['box-shadow: 0 4px 12px rgba(13, 34, 50, 0.12);', 'line-height: 1.35;'].join(
+          '',
+        ),
         formatter(params: { data?: RelationPieDatum }) {
           const data = params.data
           if (!data) return ''
@@ -1293,9 +1382,9 @@ function renderPieChartInstance(
           selectedOffset: large ? 8 : 5,
           itemStyle: {
             borderColor: 'rgba(255,255,255,0.98)',
-            borderWidth: large ? 3 : 2,
-            shadowBlur: large ? 12 : 6,
-            shadowColor: 'rgba(23, 50, 71, 0.08)',
+            borderWidth: large ? 2 : 1,
+            shadowBlur: 0,
+            shadowColor: 'transparent',
           },
           label: {
             show: false,
@@ -1308,8 +1397,8 @@ function renderPieChartInstance(
             scale: true,
             scaleSize: large ? 7 : 4,
             itemStyle: {
-              shadowBlur: large ? 18 : 12,
-              shadowColor: 'rgba(23, 50, 71, 0.2)',
+              shadowBlur: 0,
+              shadowColor: 'transparent',
             },
           },
           blur: {
@@ -1448,7 +1537,10 @@ function displayPaths(baseGraph: Icd11SankeyGraph) {
   return summarizeDisplayPaths(baseGraph).paths
 }
 
-function summarizeDisplayPaths(baseGraph: Icd11SankeyGraph) {
+function summarizeDisplayPaths(baseGraph: Icd11SankeyGraph): DisplayPathSummary {
+  const cacheKey = displayTransformKey()
+  const cached = displaySummaryCache.get(baseGraph)?.get(cacheKey)
+  if (cached) return cached
   const contextualPaths = pathsForLevel1Scope(
     baseGraph.paths,
     selectedLevel1.value,
@@ -1460,15 +1552,14 @@ function summarizeDisplayPaths(baseGraph: Icd11SankeyGraph) {
       return weightMatched
     }),
   ).sort(
-    (a, b) =>
-      Number(b.level1 === selectedLevel1.value) - Number(a.level1 === selectedLevel1.value),
+    (a, b) => Number(b.level1 === selectedLevel1.value) - Number(a.level1 === selectedLevel1.value),
   )
   const limit = displayModeLimit(displayMode.value, filteredPaths.length)
   const paths = limit ? filteredPaths.slice(0, limit) : filteredPaths
   const candidateWeight = sumPathWeight(filteredPaths)
   const shownWeight = sumPathWeight(paths)
 
-  return {
+  const summary = {
     paths,
     totalPathCount: baseGraph.paths.length,
     candidatePathCount: filteredPaths.length,
@@ -1484,6 +1575,44 @@ function summarizeDisplayPaths(baseGraph: Icd11SankeyGraph) {
           ).size
         : 0,
     modeLabel: displayModeLabel(displayMode.value, limit),
+  }
+  setBoundedWeakCacheEntry(
+    displaySummaryCache,
+    baseGraph,
+    cacheKey,
+    summary,
+    MAX_FILTER_CACHE_ENTRIES,
+  )
+  return summary
+}
+
+function displayTransformKey() {
+  return [
+    selectedLevel1.value,
+    level1Scope.value,
+    displayMode.value,
+    String(minWeight.value),
+  ].join('\u001f')
+}
+
+function setBoundedWeakCacheEntry<K extends object, V>(
+  cache: WeakMap<K, Map<string, V>>,
+  owner: K,
+  key: string,
+  value: V,
+  maxEntries: number,
+) {
+  let entries = cache.get(owner)
+  if (!entries) {
+    entries = new Map<string, V>()
+    cache.set(owner, entries)
+  }
+  if (entries.has(key)) entries.delete(key)
+  entries.set(key, value)
+  while (entries.size > maxEntries) {
+    const oldest = entries.keys().next().value
+    if (oldest === undefined) break
+    entries.delete(oldest)
   }
 }
 
@@ -1501,7 +1630,7 @@ function sumPathWeight(paths: Icd11SankeyPath[]) {
 }
 
 function selectedPaths(baseGraph: Icd11SankeyGraph, pathIds: Iterable<string>) {
-  const paths = pathMap(baseGraph)
+  const paths = icd11SankeyGraphIndex(baseGraph).pathById
   return [...new Set(pathIds)]
     .map((pathId) => paths.get(pathId))
     .filter((path): path is Icd11SankeyPath => Boolean(path))
@@ -1509,11 +1638,11 @@ function selectedPaths(baseGraph: Icd11SankeyGraph, pathIds: Iterable<string>) {
 }
 
 function pathIdsForNode(baseGraph: Icd11SankeyGraph, nodeName: string) {
-  return baseGraph.paths.filter((path) => path.nodeIds.includes(nodeName)).map((path) => path.pathId)
+  return [...(icd11SankeyGraphIndex(baseGraph).pathIdsByNode.get(nodeName) ?? [])]
 }
 
 function pathMap(baseGraph: Icd11SankeyGraph) {
-  return new Map(baseGraph.paths.map((path) => [path.pathId, path]))
+  return icd11SankeyGraphIndex(baseGraph).pathById
 }
 
 function searchSeeds(baseGraph: Icd11SankeyGraph, keyword: string) {
@@ -1535,7 +1664,7 @@ function setChartHeight(baseGraph: Icd11SankeyGraph) {
   const medium = pathCount > 80 || maxNodes > 28
   const perNode = dense ? 22 : medium ? 28 : 16
   const extraSpace = dense ? 320 : medium ? 260 : 160
-  const maxHeight = dense ? 5500 : medium ? 3000 : 1200
+  const maxHeight = dense ? MAX_CHART_HEIGHT : medium ? 3000 : 1200
   const contentHeight = maxNodes * perNode + extraSpace
   chartHeight.value = Math.max(availableViewportHeight, Math.min(maxHeight, contentHeight))
   void nextTick(() => {
@@ -1608,7 +1737,9 @@ function updateUpstreamContextVisibility() {
 }
 
 function pathText(path: Icd11SankeyPath) {
-  return [path.level1, path.level2, path.level3, path.drug, path.biomarker].filter(Boolean).join(' → ')
+  return [path.level1, path.level2, path.level3, path.drug, path.biomarker]
+    .filter(Boolean)
+    .join(' → ')
 }
 
 function pathSteps(path: Icd11SankeyPath) {
@@ -1635,7 +1766,7 @@ function formatPercent(value: number | string | null | undefined) {
 }
 
 function sankeyLinkTooltipHtml(link: ChartLink) {
-  const color = level2DisplayColor(link.level1, link.level2, link.color)
+  const color = link.color || SANKEY_LEVEL2_FALLBACK_COLOR
   const mappingNote =
     link.edgeType === 'ICD11_Level2 → 药物'
       ? '<div class="sankey-tip__note">该映射正式终止于 Level2，未设置 Level3</div>'
@@ -1649,7 +1780,8 @@ function sankeyLinkTooltipHtml(link: ChartLink) {
         <div><span>涉及文献数</span><strong>${formatNumber(link.value)}</strong></div>
         <div><span>聚合路径</span><strong>${formatNumber(link.pathIds.length)}<small>条</small></strong></div>
       </div>
-      <div class="sankey-tip__color"><i style="background:${color}"></i><span>Level2 路径色</span><strong>${escapeHtml(link.level2)}</strong></div>
+      <div class="sankey-tip__color"><i style="background:${color}"></i><span>Level2 动态色</span><strong>${escapeHtml(link.level2)}</strong></div>
+      <div class="sankey-tip__taxonomy"><span>所属 Level1</span><strong>${escapeHtml(link.level1)}</strong></div>
       ${mappingNote}
     </div>`
 }
@@ -1663,170 +1795,6 @@ function sankeyNodeTooltipHtml(node: ChartNode) {
         <div><b>${formatNumber(node.value)}</b><small>权重</small></div>
       </div>
     </div>`
-}
-
-function level1DisplayColor(level1: string, _rawColor: string): string {
-  return fallbackLevel1Color(level1)
-}
-
-function fallbackLevel1Color(level1: string): string {
-  let hash = 0
-  for (const char of String(level1 || 'level1')) {
-    hash = (hash * 31 + char.charCodeAt(0)) % 100000
-  }
-  return LEVEL1_FALLBACK_COLORS[hash % LEVEL1_FALLBACK_COLORS.length] ?? '#7185B3'
-}
-
-function level2DisplayColor(level1: string, level2: string, _rawColor: string): string {
-  const key = level2PaletteKey(level1, level2)
-  return level2ColorMap.value.get(key) ?? fallbackLevel2Color(key)
-}
-
-function buildLevel2ColorMap(paths: Icd11SankeyPath[]) {
-  const groups = new Map<string, Map<string, number>>()
-  for (const path of paths) {
-    const weights = groups.get(path.level1) ?? new Map<string, number>()
-    weights.set(path.level2, (weights.get(path.level2) ?? 0) + Number(path.weight || 0))
-    groups.set(path.level1, weights)
-  }
-  const colors = new Map<string, string>()
-  for (const [level1, weights] of [...groups.entries()].sort(([a], [b]) =>
-    a.localeCompare(b, 'zh-Hans-CN'),
-  )) {
-    const offset = stableTextHash(level1) % LEVEL2_QUALITATIVE_COLORS.length
-    const level2Entries = [...weights.entries()].sort(
-      ([nameA, weightA], [nameB, weightB]) =>
-        weightB - weightA || nameA.localeCompare(nameB, 'zh-Hans-CN'),
-    )
-    level2Entries.forEach(([level2], index) => {
-      const base =
-        LEVEL2_QUALITATIVE_COLORS[(offset + index) % LEVEL2_QUALITATIVE_COLORS.length] ?? '#4E79A7'
-      const cycle = Math.floor(index / LEVEL2_QUALITATIVE_COLORS.length)
-      colors.set(level2PaletteKey(level1, level2), level2Tone(base, cycle))
-    })
-  }
-  return colors
-}
-
-function buildLevel3ColorMap(paths: Icd11SankeyPath[], level2Colors: Map<string, string>) {
-  const parentKeys = new Map<string, Set<string>>()
-  for (const path of paths) {
-    if (path.mappingLevel !== 'Level3') continue
-    const level3NodeId = path.nodeIds[2]
-    if (!level3NodeId) continue
-    const keys = parentKeys.get(level3NodeId) ?? new Set<string>()
-    keys.add(level2PaletteKey(path.level1, path.level2))
-    parentKeys.set(level3NodeId, keys)
-  }
-  const colors = new Map<string, string>()
-  for (const [nodeId, keys] of parentKeys) {
-    if (keys.size !== 1) {
-      colors.set(nodeId, '#9AA9AC')
-      continue
-    }
-    const parentKey = [...keys][0] ?? ''
-    const parentColor = level2Colors.get(parentKey) ?? fallbackLevel2Color(parentKey)
-    colors.set(nodeId, tintHex(parentColor, 0.14))
-  }
-  return colors
-}
-
-function level2PaletteKey(level1: string, level2: string) {
-  return `${level1}::${level2}`
-}
-
-function fallbackLevel2Color(key: string) {
-  const base = LEVEL2_QUALITATIVE_COLORS[stableTextHash(key) % LEVEL2_QUALITATIVE_COLORS.length]
-  return base ?? '#4E79A7'
-}
-
-function level2Tone(baseColor: string, cycle: number) {
-  if (cycle <= 0) return baseColor
-  const hsl = rgbToHsl(hexToRgb(baseColor))
-  const lighten = cycle % 2 === 1
-  return hslToHex({
-    h: hsl.h,
-    s: Math.max(0.38, hsl.s - cycle * 0.04),
-    l: Math.max(0.42, Math.min(0.68, hsl.l + (lighten ? 0.1 : -0.06))),
-  })
-}
-
-function tintHex(hex: string, amount: number) {
-  const hsl = rgbToHsl(hexToRgb(hex))
-  return hslToHex({
-    h: hsl.h,
-    s: Math.max(0.34, hsl.s - amount * 0.22),
-    l: Math.min(0.72, hsl.l + amount),
-  })
-}
-
-function mixHex(hex: string, targetHex: string, amount: number) {
-  const source = hexToRgb(hex)
-  const target = hexToRgb(targetHex)
-  const mix = (from: number, to: number) => Math.round(from + (to - from) * amount)
-  return `rgb(${mix(source.r, target.r)}, ${mix(source.g, target.g)}, ${mix(source.b, target.b)})`
-}
-
-function hexToRgb(hex: string) {
-  const raw = String(hex || '#8F9CAA').replace('#', '')
-  const normalized =
-    raw.length === 3
-      ? raw
-          .split('')
-          .map((char) => `${char}${char}`)
-          .join('')
-      : raw.padEnd(6, '0').slice(0, 6)
-  return {
-    r: Number.parseInt(normalized.slice(0, 2), 16),
-    g: Number.parseInt(normalized.slice(2, 4), 16),
-    b: Number.parseInt(normalized.slice(4, 6), 16),
-  }
-}
-function rgbToHsl({ r, g, b }: { r: number; g: number; b: number }) {
-  const red = r / 255
-  const green = g / 255
-  const blue = b / 255
-  const max = Math.max(red, green, blue)
-  const min = Math.min(red, green, blue)
-  const lightness = (max + min) / 2
-  if (max === min) return { h: 0, s: 0, l: lightness }
-  const delta = max - min
-  const saturation = lightness > 0.5 ? delta / (2 - max - min) : delta / (max + min)
-  let hue = 0
-  if (max === red) {
-    hue = (green - blue) / delta + (green < blue ? 6 : 0)
-  } else if (max === green) {
-    hue = (blue - red) / delta + 2
-  } else {
-    hue = (red - green) / delta + 4
-  }
-  return { h: hue / 6, s: saturation, l: lightness }
-}
-
-function hslToHex({ h, s, l }: { h: number; s: number; l: number }) {
-  const hueToRgb = (p: number, q: number, t: number) => {
-    let normalized = t
-    if (normalized < 0) normalized += 1
-    if (normalized > 1) normalized -= 1
-    if (normalized < 1 / 6) return p + (q - p) * 6 * normalized
-    if (normalized < 1 / 2) return q
-    if (normalized < 2 / 3) return p + (q - p) * (2 / 3 - normalized) * 6
-    return p
-  }
-  const q = l < 0.5 ? l * (1 + s) : l + s - l * s
-  const p = 2 * l - q
-  const toHex = (value: number) =>
-    Math.round(value * 255)
-      .toString(16)
-      .padStart(2, '0')
-  return `#${toHex(hueToRgb(p, q, h + 1 / 3))}${toHex(hueToRgb(p, q, h))}${toHex(
-    hueToRgb(p, q, h - 1 / 3),
-  )}`
-}
-
-function hexToRgba(hex: string, alpha: number) {
-  const { r, g, b } = hexToRgb(hex)
-  return `rgba(${r},${g},${b},${alpha})`
 }
 
 function escapeHtml(value: unknown) {
@@ -1875,8 +1843,15 @@ function exportPng() {
         <h1 class="page-title">ICD11 桑基图</h1>
         <label class="location-search">
           <span class="search-mark" aria-hidden="true"></span>
-          <input v-model="searchQuery" type="search" placeholder="搜索 ICD、药物或 biomarker" />
-          <button v-if="searchQuery" type="button" aria-label="清空搜索" @click="searchQuery = ''">×</button>
+          <input
+            v-model="searchQuery"
+            type="search"
+            placeholder="搜索 ICD、药物或 biomarker"
+            :disabled="isLoading || !hasRenderableGraph"
+          />
+          <button v-if="searchQuery" type="button" aria-label="清空搜索" @click="searchQuery = ''">
+            ×
+          </button>
         </label>
       </div>
 
@@ -1891,7 +1866,7 @@ function exportPng() {
     <form class="sankey-controls" @submit.prevent>
       <label class="control-field level-field">
         <span>ICD11_Level1</span>
-        <select v-model="selectedLevel1">
+        <select v-model="selectedLevel1" :disabled="isLoading || !hasRenderableGraph">
           <option v-for="level1 in level1Options" :key="level1" :value="level1">
             {{ level1 }}
           </option>
@@ -1902,11 +1877,21 @@ function exportPng() {
         <legend>关联范围</legend>
         <div class="scope-segmented">
           <label>
-            <input v-model="level1Scope" type="radio" value="selected" />
+            <input
+              v-model="level1Scope"
+              type="radio"
+              value="selected"
+              :disabled="isLoading || !hasRenderableGraph"
+            />
             <span>仅当前</span>
           </label>
           <label>
-            <input v-model="level1Scope" type="radio" value="linked" />
+            <input
+              v-model="level1Scope"
+              type="radio"
+              value="linked"
+              :disabled="isLoading || !hasRenderableGraph"
+            />
             <span>含关联</span>
           </label>
         </div>
@@ -1914,7 +1899,7 @@ function exportPng() {
 
       <label class="control-field display-field">
         <span>显示模式</span>
-        <select v-model="displayMode">
+        <select v-model="displayMode" :disabled="isLoading || !hasRenderableGraph">
           <option v-for="option in DISPLAY_MODE_OPTIONS" :key="option.value" :value="option.value">
             {{ option.label }}
           </option>
@@ -1923,20 +1908,43 @@ function exportPng() {
 
       <label class="control-field compact-field">
         <span>最小权重</span>
-        <select v-model.number="minWeight">
+        <select v-model.number="minWeight" :disabled="isLoading || !hasRenderableGraph">
           <option v-for="option in MIN_WEIGHT_OPTIONS" :key="option.value" :value="option.value">
             {{ option.label }}
           </option>
         </select>
       </label>
 
-      <button class="control-button reset-button" type="button" @click="resetView">重置</button>
-      <button class="control-button clear-lock-button" type="button" @click="clearLock">清除锁定</button>
-      <button class="control-button export-button" type="button" @click="exportPng">导出 PNG</button>
+      <div class="toolbar-actions" role="group" aria-label="图表操作">
+        <button
+          class="control-button reset-button"
+          type="button"
+          :disabled="isLoading || !hasRenderableGraph"
+          @click="resetView"
+        >
+          重置
+        </button>
+        <button
+          class="control-button clear-lock-button"
+          type="button"
+          :disabled="isLoading || !hasRenderableGraph"
+          @click="clearLock"
+        >
+          清除锁定
+        </button>
+        <button
+          class="control-button export-button"
+          type="button"
+          :disabled="isLoading || !hasRenderableGraph"
+          @click="exportPng"
+        >
+          导出 PNG
+        </button>
+      </div>
     </form>
 
     <section class="sankey-main" :aria-label="selectedCategoryLabel">
-      <section class="chart-panel" :style="chartPanelStyle">
+      <section class="chart-panel" :style="chartPanelStyle" :aria-busy="isLoading">
         <div
           class="lock-bar"
           :class="{ 'has-lock': Boolean(lockedEdge || lockedPathId || currentFocus) }"
@@ -1946,9 +1954,37 @@ function exportPng() {
           <span>{{ lockText }}</span>
           <span v-if="displaySummaryText" class="filter-summary">{{ displaySummaryText }}</span>
         </div>
-        <p v-if="errorMessage" class="state-message error-state">{{ errorMessage }}</p>
-        <p v-else-if="isLoading && !graph" class="state-message">正在加载 ICD11 桑基图数据</p>
-        <div class="stage-axis" aria-hidden="true">
+        <div v-if="isLoading" class="state-message loading-state" role="status" aria-live="polite">
+          <span class="loading-spinner" aria-hidden="true"></span>
+          <span>正在加载 ICD11 桑基图数据…</span>
+        </div>
+        <div
+          v-else-if="loadState === 'timeout'"
+          class="state-message error-state"
+          role="alert"
+        >
+          <span>{{ errorMessage }}</span>
+          <button type="button" @click="retryLoad">重新加载</button>
+        </div>
+        <div
+          v-else-if="loadState === 'error'"
+          class="state-message error-state"
+          role="alert"
+        >
+          <span>{{ errorMessage || 'ICD11 桑基图接口请求失败' }}</span>
+          <button type="button" @click="retryLoad">重试</button>
+        </div>
+        <div v-else-if="loadState === 'empty'" class="state-message empty-state" role="status">
+          <span>
+            {{
+              categories.length
+                ? '当前分类没有可展示的 ICD11 桑基路径'
+                : '暂无可用的 ICD11 分类数据'
+            }}
+          </span>
+          <button type="button" @click="retryLoad">刷新数据</button>
+        </div>
+        <div v-if="hasRenderableGraph" class="stage-axis" aria-hidden="true">
           <div class="stage-axis-canvas" :style="stageAxisCanvasStyle">
             <div class="stage-axis-track">
               <span
@@ -1962,7 +1998,12 @@ function exportPng() {
             </div>
           </div>
         </div>
-        <div ref="chartScrollEl" class="sankey-chart-scroll" @scroll.passive="handleChartScroll">
+        <div
+          v-show="hasRenderableGraph"
+          ref="chartScrollEl"
+          class="sankey-chart-scroll"
+          @scroll.passive="handleChartScroll"
+        >
           <div
             ref="chartShellEl"
             class="sankey-chart-shell"
@@ -2009,47 +2050,75 @@ function exportPng() {
               </span>
             </div>
           </header>
-          <section class="detail-block">
+          <section class="detail-block legend-block">
             <h3>图例说明</h3>
-            <p><b>颜色</b>：Level1 使用类别锚点色，Level2 使用稳定定性色作为主路径色，Level3 继承父 Level2 的浅色；<b>带宽</b> 代表涉及文献数权重。</p>
-            <p><b>Level1 轨道</b>：浅色纵向轨道仅用于层级定位，不代表权重。</p>
-            <p><b>关联展开</b>：选中 Level1 后，同时显示与其共享下游节点的其他 Level1 相关路径。</p>
-            <p><b>完整路径</b>：ICD11_Level1 → ICD11_Level2 → ICD11_Level3 → 药物 → 生物标记物。</p>
-            <p><b>跨层路径</b>：正式终止于 Level2 的映射直接连接药物，透明度较低且不补造 Level3。</p>
-            <p><b>聚合</b>：相同有效层级关系已合并，权重为涉及文献数之和。</p>
+            <dl class="legend-list">
+              <div>
+                <dt>颜色与带宽</dt>
+                <dd>
+                  节点统一为青灰色；流带按 Level2 动态着色，优先区分当前 Level1。带宽代表涉及文献数权重。
+                </dd>
+              </div>
+              <div>
+                <dt>Level1 轨道</dt>
+                <dd>浅色纵向轨道仅用于层级定位，不代表权重。</dd>
+              </div>
+              <div>
+                <dt>关联展开</dt>
+                <dd>同时显示与当前 Level1 共享下游节点的其他 Level1 路径。</dd>
+              </div>
+              <div>
+                <dt>完整路径</dt>
+                <dd>Level1 → Level2 → Level3 → 药物 → 生物标记物。</dd>
+              </div>
+              <div>
+                <dt>跨层路径</dt>
+                <dd>正式终止于 Level2 的映射直接连接药物，透明度较低且不补造 Level3。</dd>
+              </div>
+              <div>
+                <dt>聚合规则</dt>
+                <dd>相同有效层级关系合并，权重为涉及文献数之和。</dd>
+              </div>
+            </dl>
           </section>
-          <section class="detail-block">
+          <section class="detail-block ranking-block">
             <h3>Top ICD11_Level1</h3>
             <ul class="top-list">
-              <li v-for="item in topList(categoryStats.topLevel1)" :key="item.name">
+              <li v-for="(item, index) in topList(categoryStats.topLevel1)" :key="item.name">
+                <span class="top-rank">{{ index + 1 }}</span>
                 <b>{{ item.name }}</b>
                 <span>{{ formatNumber(item.value) }} · {{ formatPercent(item.share) }}</span>
               </li>
             </ul>
           </section>
-          <section class="detail-block">
+          <section class="detail-block ranking-block">
             <h3>Top ICD11_Level3</h3>
-            <p class="path-note">仅统计真实 Level3 路径，权重 {{ formatNumber(categoryStats.level3Weight) }}。</p>
+            <p class="path-note">
+              仅统计真实 Level3 路径，权重 {{ formatNumber(categoryStats.level3Weight) }}。
+            </p>
             <ul class="top-list">
-              <li v-for="item in topList(categoryStats.topLevel3)" :key="item.name">
+              <li v-for="(item, index) in topList(categoryStats.topLevel3)" :key="item.name">
+                <span class="top-rank">{{ index + 1 }}</span>
                 <b>{{ item.name }}</b>
                 <span>{{ formatNumber(item.value) }} · {{ formatPercent(item.share) }}</span>
               </li>
             </ul>
           </section>
-          <section class="detail-block">
+          <section class="detail-block ranking-block">
             <h3>Top 药物</h3>
             <ul class="top-list">
-              <li v-for="item in topList(categoryStats.topDrug)" :key="item.name">
+              <li v-for="(item, index) in topList(categoryStats.topDrug)" :key="item.name">
+                <span class="top-rank">{{ index + 1 }}</span>
                 <b>{{ item.name }}</b>
                 <span>{{ formatNumber(item.value) }} · {{ formatPercent(item.share) }}</span>
               </li>
             </ul>
           </section>
-          <section class="detail-block">
+          <section class="detail-block ranking-block">
             <h3>Top 生物标记物</h3>
             <ul class="top-list">
-              <li v-for="item in topList(categoryStats.topBiomarker)" :key="item.name">
+              <li v-for="(item, index) in topList(categoryStats.topBiomarker)" :key="item.name">
+                <span class="top-rank">{{ index + 1 }}</span>
                 <b>{{ item.name }}</b>
                 <span>{{ formatNumber(item.value) }} · {{ formatPercent(item.share) }}</span>
               </li>
@@ -2076,7 +2145,9 @@ function exportPng() {
             </dl>
           </section>
           <section v-if="detail.paths.length === 1" class="detail-block">
-            <h3>{{ shownDetailPaths[0]?.mappingLevel === 'Level2' ? '聚合跨层路径' : '聚合五层路径' }}</h3>
+            <h3>
+              {{ shownDetailPaths[0]?.mappingLevel === 'Level2' ? '聚合跨层路径' : '聚合五层路径' }}
+            </h3>
             <article v-for="path in shownDetailPaths" :key="path.pathId" class="single-path-card">
               <ol class="single-path-steps">
                 <li v-for="step in pathSteps(path)" :key="`${path.pathId}-${step.label}`">
@@ -2105,7 +2176,7 @@ function exportPng() {
                 <dd>{{ formatNumber(detail.nodeWeight) }}</dd>
               </div>
               <div>
-                <dt>关联聚合路径数</dt>
+                <dt>聚合路径</dt>
                 <dd>{{ formatNumber(detail.paths.length) }}</dd>
               </div>
             </dl>
@@ -2117,7 +2188,11 @@ function exportPng() {
           >
             <div class="drug-share-heading">
               <h3>{{ section.title }}</h3>
-              <button v-if="isRelationPieChartable(section)" type="button" @click="openPieModal(section.id)">
+              <button
+                v-if="isRelationPieChartable(section)"
+                type="button"
+                @click="openPieModal(section.id)"
+              >
                 放大查看
               </button>
             </div>
@@ -2179,7 +2254,9 @@ function exportPng() {
                   <i :style="{ backgroundColor: item.itemStyle.color }"></i>
                   <b>
                     {{ item.name }}
-                    <small v-if="item.isOther">包含 {{ formatNumber(item.hiddenItemCount) }} 项</small>
+                    <small v-if="item.isOther"
+                      >包含 {{ formatNumber(item.hiddenItemCount) }} 项</small
+                    >
                   </b>
                   <span>{{ formatNumber(item.value) }} · {{ formatPercent(item.share) }}</span>
                 </li>
@@ -2190,8 +2267,18 @@ function exportPng() {
       </aside>
     </section>
 
-    <div v-if="pieModalOpen && activePieSection" class="pie-modal-backdrop" role="presentation" @click.self="closePieModal">
-      <section class="pie-modal" role="dialog" aria-modal="true" :aria-label="`${activePieSection.title}放大查看`">
+    <div
+      v-if="pieModalOpen && activePieSection"
+      class="pie-modal-backdrop"
+      role="presentation"
+      @click.self="closePieModal"
+    >
+      <section
+        class="pie-modal"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="`${activePieSection.title}放大查看`"
+      >
         <header>
           <div>
             <h2>{{ activePieSection.title }}</h2>
@@ -2201,7 +2288,11 @@ function exportPng() {
         </header>
         <div class="pie-modal-body">
           <div class="pie-modal-chart-shell">
-            <div ref="modalPieChartEl" class="pie-modal-chart" :aria-label="`${activePieSection.ariaLabel}放大图`"></div>
+            <div
+              ref="modalPieChartEl"
+              class="pie-modal-chart"
+              :aria-label="`${activePieSection.ariaLabel}放大图`"
+            ></div>
             <div class="pie-modal-center" aria-hidden="true">
               <strong>{{ activePieSection.sourceItemCount }}</strong>
               <span>{{ activePieSection.centerLabel }}</span>
@@ -2414,14 +2505,59 @@ function exportPng() {
 
 .state-message {
   width: 100%;
-  padding: 18px 16px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 92px;
+  padding: 18px 16px;
   color: #526c7c;
   font-size: 14px;
   font-weight: 800;
+  text-align: center;
 }
 
 .error-state {
   color: #a33b36;
+}
+
+.state-message button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  color: inherit;
+  background: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.state-message button:hover,
+.state-message button:focus-visible {
+  background: #f1f4f3;
+  outline: 2px solid rgba(63, 119, 122, 0.2);
+  outline-offset: 1px;
+}
+
+.loading-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(63, 119, 122, 0.22);
+  border-top-color: #3f777a;
+  border-radius: 50%;
+  animation: sankey-loading-spin 0.8s linear infinite;
+}
+
+@keyframes sankey-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sankey-controls :disabled,
+.location-search :disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
 }
 
 .side-panel {
@@ -2699,9 +2835,7 @@ function exportPng() {
   padding: 12px;
   border: 1px solid rgba(105, 127, 140, 0.13);
   border-radius: 10px;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(241, 249, 250, 0.9)),
-    #ffffff;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(241, 249, 250, 0.9)), #ffffff;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
 }
 
@@ -2817,7 +2951,6 @@ function exportPng() {
   .sankey-title-row h1 {
     font-size: 19px;
   }
-
 }
 
 .sankey-page {
@@ -2844,7 +2977,12 @@ function exportPng() {
   padding: 9px clamp(18px, 4vw, 52px);
   border-bottom: 1px solid rgba(96, 124, 143, 0.2);
   background:
-    linear-gradient(90deg, rgba(235, 248, 246, 0.96), rgba(255, 255, 255, 0.98) 42%, rgba(244, 249, 251, 0.96)),
+    linear-gradient(
+      90deg,
+      rgba(235, 248, 246, 0.96),
+      rgba(255, 255, 255, 0.98) 42%,
+      rgba(244, 249, 251, 0.96)
+    ),
     #ffffff;
   box-shadow: 0 8px 26px rgba(21, 52, 72, 0.07);
   backdrop-filter: blur(18px);
@@ -3075,9 +3213,7 @@ function exportPng() {
   border: 1px solid rgba(23, 50, 71, 0.14);
   border-radius: 8px;
   color: #173247;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(240, 248, 250, 0.9)),
-    #ffffff;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(240, 248, 250, 0.9)), #ffffff;
   box-shadow: 0 8px 18px rgba(23, 50, 71, 0.07);
   text-decoration: none;
 }
@@ -3645,8 +3781,7 @@ function exportPng() {
   background:
     radial-gradient(circle at 16% 22%, rgba(47, 143, 132, 0.1), transparent 24%),
     radial-gradient(circle at 88% 18%, rgba(50, 111, 180, 0.1), transparent 26%),
-    linear-gradient(120deg, #eaf7f4, #f8fbfd 43%, #edf4fb),
-    #f4f8f8;
+    linear-gradient(120deg, #eaf7f4, #f8fbfd 43%, #edf4fb), #f4f8f8;
 }
 
 .sankey-map-header.site-header {
@@ -3655,7 +3790,12 @@ function exportPng() {
   z-index: 30;
   border-bottom: 1px solid rgba(96, 124, 143, 0.16);
   background:
-    linear-gradient(90deg, rgba(236, 249, 246, 0.97), rgba(255, 255, 255, 0.98) 46%, rgba(239, 247, 251, 0.97)),
+    linear-gradient(
+      90deg,
+      rgba(236, 249, 246, 0.97),
+      rgba(255, 255, 255, 0.98) 46%,
+      rgba(239, 247, 251, 0.97)
+    ),
     #ffffff;
   box-shadow: 0 10px 30px rgba(21, 52, 72, 0.08);
   opacity: var(--header-opacity, 1);
@@ -3685,7 +3825,12 @@ function exportPng() {
   padding: 16px clamp(16px, 2vw, 24px) 10px;
   border-bottom: 1px solid rgba(83, 118, 133, 0.16);
   background:
-    linear-gradient(90deg, rgba(241, 250, 248, 0.92), rgba(252, 253, 252, 0.96) 48%, rgba(242, 248, 253, 0.92)),
+    linear-gradient(
+      90deg,
+      rgba(241, 250, 248, 0.92),
+      rgba(252, 253, 252, 0.96) 48%,
+      rgba(242, 248, 253, 0.92)
+    ),
     var(--sankey-control-bg);
 }
 
@@ -4013,8 +4158,7 @@ function exportPng() {
   border: 1px solid rgba(105, 127, 140, 0.12);
   border-radius: 10px;
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(240, 248, 250, 0.88)),
-    #ffffff;
+    linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(240, 248, 250, 0.88)), #ffffff;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
@@ -4052,7 +4196,11 @@ function exportPng() {
   min-width: 42px;
   max-width: 100%;
   content: '';
-  background: linear-gradient(90deg, color-mix(in srgb, var(--relation-color), transparent 78%), transparent);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--relation-color), transparent 78%),
+    transparent
+  );
   pointer-events: none;
 }
 
@@ -4150,7 +4298,11 @@ function exportPng() {
   inset: 0 auto 0 0;
   width: var(--relation-share);
   content: '';
-  background: linear-gradient(90deg, color-mix(in srgb, var(--relation-color), transparent 82%), transparent);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--relation-color), transparent 82%),
+    transparent
+  );
   pointer-events: none;
 }
 
@@ -4202,8 +4354,7 @@ function exportPng() {
   border: 1px solid rgba(105, 127, 140, 0.18);
   border-radius: 10px;
   background:
-    linear-gradient(180deg, rgba(252, 254, 255, 0.98), rgba(244, 250, 252, 0.96)),
-    #ffffff;
+    linear-gradient(180deg, rgba(252, 254, 255, 0.98), rgba(244, 250, 252, 0.96)), #ffffff;
   box-shadow: 0 26px 70px rgba(13, 34, 50, 0.24);
 }
 
@@ -4307,7 +4458,13 @@ function exportPng() {
   width: min(272px, calc(100vw - 28px));
   padding: 10px 11px 11px;
   color: #173247;
-  font-family: Microsoft YaHei, Noto Sans CJK SC, Source Han Sans CN, SimHei, Arial, sans-serif;
+  font-family:
+    Microsoft YaHei,
+    Noto Sans CJK SC,
+    Source Han Sans CN,
+    SimHei,
+    Arial,
+    sans-serif;
 }
 
 :global(.sankey-tip__eyebrow) {
@@ -4410,6 +4567,26 @@ function exportPng() {
 :global(.sankey-tip__color strong) {
   overflow: hidden;
   color: #36566a;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.sankey-tip__taxonomy) {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
+  color: #6a808b;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+:global(.sankey-tip__taxonomy strong) {
+  overflow: hidden;
+  color: #36566a;
+  font-weight: 600;
+  text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4542,7 +4719,10 @@ function exportPng() {
   font-size: 11px;
   font-weight: 900;
   white-space: nowrap;
-  transition: color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+  transition:
+    color 0.16s ease,
+    background 0.16s ease,
+    box-shadow 0.16s ease;
 }
 
 .scope-segmented input:checked + span {
@@ -4641,11 +4821,21 @@ function exportPng() {
 }
 
 .chart-panel::before {
-  background: linear-gradient(90deg, var(--sankey-teal), rgba(50, 111, 180, 0.78), rgba(199, 121, 32, 0.55));
+  background: linear-gradient(
+    90deg,
+    var(--sankey-teal),
+    rgba(50, 111, 180, 0.78),
+    rgba(199, 121, 32, 0.55)
+  );
 }
 
 .side-panel::before {
-  background: linear-gradient(90deg, rgba(50, 111, 180, 0.76), rgba(138, 111, 197, 0.64), rgba(22, 133, 124, 0.48));
+  background: linear-gradient(
+    90deg,
+    rgba(50, 111, 180, 0.76),
+    rgba(138, 111, 197, 0.64),
+    rgba(22, 133, 124, 0.48)
+  );
 }
 
 .side-panel {
@@ -4696,7 +4886,9 @@ function exportPng() {
 
 .side-panel.has-selection {
   border-color: rgba(11, 102, 112, 0.28);
-  box-shadow: 0 18px 45px rgba(23, 50, 71, 0.08), 0 0 0 2px rgba(11, 102, 112, 0.06);
+  box-shadow:
+    0 18px 45px rgba(23, 50, 71, 0.08),
+    0 0 0 2px rgba(11, 102, 112, 0.06);
 }
 
 .side-panel.has-selection::before {
@@ -4793,8 +4985,14 @@ function exportPng() {
 }
 
 @keyframes upstream-context-enter {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .upstream-context header {
@@ -4867,7 +5065,6 @@ function exportPng() {
   .side-panel {
     position: relative;
   }
-
 }
 
 @media (max-width: 720px) {
@@ -4925,6 +5122,849 @@ function exportPng() {
 
   .stats-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Academic research database visual system. */
+.sankey-shell {
+  --sankey-ink: #17262d;
+  --sankey-muted: #5d6a70;
+  --sankey-border: #cbd2d4;
+  color: var(--sankey-ink);
+  background: #f5f7f6;
+  font-family: Arial, 'Noto Sans CJK SC', 'Source Han Sans CN', 'Microsoft YaHei', sans-serif;
+}
+
+.sankey-map-header.site-header {
+  min-height: 64px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--sankey-border);
+  background: #ffffff;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.brand-logo {
+  border-color: #386f73;
+  border-radius: 2px;
+  background: #386f73;
+  box-shadow: none;
+}
+
+.brand strong,
+.page-title,
+.module-switch-link strong {
+  font-weight: 700;
+}
+
+.brand small {
+  color: #657177;
+  font-weight: 400;
+}
+
+.page-title {
+  padding-left: 10px;
+  border-left-width: 2px;
+  border-left-color: #3f777a;
+  color: #17262d;
+  font-size: 20px;
+}
+
+.location-search input,
+.location-search > button,
+.module-switch-link {
+  border: 1px solid var(--sankey-border);
+  border-radius: 2px;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.location-search input {
+  height: 38px;
+  color: #17262d;
+  font-weight: 400;
+}
+
+.location-search input:focus,
+.location-search > button:focus-visible,
+.module-switch-link:focus-visible {
+  border-color: #3f777a;
+  outline: 2px solid rgba(63, 119, 122, 0.2);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
+.module-switch-link {
+  min-height: 38px;
+  color: #23343c;
+}
+
+.module-switch-link span {
+  color: #69757a;
+  font-weight: 500;
+}
+
+.module-switch-link:hover {
+  border-color: #829497;
+  background: #f7f9f8;
+  box-shadow: none;
+}
+
+.sankey-controls {
+  grid-template-columns:
+    minmax(320px, 560px)
+    150px
+    minmax(190px, 260px)
+    108px
+    minmax(298px, 1fr);
+  align-items: end;
+  gap: 8px;
+  padding-top: 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--sankey-border);
+  background: #fcfdfd;
+  box-shadow: none;
+}
+
+.sankey-controls .control-field,
+.scope-field {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 4px;
+}
+
+.sankey-controls .control-field > span,
+.scope-field legend {
+  min-height: 13px;
+  color: #5d6a70;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.control-field select,
+.control-field input,
+.sankey-controls button,
+.top-toggle,
+.scope-segmented {
+  border: 1px solid var(--sankey-border);
+  border-radius: 2px;
+  color: #17262d;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.control-field select,
+.control-field input,
+.sankey-controls button {
+  font-weight: 500;
+}
+
+.scope-segmented {
+  padding: 1px;
+  background: #eef1f1;
+}
+
+.scope-segmented span {
+  border-radius: 1px;
+  color: #5d6a70;
+  font-weight: 500;
+}
+
+.scope-segmented input:checked + span {
+  color: #214f52;
+  background: #ffffff;
+  box-shadow: none;
+  outline: 1px solid #aebabc;
+}
+
+.control-field select:focus,
+.control-field input:focus,
+.sankey-controls button:focus-visible,
+.scope-segmented input:focus-visible + span {
+  border-color: #3f777a;
+  outline: 2px solid rgba(63, 119, 122, 0.2);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
+.sankey-controls .control-button {
+  min-width: 78px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.sankey-controls .clear-lock-button {
+  min-width: 96px;
+}
+
+.sankey-controls .export-button {
+  min-width: 100px;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: end;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-left: 12px;
+  border-left: 1px solid #dce1e2;
+}
+
+.sankey-controls .reset-button,
+.sankey-controls .clear-lock-button {
+  border-color: #aeb9bc;
+  color: #33464e;
+  background: #ffffff;
+}
+
+.sankey-controls .reset-button:hover,
+.sankey-controls .reset-button:focus-visible,
+.sankey-controls .clear-lock-button:hover,
+.sankey-controls .clear-lock-button:focus-visible {
+  border-color: #667b80;
+  color: #17262d;
+  background: #f1f4f3;
+  box-shadow: none;
+  transform: none;
+}
+
+.sankey-controls .export-button,
+.sankey-controls .export-button:hover,
+.sankey-controls .export-button:focus-visible {
+  border-color: #315f62 !important;
+  color: #ffffff !important;
+  background: #315f62 !important;
+  box-shadow: none;
+  transform: none;
+}
+
+.sankey-controls .export-button:hover,
+.sankey-controls .export-button:focus-visible {
+  background: #244d50 !important;
+}
+
+.sankey-main {
+  gap: 12px;
+  background: #f5f7f6;
+}
+
+.chart-panel,
+.side-panel {
+  border: 1px solid var(--sankey-border);
+  border-radius: 2px;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.chart-panel::before,
+.side-panel::before {
+  display: none;
+}
+
+.chart-panel {
+  background: #fcfdfd;
+}
+
+.side-panel,
+.side-panel.has-selection {
+  border-color: var(--sankey-border);
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.lock-bar,
+.lock-bar.has-lock {
+  min-height: 34px;
+  border-bottom: 1px solid #dce1e2;
+  border-left: 2px solid transparent;
+  color: #5d6a70;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.lock-bar.has-lock {
+  border-left-color: #3f777a;
+  background: #f1f6f5;
+}
+
+.lock-bar strong,
+.lock-bar.has-lock strong {
+  color: #23343c;
+  font-weight: 700;
+}
+
+.filter-summary {
+  min-height: 0;
+  display: inline;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: #53666d !important;
+  background: transparent;
+  font-weight: 500;
+}
+
+.filter-summary::before {
+  margin-right: 7px;
+  color: #899699;
+  content: '·';
+}
+
+.stage-axis {
+  padding-top: 6px;
+  border-bottom: 1px solid #dce1e2;
+  background: #ffffff;
+}
+
+.stage-axis-track span {
+  min-height: 25px;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: 0;
+  color: #23343c;
+  background: transparent;
+  font-weight: 700;
+  text-shadow: none;
+}
+
+.sankey-chart,
+.sankey-chart-shell {
+  background: #fcfdfd;
+}
+
+.level1-column-rail {
+  border-color: #e1e5e6;
+  border-radius: 2px;
+  background: #f7f9f8;
+}
+
+.overview-header {
+  border-bottom-color: #dce1e2;
+}
+
+.side-panel h2,
+.side-panel h3,
+.side-panel strong,
+.side-panel b {
+  color: #23343c;
+  font-weight: 700;
+}
+
+.detail-block {
+  border-top-color: #dce1e2;
+}
+
+.detail-block p,
+.path-row span,
+.path-note,
+.top-list li {
+  color: #5d6a70;
+  font-weight: 400;
+}
+
+.stats-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  padding: 1px;
+  border: 1px solid var(--sankey-border);
+  border-radius: 2px;
+  background: var(--sankey-border);
+}
+
+.stats-summary span {
+  min-width: 0;
+  justify-content: space-between;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 0;
+  color: #5d6a70;
+  background: #ffffff;
+  font-weight: 400;
+  text-align: left;
+}
+
+.stats-summary b {
+  color: #5d6a70;
+  font-weight: 500;
+}
+
+.stats-summary strong {
+  color: #17262d;
+  font-weight: 700;
+}
+
+.upstream-context,
+.node-summary-block,
+.single-path-card,
+.relation-empty-card,
+.single-relation-card,
+.single-relation-card dl div,
+.relation-share-list li,
+.drug-share-chart-shell,
+.pie-modal-chart-shell,
+.pie-modal-list li,
+.compact-detail .detail-kv div {
+  border: 1px solid var(--sankey-border);
+  border-radius: 2px;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.upstream-context {
+  border-left: 2px solid #6f898c;
+}
+
+.compact-detail .detail-kv div {
+  padding: 5px 7px;
+}
+
+.detail-kv dt,
+.detail-kv dd,
+.single-path-card strong,
+.single-path-card footer,
+.single-path-steps strong,
+.single-relation-main span,
+.single-relation-main strong,
+.single-relation-main em,
+.single-relation-card dt,
+.single-relation-card dd,
+.relation-empty-card strong,
+.relation-empty-card span {
+  font-weight: 500;
+}
+
+.detail-kv dd,
+.single-path-card strong,
+.single-relation-main strong,
+.single-relation-card dd,
+.relation-empty-card strong {
+  font-weight: 700;
+}
+
+.single-path-steps span {
+  border: 1px solid #bad0ce;
+  border-radius: 2px;
+  color: #315f62;
+  background: #eef5f4;
+  font-weight: 600;
+}
+
+.path-row button,
+.drug-share-heading button,
+.pie-modal header button {
+  border: 1px solid #9cadb0;
+  border-radius: 2px;
+  color: #315f62;
+  background: #ffffff;
+  box-shadow: none;
+  font-weight: 600;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.path-row button:hover,
+.path-row button:focus-visible,
+.drug-share-heading button:hover,
+.drug-share-heading button:focus-visible,
+.pie-modal header button:hover,
+.pie-modal header button:focus-visible {
+  border-color: #3f777a;
+  color: #244d50;
+  background: #f1f6f5;
+  box-shadow: none;
+  transform: none;
+}
+
+.drug-share-list i,
+.pie-modal-list i {
+  border-radius: 1px;
+  box-shadow: none;
+}
+
+.single-relation-card::before,
+.relation-share-list li::before {
+  width: 3px;
+  min-width: 0;
+  background: var(--relation-color);
+}
+
+.single-relation-card > i {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.pie-modal-backdrop {
+  background: rgba(18, 32, 39, 0.42);
+  backdrop-filter: none;
+}
+
+.pie-modal {
+  border: 1px solid #aeb9bc;
+  border-radius: 3px;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(18, 32, 39, 0.16);
+}
+
+.pie-modal-chart-shell {
+  border-radius: 2px;
+}
+
+.drug-share-center span,
+.pie-modal-center span,
+.drug-share-center em,
+.pie-modal-center em,
+.drug-share-list span,
+.pie-modal-list span,
+.pie-modal-list strong {
+  font-weight: 500;
+}
+
+.drug-share-center strong,
+.pie-modal-center strong {
+  font-weight: 700;
+}
+
+:global(.sankey-tip) {
+  color: #23343c;
+  font-family: Arial, 'Noto Sans CJK SC', 'Source Han Sans CN', 'Microsoft YaHei', sans-serif;
+}
+
+:global(.sankey-tip__eyebrow),
+:global(.sankey-tip__title),
+:global(.sankey-tip__type),
+:global(.sankey-tip__metrics span),
+:global(.sankey-tip__metrics small),
+:global(.sankey-tip__metrics strong),
+:global(.sankey-tip__color),
+:global(.sankey-tip__taxonomy),
+:global(.sankey-tip__note),
+:global(.sankey-tip__node-main > span),
+:global(.sankey-tip__node-main > strong),
+:global(.sankey-tip__node-main b),
+:global(.sankey-tip__node-main small) {
+  font-weight: 500;
+}
+
+:global(.sankey-tip__title),
+:global(.sankey-tip__metrics strong),
+:global(.sankey-tip__node-main > strong),
+:global(.sankey-tip__node-main b) {
+  font-weight: 700;
+}
+
+:global(.sankey-tip__type),
+:global(.sankey-tip__metrics > div),
+:global(.sankey-tip__note),
+:global(.sankey-tip__node-main > span) {
+  border-radius: 2px;
+}
+
+/* Research-sidebar information hierarchy. */
+.overview-header {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+}
+
+.overview-header h2 {
+  margin-bottom: 12px;
+  font-size: 21px;
+  line-height: 1.25;
+}
+
+.stats-summary span {
+  min-height: 48px;
+  display: grid;
+  align-content: center;
+  justify-content: stretch;
+  gap: 3px;
+  padding: 7px 9px;
+}
+
+.stats-summary span:nth-child(-n + 3) {
+  background: #f6f8f7;
+}
+
+.stats-summary b {
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-summary strong {
+  justify-self: start;
+  font-size: 15px;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.legend-block h3,
+.ranking-block h3 {
+  margin-bottom: 10px;
+  font-size: 15px;
+}
+
+.legend-list {
+  display: grid;
+  margin: 0;
+}
+
+.legend-list div {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid #edf0f0;
+}
+
+.legend-list div:last-child {
+  border-bottom: 0;
+}
+
+.legend-list dt,
+.legend-list dd {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.legend-list dt {
+  color: #33464e;
+  font-weight: 600;
+}
+
+.legend-list dd {
+  color: #5d6a70;
+  font-weight: 400;
+}
+
+.top-list {
+  gap: 0;
+}
+
+.top-list li {
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 7px;
+  min-height: 34px;
+  padding: 6px 0;
+  border-bottom: 1px solid #edf0f0;
+  font-size: 12px;
+}
+
+.top-list li:last-child {
+  border-bottom: 0;
+}
+
+.top-list .top-rank {
+  color: #8a969a;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.top-list b {
+  color: #2b3d45;
+  font-weight: 600;
+}
+
+.top-list li > span:last-child {
+  color: #5d6a70;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.compact-detail .node-summary-block {
+  padding: 0 0 14px;
+  border: 0;
+  border-bottom: 1px solid #dce1e2;
+  border-radius: 0;
+  background: transparent;
+}
+
+.compact-detail .node-summary-block h3 {
+  margin-bottom: 10px;
+  font-size: 18px;
+}
+
+.compact-detail .node-summary-block .detail-kv {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  border-top: 1px solid #dce1e2;
+  border-bottom: 1px solid #dce1e2;
+}
+
+.compact-detail .node-summary-block .detail-kv div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
+  align-items: start;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 0;
+  border-right: 1px solid #dce1e2;
+  border-radius: 0;
+  background: #fafbfb;
+}
+
+.compact-detail .node-summary-block .detail-kv div:last-child {
+  border-right: 0;
+}
+
+.compact-detail .node-summary-block .detail-kv dt {
+  color: #68777d;
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.compact-detail .node-summary-block .detail-kv dd {
+  color: #23343c;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.compact-detail .drug-share-block {
+  padding-top: 14px;
+}
+
+.drug-share-heading {
+  margin-bottom: 6px;
+}
+
+.compact-detail .drug-share-heading h3 {
+  font-size: 16px;
+}
+
+.drug-share-chart-shell {
+  height: 210px;
+  margin: 10px 0 0;
+  border: 0;
+  border-top: 1px solid #e1e5e6;
+  border-bottom: 1px solid #e1e5e6;
+  border-radius: 0;
+  background: #fafcfc;
+}
+
+.drug-share-list {
+  gap: 0;
+  margin-top: 0;
+}
+
+.relation-share-list li {
+  min-height: 40px;
+  padding: 9px 4px;
+  border: 0;
+  border-bottom: 1px solid #e1e5e6;
+  border-radius: 0;
+  background: transparent;
+}
+
+.relation-share-list li::before {
+  display: none;
+}
+
+.relation-share-list li:hover,
+.relation-share-list li:focus-within {
+  border-color: #e1e5e6;
+  background: #f6f8f7;
+}
+
+.drug-share-list i {
+  width: 8px;
+  height: 8px;
+}
+
+.drug-share-list b {
+  color: #2b3d45;
+  font-weight: 600;
+}
+
+.drug-share-list span {
+  color: #5d6a70;
+  font-variant-numeric: tabular-nums;
+}
+
+.single-relation-card {
+  padding: 12px 4px;
+  border: 0;
+  border-top: 1px solid #e1e5e6;
+  border-bottom: 1px solid #e1e5e6;
+  border-radius: 0;
+  background: #fafcfc;
+}
+
+.single-relation-card dl div {
+  padding: 6px 8px;
+  border: 0;
+  border-left: 1px solid #dce1e2;
+  border-radius: 0;
+  background: transparent;
+}
+
+@media (max-width: 720px) {
+  .stage-axis-track span,
+  .upstream-context {
+    border-radius: 2px;
+  }
+
+  .stats-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sankey-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .level-field,
+  .display-field,
+  .toolbar-actions {
+    grid-column: 1 / -1;
+  }
+
+  .compact-field {
+    max-width: none;
+  }
+
+  .toolbar-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding-top: 7px;
+    padding-left: 0;
+    border-top: 1px solid #dce1e2;
+    border-left: 0;
+  }
+}
+
+@media (min-width: 721px) and (max-width: 1180px) {
+  .sankey-controls {
+    grid-template-columns:
+      minmax(260px, 1fr)
+      minmax(150px, 180px)
+      minmax(180px, 0.8fr)
+      minmax(96px, 120px);
+  }
+
+  .toolbar-actions {
+    grid-column: 1 / -1;
+    justify-self: end;
+    padding-top: 7px;
+    padding-left: 0;
+    border-top: 1px solid #dce1e2;
+    border-left: 0;
   }
 }
 </style>

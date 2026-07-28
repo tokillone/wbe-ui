@@ -20,6 +20,7 @@ import type {
   MapPndlComparison,
   MapPndlRankingItem,
   MapRegionStat,
+  MapReportedSite,
   MapSourceRecord,
   MapSummaryCard,
   MapStatsResponse,
@@ -39,8 +40,10 @@ import type {
 import {
   canExploreBiomarker,
   compactExplorerSummaryCards,
+  compactHeatFootprintPadding,
   displayLevelForZoom,
   excludeGeometryFromFilter,
+  firstActiveRegionCandidate,
   heatRegionLevelForDisplayLevel,
   isMainlandChinaCity,
   overviewSummaryCards,
@@ -50,8 +53,10 @@ import {
   selectionYearRange,
   sortBiomarkersByLiterature,
   temperatureBandIndex,
+  usesCompactHeatFootprint,
   visibleLevelsForZoom,
 } from '../utils/mapVisualization'
+import { probePmtilesRange } from '../utils/pmtiles'
 
 type MapMode = 'globe' | 'flat'
 type DetailMode = 'none' | 'compact' | 'full'
@@ -115,7 +120,11 @@ type MapStatus = {
 }
 type PndlColumnTooltipState = {
   visible: boolean
-  text: string
+  key: string
+  title: string
+  label: string
+  value: string
+  metrics: Array<{ label: string; value: string }>
   x: number
   y: number
 }
@@ -137,6 +146,7 @@ const REGION_PM_TILES_URL = import.meta.env.VITE_REGION_PM_TILES_URL || '/tiles/
 const BASEMAP_GLYPHS_URL =
   import.meta.env.VITE_BASEMAP_GLYPHS_URL || '/tiles/fonts/{fontstack}/{range}.pbf'
 const BASEMAP_SPRITE_URL = import.meta.env.VITE_BASEMAP_SPRITE_URL || '/tiles/sprites/light'
+const USE_SIMPLIFIED_BASEMAP = true
 const REGION_VECTOR_SOURCE_ID = 'wbe-regions'
 const REGION_VECTOR_SOURCE_LAYER = 'wbe_regions'
 const BOUNDARY_URLS: Record<BoundaryName, string> = {
@@ -157,16 +167,6 @@ const ALL_SUBCATEGORY_LABEL = DEFAULT_SELECTION.subcategory
 const ALL_BIOMARKER_KEY = DEFAULT_SELECTION.biomarkerKey
 const ALL_BIOMARKER_LABEL = '全部生物标记物'
 const ALL_YEAR_LABEL = DEFAULT_SELECTION.year
-const REGION_INTERACTIVE_LAYERS = [
-  'country-hit',
-  'admin1-hit',
-  'china-province-hit',
-  'china-city-hit',
-  'region-city-selected-fill',
-  'region-city-data-fill',
-  'region-selected-fill',
-  'region-data-fill',
-] as const
 const REGION_HOVER_PRIORITY_LAYERS = [
   'region-city-selected-fill',
   'region-city-data-fill',
@@ -176,6 +176,10 @@ const REGION_HOVER_PRIORITY_LAYERS = [
   'region-data-fill',
   'region-selected-line',
   'region-data-line',
+  'china-city-hit',
+  'china-province-hit',
+  'admin1-hit',
+  'country-hit',
 ] as const
 const POINT_INTERACTIVE_LAYERS = [
   'pndl-country-bubbles',
@@ -192,10 +196,10 @@ const VECTOR_MAX_ZOOM = 10
 const FALLBACK_MAX_ZOOM = 9.2
 const GLOBE_MIN_ZOOM = 2.64
 const GLOBE_INITIAL_ZOOM = 2.66
-const FLAT_BACKGROUND_COLOR = '#f1f2f2'
-const GLOBE_BACKGROUND_COLOR = '#eceeee'
-const LEVEL_FADE_COUNTRY_START = 4
-const LEVEL_FADE_COUNTRY_END = 4.4
+const FLAT_BACKGROUND_COLOR = '#f0f3f4'
+const GLOBE_BACKGROUND_COLOR = '#edf1f2'
+const LEVEL_FADE_COUNTRY_START = 3.3
+const LEVEL_FADE_COUNTRY_END = 3.6
 const LEVEL_FADE_CITY_START = 5.9
 const LEVEL_FADE_CITY_END = 6.3
 const CITY_BOUNDARY_MIN_ZOOM = 5.9
@@ -203,7 +207,6 @@ const COUNTRY_BOUNDARY_FADE_START = 5.2
 const COUNTRY_BOUNDARY_FADE_END = 5.8
 const VECTOR_REGION_FADE_START_ZOOM = 4.65
 const VECTOR_REGION_FADE_END_ZOOM = 5.25
-const PMTILES_MAGIC = 'PMTiles'
 const DENSE_POINT_RADIUS_DEGREES = 38
 const COUNTRY_STATUS_UPDATE_DELAY = 280
 const LABEL_LAYER_IDS = [
@@ -253,6 +256,7 @@ const REGION_LINE_LAYER_IDS = [
 ] as const
 const MAP_DISPLAY_LEVELS = ['country', 'admin1', 'city'] as const
 const PNDL_LAYER_IDS = MAP_DISPLAY_LEVELS.flatMap((level) => [
+  `pndl-${level}-heat-footprint`,
   `pndl-${level}-bubble-icons`,
   `pndl-${level}-selected-ring`,
   `pndl-${level}-bubbles`,
@@ -283,15 +287,7 @@ const MAP_HIGHLIGHT_STYLE = {
   bubbleSelectedLine: '#694313',
   bubbleSelectedOuter: '#ffffff',
 } as const
-const MAP_HEAT_COLORS = [
-  '#2c7bb6',
-  '#00a6ca',
-  '#00ccbc',
-  '#ffff8c',
-  '#fdae61',
-  '#f46d43',
-  '#d73027',
-] as const
+const MAP_HEAT_COLORS = ['#ffff8c', '#fdae61', '#f46d43', '#d73027'] as const
 const BUBBLE_IMAGE_BUCKETS: Record<MapDisplayLevel, readonly number[]> = {
   country: [24, 34, 46, 60, 74],
   admin1: [16, 22, 30, 40, 52],
@@ -456,6 +452,12 @@ const UI_TEXT = {
     source: '来源',
     noData: '无数据',
     sourceRecords: '来源记录',
+    reportedSites: '采样点位明细',
+    siteIdentity: '点位身份',
+    siteName: '报告名称',
+    siteLinkStatus: '关联状态',
+    siteCoverage: '覆盖记录',
+    centroidWarning: '气泡位于区域质心，不代表污水厂精确坐标',
     noSourceRecords: '暂无来源记录',
     sourcePending: '来源待补充',
     sourceLocation: '位置',
@@ -481,19 +483,23 @@ const UI_TEXT = {
     heatLegendLow: '低',
     heatLegendMedium: '中',
     heatLegendHigh: '高',
-    heatLegendNote: '颜色由蓝到红表示 PNDL 由低到高；气泡数字表示污水厂/采样点覆盖数。',
+    heatLegendNote: '黄 → 红：PNDL 由低到高',
     heatLegendUnit: 'mg/day/1000 inh',
     pndlTrend: 'PNDL 年度趋势',
     annualTrends: '年度趋势',
     physicochemicalProperties: 'biomarker 理化性质',
     dataNotes: '数据说明',
     dataNotePndl: 'PNDL 对比仅在选择具体生物标记物后展示；年度趋势节点使用同年同单位数据的中位数。',
-    dataNoteBubble: '点位数按文献报告的污水厂/采样点位计算；跨文献点位仅在有明确证据确认同一真实污水厂时合并，否则按独立点位处理。',
-    dataNoteCoverage: '国家、省/州、市的点位、文献、记录和 biomarker 数均按当前区域与筛选条件重新统计。',
-    points: '点位',
+    dataNoteBubble:
+      '点位数按文献报告的污水厂/采样点位计算；当前版本不执行跨文献自动合并，confirmed_site_id 仅作为人工核查候选。',
+    dataNoteCoverage:
+      '国家、省/州、市的点位、文献、记录和 biomarker 数均按当前区域与筛选条件重新统计。',
+    points: '采样点位',
     cities: '城市',
     records: '记录数',
     literature: '文献数',
+    annualMedian: '年度中位数',
+    dataRows: '数据行',
   },
   en: {
     brandHome: 'Wastewater Biomarker Evidence home',
@@ -585,6 +591,12 @@ const UI_TEXT = {
     source: 'Source',
     noData: 'No data',
     sourceRecords: 'Source records',
+    reportedSites: 'Reported sampling sites',
+    siteIdentity: 'Site identity',
+    siteName: 'Reported name',
+    siteLinkStatus: 'Link status',
+    siteCoverage: 'Records covered',
+    centroidWarning: 'Bubble marks the region centroid, not an exact plant coordinate',
     noSourceRecords: 'No source records',
     sourcePending: 'Source pending',
     sourceLocation: 'Location',
@@ -610,7 +622,7 @@ const UI_TEXT = {
     heatLegendLow: 'Low',
     heatLegendMedium: 'Medium',
     heatLegendHigh: 'High',
-    heatLegendNote: 'Colors run from blue to red as PNDL rises; bubbles show reported plant/sampling-site coverage.',
+    heatLegendNote: 'Yellow → red: lower to higher PNDL',
     heatLegendUnit: 'mg/day/1000 inh',
     pndlTrend: 'PNDL yearly trend',
     annualTrends: 'Yearly trends',
@@ -619,13 +631,15 @@ const UI_TEXT = {
     dataNotePndl:
       'PNDL comparison requires a specific biomarker; yearly trend points use same-unit annual medians.',
     dataNoteBubble:
-      'Sites follow literature-reported wastewater plants or sampling points. Cross-paper sites merge only after evidence-based confirmation; otherwise they remain independent.',
+      'Sites follow literature-reported wastewater plants or sampling points. This release never auto-merges across papers; confirmed_site_id remains a review candidate only.',
     dataNoteCoverage:
       'Country, state/province, and city counts are recalculated for the current region and filters.',
-    points: 'Sites',
+    points: 'Reported sites',
     cities: 'Cities',
     records: 'Records',
     literature: 'Literature',
+    annualMedian: 'Annual median',
+    dataRows: 'Data rows',
   },
 } as const
 
@@ -633,13 +647,17 @@ const BACKEND_LABEL_TRANSLATIONS: Record<Locale, Record<string, string>> = {
   zh: {},
   en: {
     'PNDL 聚合详情': 'PNDL cluster detail',
+    'PNDL 详情': 'PNDL detail',
     PNDL年度趋势: 'PNDL yearly trend',
+    位置数: 'Locations',
     点位数: 'Sites',
     文献数: 'Literature',
     记录数: 'Records',
     'biomarker 数': 'Biomarkers',
+    'PNDL 范围': 'PNDL range',
     PNDL年份数: 'PNDL years',
     年份范围: 'Year range',
+    城市数: 'Cities',
     当前区域覆盖年份: 'Years covered by the current region',
     涉及城市数: 'Cities',
     当前PNDL: 'Current PNDL',
@@ -663,6 +681,36 @@ const BACKEND_LABEL_TRANSLATIONS: Record<Locale, Record<string, string>> = {
     所属省州内城市比较: 'Cities in same province/state',
     '所属省/州内城市比较': 'Cities in same province/state',
     返回国家比较: 'Country comparison',
+    聚合气泡包含的可映射位置: 'Mappable locations in the cluster bubble',
+    当前筛选记录: 'Records under the current filters',
+    '去重 DOI 计数': 'Unique DOI count',
+    文献报告点位覆盖数: 'Literature-reported site coverage',
+    '当前筛选的污水厂/采样点覆盖数': 'Wastewater plants/sampling sites under the current filters',
+    '当前筛选去重 DOI': 'Unique DOIs under the current filters',
+    当前筛选全部记录: 'All records under the current filters',
+    去重生物标记物: 'Unique biomarkers',
+    '存在可比 PNDL 的年份': 'Years with comparable PNDL',
+    去重城市: 'Unique cities',
+    聚合气泡包含的位置横向比较: 'Comparison of locations in the cluster bubble',
+    '全球国家层面 PNDL 横向比较': 'Global country-level PNDL comparison',
+    当前国家下一级行政区比较: 'Admin-1 comparison within the current country',
+    '中国城市层面 PNDL 比较': 'China city-level PNDL comparison',
+    '同一国家省/州层面 PNDL 横向比较': 'Province/state PNDL comparison within the same country',
+    '国家层面 PNDL 横向比较': 'Country-level PNDL comparison',
+    '中国城市层面 PNDL 比较；该模式不高亮当前省份':
+      'China city-level PNDL comparison; the current province is not highlighted',
+    '城市层面 PNDL 横向比较': 'City-level PNDL comparison',
+    '同一省/州内城市 PNDL 比较': 'City PNDL comparison within the same province/state',
+    精确关联: 'Exact match',
+    一条记录关联多个点位: 'One record linked to multiple sites',
+    位置字段回退匹配: 'Location-field fallback match',
+    关联记录不计数: 'Linked record excluded from counts',
+    未匹配国家: 'Country not matched',
+    未匹配: 'Unmatched',
+    '地图筛选项为空，请确认聚合表已刷新且存在可映射的 PNDL 数据。':
+      'Map filters are empty. Refresh the aggregate table and confirm that it contains mappable PNDL data.',
+    '当前筛选没有可映射的 PNDL 聚合结果。':
+      'No mappable PNDL aggregate is available under the current filters.',
   },
 }
 
@@ -689,7 +737,21 @@ const mapContainer = ref<HTMLElement | null>(null)
 const pndlChartScrollRef = ref<HTMLElement | null>(null)
 const pndlColumnTooltipState = ref<PndlColumnTooltipState>({
   visible: false,
-  text: '',
+  key: '',
+  title: '',
+  label: '',
+  value: '',
+  metrics: [],
+  x: 0,
+  y: 0,
+})
+const trendPointTooltipState = ref<PndlColumnTooltipState>({
+  visible: false,
+  key: '',
+  title: '',
+  label: '',
+  value: '',
+  metrics: [],
   x: 0,
   y: 0,
 })
@@ -879,9 +941,11 @@ const detailTitle = computed(() => {
     return localizedBackendLabel(selectedDetail.value?.title) || ui.value.detail
   if (detailRegion.value)
     return (
-      localizedStatDisplayName(detailRegion.value) || selectedDetail.value?.title || ui.value.detail
+      localizedStatDisplayName(detailRegion.value) ||
+      localizedBackendLabel(selectedDetail.value?.title) ||
+      ui.value.detail
     )
-  return selectedDetail.value?.title || ui.value.detail
+  return localizedBackendLabel(selectedDetail.value?.title) || ui.value.detail
 })
 const detailSubtitle = computed(() => {
   const prefix = isClusterDetail.value
@@ -910,6 +974,7 @@ const pndlComparisons = computed(() => selectedDetail.value?.pndlComparisons ?? 
 const detailSourceRecords = computed(
   () => selectedDetail.value?.sourceRecords ?? selectedDetail.value?.sources ?? [],
 )
+const detailReportedSites = computed(() => selectedDetail.value?.reportedSites ?? [])
 const detailCoverageWithoutPndl = computed(() => {
   const region = detailRegion.value
   return Boolean(
@@ -1061,8 +1126,33 @@ function trendPolylineForSeries(series: MapTrendSeries) {
     .join(' ')
 }
 
-function trendPointTooltip(series: MapTrendSeries, point: MapTrendSeries['points'][number]) {
-  return `${localizedBackendLabel(series.label)} · ${point.year} · ${formatCompact(point.value)} ${series.unit ?? ''} · 数据行 ${formatNumber(point.valueCount ?? point.recordCount)}`
+function showTrendPointTooltip(
+  series: MapTrendSeries,
+  point: MapTrendSeries['points'][number],
+  event: MouseEvent,
+) {
+  const card = (event.currentTarget as Element | null)?.closest<HTMLElement>('.trend-chart-card')
+  const position = chartTooltipPosition(event, card, 252, 116)
+  trendPointTooltipState.value = {
+    visible: true,
+    key: series.metricKey,
+    title: localizedBackendLabel(series.label),
+    label: ui.value.annualMedian,
+    value: `${formatCompact(point.value)} ${series.unit ?? ''}`.trim(),
+    metrics: [
+      { label: ui.value.year, value: String(point.year) },
+      {
+        label: ui.value.dataRows,
+        value: formatNumber(point.valueCount ?? point.recordCount ?? 0),
+      },
+    ],
+    ...position,
+  }
+}
+
+function hideTrendPointTooltip() {
+  if (!trendPointTooltipState.value.visible) return
+  trendPointTooltipState.value = { ...trendPointTooltipState.value, visible: false }
 }
 const compactDetailCallout = computed(() => {
   if (!selectedDetail.value) return ''
@@ -1101,10 +1191,16 @@ const activeMapMessage = computed(() => {
     }
   }
   if (hasEmptyFilterData.value) {
-    return { type: 'notice', text: filters.value?.diagnostics?.message || ui.value.noFilterData }
+    return {
+      type: 'notice',
+      text: localizedBackendLabel(filters.value?.diagnostics?.message) || ui.value.noFilterData,
+    }
   }
   if (hasNoStatsData.value) {
-    return { type: 'notice', text: stats.value?.diagnostics?.message || ui.value.noStatsData }
+    return {
+      type: 'notice',
+      text: localizedBackendLabel(stats.value?.diagnostics?.message) || ui.value.noStatsData,
+    }
   }
   return null
 })
@@ -1376,6 +1472,7 @@ async function initMap() {
         updateRegionDataSource()
         updateRegionHighlightSources()
       }
+      applyViewLayerVisibility()
       updateMapStatus()
     })
     map.on('mousemove', handleMapMouseMove)
@@ -1418,7 +1515,13 @@ function pointLabelSourceId(level: MapDisplayLevel) {
 
 function pndlLayerId(
   level: MapDisplayLevel,
-  part: 'bubble-icons' | 'selected-ring' | 'bubbles' | 'bubble-count' | 'point-labels',
+  part:
+    | 'heat-footprint'
+    | 'bubble-icons'
+    | 'selected-ring'
+    | 'bubbles'
+    | 'bubble-count'
+    | 'point-labels',
 ) {
   return `pndl-${level}-${part}`
 }
@@ -1441,44 +1544,12 @@ function pndlLayerZoomRange(level: MapDisplayLevel, preferredMinzoom?: number) {
 
 function levelTransitionOpacityExpression(level: MapDisplayLevel, opacity = 1) {
   if (level === 'country') {
-    return [
-      'interpolate',
-      ['linear'],
-      ['zoom'],
-      0,
-      opacity,
-      LEVEL_FADE_COUNTRY_START,
-      opacity,
-      LEVEL_FADE_COUNTRY_END,
-      0,
-    ]
+    return ['step', ['zoom'], opacity, LEVEL_FADE_COUNTRY_END, 0]
   }
   if (level === 'admin1') {
-    return [
-      'interpolate',
-      ['linear'],
-      ['zoom'],
-      LEVEL_FADE_COUNTRY_START,
-      0,
-      LEVEL_FADE_COUNTRY_END,
-      opacity,
-      LEVEL_FADE_CITY_START,
-      opacity,
-      LEVEL_FADE_CITY_END,
-      0,
-    ]
+    return ['step', ['zoom'], 0, LEVEL_FADE_COUNTRY_END, opacity, LEVEL_FADE_CITY_END, 0]
   }
-  return [
-    'interpolate',
-    ['linear'],
-    ['zoom'],
-    LEVEL_FADE_CITY_START,
-    0,
-    LEVEL_FADE_CITY_END,
-    opacity,
-    currentMapMaxZoom(),
-    opacity,
-  ]
+  return ['step', ['zoom'], 0, LEVEL_FADE_CITY_END, opacity]
 }
 
 function invalidateMapDisplayCaches() {
@@ -1522,6 +1593,7 @@ function configureMapGestureSmoothness() {
 }
 
 async function resolveBasemapConfig(module: MapLibreModule): Promise<BasemapConfig> {
+  if (USE_SIMPLIFIED_BASEMAP) return { mode: 'geojson' }
   const regionSourceUrl = await resolveRegionSourceUrl(module)
   const pmtilesUrl = BASEMAP_PM_TILES_URL.trim()
   if (!pmtilesUrl || !(await canLoadVectorBasemapAssets(pmtilesUrl))) {
@@ -1568,7 +1640,10 @@ async function refreshVectorBasemapLanguage() {
 
 async function resolveRegionSourceUrl(module: MapLibreModule) {
   const regionTilesUrl = REGION_PM_TILES_URL.trim()
-  if (!regionTilesUrl || !(await canLoadPmtilesArchive(regionTilesUrl))) return undefined
+  if (!regionTilesUrl) return undefined
+  if (!(await canLoadPmtilesArchive(regionTilesUrl))) {
+    return undefined
+  }
   try {
     await registerPmtilesProtocol(module)
     return `pmtiles://${new URL(regionTilesUrl, window.location.origin).toString()}`
@@ -1607,39 +1682,7 @@ async function canLoadVectorBasemapAssets(pmtilesUrl: string) {
 }
 
 async function canLoadPmtilesArchive(url: string) {
-  try {
-    const head = await fetch(url, { method: 'HEAD', cache: 'no-store' })
-    if (head.ok) {
-      const contentLength = Number(head.headers.get('content-length') ?? '0')
-      if (contentLength > 0 && contentLength < PMTILES_MAGIC.length) return false
-    }
-  } catch {
-    // Some static hosts/proxies reject HEAD for large PMTiles files. The range
-    // GET below is the source of truth, so do not fail early here.
-  }
-
-  try {
-    const prefix = await fetchResponsePrefix(url, PMTILES_MAGIC.length)
-    return prefix === PMTILES_MAGIC
-  } catch {
-    return false
-  }
-}
-
-async function fetchResponsePrefix(url: string, length: number) {
-  const response = await fetch(url, {
-    cache: 'no-store',
-    headers: { Range: `bytes=0-${length - 1}` },
-  })
-  if (!response.ok && response.status !== 206) return ''
-  if (response.status === 200 && response.body) {
-    const reader = response.body.getReader()
-    const { value } = await reader.read()
-    void reader.cancel()
-    return value ? new TextDecoder().decode(value.slice(0, length)) : ''
-  }
-  const buffer = await response.arrayBuffer()
-  return new TextDecoder().decode(new Uint8Array(buffer).slice(0, length))
+  return (await probePmtilesRange(url)).ok
 }
 
 function glyphProbeUrls(template: string) {
@@ -2060,7 +2103,11 @@ function regionLayerBeforeId(layer: unknown) {
 
 function addPndlLabelLayer(level: MapDisplayLevel) {
   const minzoom =
-    level === 'country' ? 1.35 : level === 'admin1' ? 4.4 : CITY_BOUNDARY_MIN_ZOOM + 0.4
+    level === 'country'
+      ? 1.35
+      : level === 'admin1'
+        ? LEVEL_FADE_COUNTRY_END
+        : CITY_BOUNDARY_MIN_ZOOM + 0.4
   const filters: unknown[] = [['==', ['get', 'labelVisible'], true]]
   if (level === 'city' && basemapMode === 'vector') {
     filters.push(['==', ['get', 'isMainlandCity'], true])
@@ -2075,11 +2122,12 @@ function addPndlLabelLayer(level: MapDisplayLevel) {
       'text-field': ['get', 'displayName'],
       'text-font': ['Noto Sans Medium'],
       'text-size': ['interpolate', ['linear'], ['zoom'], minzoom, 11, 8.6, 13.5],
-      'text-offset': [0, 1.35],
-      'text-anchor': 'top',
+      'text-variable-anchor': ['top', 'bottom', 'left', 'right'],
+      'text-radial-offset': level === 'country' ? 1.7 : level === 'admin1' ? 1.55 : 1.35,
+      'text-justify': 'auto',
       'text-allow-overlap': false,
       'text-ignore-placement': false,
-      'text-padding': 8,
+      'text-padding': 6,
       'text-optional': true,
     },
     paint: {
@@ -2279,6 +2327,27 @@ function addPndlPointLayers(level: MapDisplayLevel) {
         : ['step', pointCount, 6, 3, 8, 10, 10, 30, 13, 100, 17]
 
   addMapLayer({
+    id: pndlLayerId(level, 'heat-footprint'),
+    type: 'circle',
+    source: sourceId,
+    ...pndlLayerZoomRange(level),
+    filter: [
+      'all',
+      ['==', ['get', 'compactHeatFootprint'], true],
+      ['==', ['get', 'hasPndlValue'], true],
+    ],
+    paint: {
+      'circle-radius': ['+', baseRadius, compactHeatFootprintPadding(level)],
+      'circle-color': ['coalesce', ['get', 'heatColor'], MAP_HIGHLIGHT_STYLE.dataFill],
+      'circle-opacity': levelTransitionOpacityExpression(level, 0.5),
+      'circle-blur': 0.08,
+      'circle-stroke-color': ['coalesce', ['get', 'heatColor'], MAP_HIGHLIGHT_STYLE.dataLine],
+      'circle-stroke-opacity': levelTransitionOpacityExpression(level, 0.7),
+      'circle-stroke-width': 1.2,
+    },
+  })
+
+  addMapLayer({
     id: pndlLayerId(level, 'bubble-icons'),
     type: 'symbol',
     source: sourceId,
@@ -2286,7 +2355,7 @@ function addPndlPointLayers(level: MapDisplayLevel) {
     layout: {
       'icon-image': bubbleIconImageExpression(level),
       'icon-allow-overlap': true,
-      'icon-ignore-placement': true,
+      'icon-ignore-placement': false,
       'symbol-sort-key': pointCount,
     },
     paint: {
@@ -2403,27 +2472,27 @@ function addBaseFillLayer(
     minzoom,
     ...(maxzoom != null ? { maxzoom } : {}),
     paint: {
-      'fill-color': '#fbfbf8',
+      'fill-color': '#fcfcfb',
       'fill-opacity': opacity,
     },
   })
 }
 
 function addBoundaryLineLayers() {
-  addLineLayer('country-line', 'country-boundaries', '#8f989d', 0.58, 0, 0.4)
-  addLineLayer('admin1-line', 'admin1-boundaries', '#aab0b3', 0.34, 3.4, 0.34, [
+  addLineLayer('country-line', 'country-boundaries', '#95a1a7', 0.9, 0, 0.42)
+  addLineLayer('admin1-line', 'admin1-boundaries', '#aab3b8', 0.6, 3.4, 0.38, [
     '!=',
     ['get', 'country_key'],
     'china',
   ])
-  addLineLayer('china-province-line', 'china-province-boundaries', '#939da2', 0.44, 3.3, 0.42)
+  addLineLayer('china-province-line', 'china-province-boundaries', '#9ba6ac', 0.6, 3.3, 0.42)
   addLineLayer(
     'china-city-line',
     'china-city-boundaries',
-    '#b5bbbe',
-    0.24,
+    '#89969d',
+    0.46,
     CITY_BOUNDARY_MIN_ZOOM,
-    0.36,
+    0.58,
   )
 }
 
@@ -2871,6 +2940,7 @@ async function ensureBoundary(name: BoundaryName, refreshCached = false) {
       updateBoundarySource(name)
       updateRegionDataSource()
       applyMainlandCityLabelAuthority()
+      applyViewLayerVisibility()
     }
     return
   }
@@ -2891,6 +2961,7 @@ async function ensureBoundary(name: BoundaryName, refreshCached = false) {
     updatePointSource()
     updateRegionDataSource()
     applyMainlandCityLabelAuthority()
+    applyViewLayerVisibility()
     if (name === 'countries') updateMapStatus()
   } catch {
     mapError.value = ui.value.boundaryLoadFailed
@@ -2901,25 +2972,14 @@ async function ensureBoundary(name: BoundaryName, refreshCached = false) {
 
 function ensureStagedBoundariesForCurrentZoom(refreshCached = false) {
   if (!mapReady.value) return
-  const zoom = map?.getZoom() ?? mapZoomLevel.value
-  const heatLevel = heatRegionLevelForDisplayLevel(activeMapLevel.value)
   void ensureBoundary('countries', refreshCached)
-  if (zoom >= 3.2 || (hasSpecificBiomarker.value && heatLevel === 'admin1')) {
+  if (activeMapLevel.value !== 'country') {
     void ensureBoundary('admin1', refreshCached)
     void ensureBoundary('chinaProvinces', refreshCached)
   }
-  const shouldLoadCities =
-    zoom >= CITY_BOUNDARY_MIN_ZOOM ||
-    activeMapLevel.value === 'city' ||
-    (hasSpecificBiomarker.value && heatLevel === 'city' && hasChinaCityRows()) ||
-    (zoom >= LEVEL_FADE_CITY_START - 0.15 && hasChinaCityRows())
-  if (shouldLoadCities) {
+  if (activeMapLevel.value === 'city') {
     void ensureBoundary('chinaCities', refreshCached)
   }
-}
-
-function hasChinaCityRows() {
-  return displayRegionRows().some((row) => row.level === 'city' && countryGroupKey(row) === 'china')
 }
 
 function pushBoundaryLoading(name: BoundaryName) {
@@ -3405,6 +3465,7 @@ function buildRegionDataCollection(): FeatureCollection {
   const collection: FeatureCollection = {
     type: 'FeatureCollection',
     features: displayHeatRegionRows(level).flatMap((stat) => {
+      if (usesCompactHeatFootprint(stat.level, level)) return []
       const feature = boundaryFeatureForStat(stat)
       if (!feature) return []
       return [cloneHighlightFeature(feature, stat)]
@@ -3691,6 +3752,7 @@ function buildPointCollection(level: MapDisplayLevel) {
     return cached.collection
   }
   const sourceId = pointSourceId(level)
+  const compactHeatIds = compactHeatRegionIdSet(level)
   const collection: FeatureCollection = {
     type: 'FeatureCollection',
     features: displayMapRegionRows(level).flatMap((row) => {
@@ -3705,6 +3767,7 @@ function buildPointCollection(level: MapDisplayLevel) {
             ...statProperties(row),
             displayLevel: level,
             pointSourceId: sourceId,
+            compactHeatFootprint: compactHeatIds.has(regionIdForStat(row)),
           },
           geometry: {
             type: 'Point',
@@ -3732,6 +3795,14 @@ function displayHeatRegionRows(level: MapDisplayLevel = activeMapLevel.value) {
   return displayMapRegionRows(heatRegionLevelForDisplayLevel(level))
 }
 
+function compactHeatRegionIdSet(level: MapDisplayLevel) {
+  return new Set(
+    displayHeatRegionRows(level)
+      .filter((row) => usesCompactHeatFootprint(row.level, level))
+      .map(regionIdForStat),
+  )
+}
+
 function displayMapRegionRows(level: MapDisplayLevel = activeMapLevel.value) {
   if (displayMapRowsStats !== stats.value) {
     displayMapRowsStats = stats.value
@@ -3747,7 +3818,7 @@ function displayMapRegionRows(level: MapDisplayLevel = activeMapLevel.value) {
       (row) => row.level === 'country' && countryGroupKey(row) === row.geoKey,
     )
     const merged = new Map<string, MapRegionStat>()
-    ;[...countryRows, ...synthesizeCountryRows(rawStatRows())].forEach((row) => {
+    countryRows.forEach((row) => {
       const id = regionIdForStat(row)
       if (!merged.has(id)) merged.set(id, row)
     })
@@ -3766,7 +3837,7 @@ function displayRegionRows() {
   }
   const rows = rawStatRows()
   const byRegionId = new Map<string, MapRegionStat>()
-  ;[...rows, ...synthesizeCountryRows(rows), ...synthesizeAdminRows(rows)].forEach((row) => {
+  rows.forEach((row) => {
     const id = regionIdForStat(row)
     if (!id || byRegionId.has(id)) return
     byRegionId.set(id, row)
@@ -4001,6 +4072,9 @@ function statProperties(stat: MapRegionStat) {
     pndlPointCount: stat.pndlPointCount ?? 0,
     pndlYearCount: stat.pndlYearCount ?? 0,
     pndlSources: stat.pndlSources ?? '',
+    pointCountBasis: stat.pointCountBasis ?? 'reported_site_key',
+    pointGeometryBasis: stat.pointGeometryBasis ?? 'region_centroid',
+    crossDocumentMergeEnabled: stat.crossDocumentMergeEnabled ?? false,
   }
 }
 
@@ -4993,12 +5067,9 @@ function hideTooltipOnEmptyClick(event: MapMouseEvent) {
   closeSearch()
   isLayerPanelOpen.value = false
   isLanguageMenuOpen.value = false
-  const layers = [
-    ...REGION_INTERACTIVE_LAYERS.filter((layerId) => map?.getLayer(layerId)),
-    ...interactivePointLayerIdsForCurrentZoom(),
-  ]
-  const features = layers.length ? map?.queryRenderedFeatures(event.point, { layers }) : []
-  if (!features?.length) hideTooltip()
+  if (!pointFeaturesAtPoint(event.point).length && !bestRegionFeatureAtPoint(event.point)) {
+    hideTooltip()
+  }
 }
 
 function showFeatureTooltip(feature: GeoJsonFeature, lngLat: MapLayerMouseEvent['lngLat']) {
@@ -5086,10 +5157,15 @@ function pointLevelFromLayerId(layerId: string): MapDisplayLevel {
 
 function bestRegionFeatureAtPoint(point: MapMouseEvent['point']) {
   if (!map) return null
+  const activeRegionIds = pointRegionIdSet()
   for (const layerId of REGION_HOVER_PRIORITY_LAYERS) {
     if (!map.getLayer(layerId)) continue
-    const [feature] = map.queryRenderedFeatures(point, { layers: [layerId] })
-    if (feature?.properties) return enrichRenderedRegionFeature(feature as GeoJsonFeature)
+    const candidates = map
+      .queryRenderedFeatures(point, { layers: [layerId] })
+      .filter((feature) => feature?.properties)
+      .map((feature) => enrichRenderedRegionFeature(feature as GeoJsonFeature))
+    const activeFeature = firstActiveRegionCandidate(candidates, activeRegionIds, regionFeatureKey)
+    if (activeFeature) return activeFeature
   }
   return null
 }
@@ -5360,6 +5436,7 @@ function buildTooltipHtml(props: Record<string, unknown>) {
     biomarkerCount > 0 ? `${biomarkerLabel}（${formatNumber(biomarkerCount)}）` : biomarkerLabel
   const median = formatCompact(Number(props.pndlMedian))
   const doi = formatNumber(Number(props.doiCount ?? 0))
+  const records = formatNumber(Number(props.recordCount ?? 0))
   const points = formatNumber(Number(props.pointCount ?? 1))
   const heatLine =
     props.pndlMedian == null
@@ -5372,11 +5449,13 @@ function buildTooltipHtml(props: Record<string, unknown>) {
       <div class="map-tooltip-grid">
         <div class="map-tooltip-metric"><span>${escapeHtml(ui.value.points)}</span><b>${points}</b></div>
         <div class="map-tooltip-metric"><span>${escapeHtml(ui.value.literature)}</span><b>${doi}</b></div>
+        <div class="map-tooltip-metric"><span>${escapeHtml(ui.value.records)}</span><b>${records}</b></div>
       </div>
       <div class="map-tooltip-extra">
         <div>${escapeHtml(ui.value.biomarker)}：<b>${biomarker}</b></div>
       </div>
       ${heatLine}
+      <div class="map-tooltip-centroid">${escapeHtml(ui.value.centroidWarning)}</div>
       <div class="map-tooltip-hint">${escapeHtml(ui.value.clickExploreHint)}</div>
     </div>
   `
@@ -5681,13 +5760,39 @@ function isPndlChartItemSelected(item: MapPndlRankingItem) {
 
 function pndlColumnTooltip(item: MapPndlRankingItem) {
   const hasPndl = hasPositivePndlValue(item.pndlMedianMgD1000inh)
-  return [
-    localizedPndlItemDisplayName(item),
-    hasPndl
-      ? `PNDL ${formatCompact(item.pndlMedianMgD1000inh)} mg/day/1000 inh`
+  return {
+    title: localizedPndlItemDisplayName(item),
+    label: ui.value.pndlMedian,
+    value: hasPndl
+      ? `${formatCompact(item.pndlMedianMgD1000inh)} mg/day/1000 inh`
       : ui.value.pndlRegionUnavailable,
-    `${ui.value.records} ${formatNumber(hasPndl ? (item.pndlRecordCount ?? item.recordCount ?? 0) : (item.recordCount ?? 0))}；${ui.value.literature} ${formatNumber(hasPndl ? (item.pndlDoiCount ?? item.doiCount ?? 0) : (item.doiCount ?? 0))}；${ui.value.points} ${formatNumber(hasPndl ? (item.pndlPointCount ?? item.pointCount ?? 0) : (item.pointCount ?? 0))}；${ui.value.year} ${formatNumber(hasPndl ? (item.pndlYearCount ?? item.yearCount ?? 0) : (item.yearCount ?? 0))}`,
-  ].join('\n')
+    metrics: [
+      {
+        label: ui.value.records,
+        value: formatNumber(
+          hasPndl ? (item.pndlRecordCount ?? item.recordCount ?? 0) : (item.recordCount ?? 0),
+        ),
+      },
+      {
+        label: ui.value.literature,
+        value: formatNumber(
+          hasPndl ? (item.pndlDoiCount ?? item.doiCount ?? 0) : (item.doiCount ?? 0),
+        ),
+      },
+      {
+        label: ui.value.points,
+        value: formatNumber(
+          hasPndl ? (item.pndlPointCount ?? item.pointCount ?? 0) : (item.pointCount ?? 0),
+        ),
+      },
+      {
+        label: ui.value.year,
+        value: formatNumber(
+          hasPndl ? (item.pndlYearCount ?? item.yearCount ?? 0) : (item.yearCount ?? 0),
+        ),
+      },
+    ],
+  }
 }
 
 function hasPositivePndlValue(value?: number | null) {
@@ -5731,19 +5836,46 @@ function sourceRecordReference(record: MapSourceRecord) {
   return [workbook, row].filter(Boolean).join(' ') || ui.value.sourcePending
 }
 
+function reportedSiteName(site: MapReportedSite) {
+  return site.canonicalPlantName || site.rawPlantName || ui.value.noData
+}
+
+function reportedSiteIdentity(site: MapReportedSite) {
+  return [site.literatureCode, site.reportedSiteKey].filter(Boolean).join(' · ')
+}
+
+function reportedSiteLocation(site: MapReportedSite) {
+  return [site.country, site.province, site.city].filter(Boolean).join(' / ') || ui.value.noData
+}
+
 function showPndlColumnTooltip(item: MapPndlRankingItem, event: MouseEvent) {
   const container = pndlChartScrollRef.value
-  const containerRect = container?.getBoundingClientRect()
-  const tooltipWidth = 238
-  const tooltipHeight = 82
-  const rawX = containerRect ? event.clientX - containerRect.left : event.offsetX
-  const rawY = containerRect ? event.clientY - containerRect.top : event.offsetY
-  const maxX = Math.max(tooltipWidth / 2 + 8, (containerRect?.width ?? 320) - tooltipWidth / 2 - 8)
-  const maxY = Math.max(tooltipHeight + 12, (containerRect?.height ?? 300) - 10)
+  const content = pndlColumnTooltip(item)
   pndlColumnTooltipState.value = {
     visible: true,
-    text: pndlColumnTooltip(item),
-    x: Math.min(Math.max(rawX, tooltipWidth / 2 + 8), maxX),
+    key: pndlRankingKey(item),
+    ...content,
+    ...chartTooltipPosition(event, container, 270, 148),
+  }
+}
+
+function chartTooltipPosition(
+  event: MouseEvent,
+  container: HTMLElement | null | undefined,
+  tooltipWidth: number,
+  tooltipHeight: number,
+) {
+  const containerRect = container?.getBoundingClientRect()
+  const scrollLeft = container?.scrollLeft ?? 0
+  const rawX = containerRect ? event.clientX - containerRect.left + scrollLeft : event.offsetX
+  const rawY = containerRect ? event.clientY - containerRect.top : event.offsetY
+  const width = containerRect?.width ?? 320
+  const height = containerRect?.height ?? 300
+  const minX = scrollLeft + tooltipWidth / 2 + 8
+  const maxX = Math.max(minX, scrollLeft + width - tooltipWidth / 2 - 8)
+  const maxY = Math.max(tooltipHeight + 12, height - 10)
+  return {
+    x: Math.min(Math.max(rawX, minX), maxX),
     y: Math.min(Math.max(rawY - 16, tooltipHeight + 12), maxY),
   }
 }
@@ -6082,15 +6214,50 @@ function handleMapResize() {
 
 function applyViewLayerVisibility() {
   if (!map) return
-  setLayerVisibility([...PNDL_LAYER_IDS], viewLayers.pndl)
+  const hierarchyReady = activeHierarchyBoundariesReady()
+  const pndlVisible = viewLayers.pndl && hierarchyReady
+  setLayerVisibility([...PNDL_LAYER_IDS], pndlVisible)
   setLayerVisibility(layerIdsForViewGroup('labels'), viewLayers.labels)
-  setLayerVisibility([...PNDL_POINT_LABEL_LAYER_IDS], viewLayers.pndl && viewLayers.labels)
-  setLayerVisibility([...REGION_FILL_LAYER_IDS], true)
+  setLayerVisibility([...PNDL_POINT_LABEL_LAYER_IDS], pndlVisible && viewLayers.labels)
+  setLayerVisibility([...REGION_FILL_LAYER_IDS], hierarchyReady)
+  setLayerVisibility(layerIdsForViewGroup('boundaries'), false)
+  setLayerVisibility(['country-line'], viewLayers.boundaries)
   setLayerVisibility(
-    [...layerIdsForViewGroup('boundaries'), ...REGION_LINE_LAYER_IDS],
-    viewLayers.boundaries,
+    ['admin1-line', 'china-province-line'],
+    viewLayers.boundaries && activeMapLevel.value !== 'country',
   )
+  setLayerVisibility(['china-city-line'], viewLayers.boundaries && activeMapLevel.value === 'city')
+  setLayerVisibility([...REGION_LINE_LAYER_IDS], viewLayers.boundaries)
+  setLayerVisibility(['region-data-line', 'region-city-data-line'], false)
+  applyHierarchyBoundaryWidths()
   syncAtmosphereStyle()
+}
+
+function activeHierarchyBoundariesReady() {
+  void boundaryVersion.value
+  if (!boundaryCache.has('countries')) return false
+  if (activeMapLevel.value === 'country') return true
+  if (!boundaryCache.has('admin1') || !boundaryCache.has('chinaProvinces')) return false
+  return activeMapLevel.value !== 'city' || boundaryCache.has('chinaCities')
+}
+
+function applyHierarchyBoundaryWidths() {
+  if (!map) return
+  const level = activeMapLevel.value
+  setBoundaryLineWidth('country-line', level === 'country' ? 0.9 : level === 'admin1' ? 0.78 : 0.7)
+  const adminWidth = level === 'admin1' ? 0.6 : 0.58
+  setBoundaryLineWidth('admin1-line', adminWidth)
+  setBoundaryLineWidth('china-province-line', adminWidth)
+  setBoundaryLineWidth('china-city-line', 0.46)
+  if (map.getLayer('china-city-line') && level === 'city') {
+    map.setPaintProperty('china-city-line', 'line-opacity', 0.58)
+    map.setPaintProperty('china-city-line', 'line-blur', 0.08)
+  }
+}
+
+function setBoundaryLineWidth(layerId: string, width: number) {
+  if (!map?.getLayer(layerId)) return
+  map.setPaintProperty(layerId, 'line-width', width)
 }
 
 function layerIdsForViewGroup(group: 'labels' | 'boundaries') {
@@ -6784,7 +6951,10 @@ function escapeHtml(value: string) {
         :style="{ '--heat-gradient': heatLegendGradient }"
         aria-live="polite"
       >
-        <strong>{{ ui.heatLegendTitle }}</strong>
+        <div class="heat-legend-heading">
+          <strong>{{ ui.heatLegendTitle }}</strong>
+          <small>{{ ui.heatLegendUnit }}</small>
+        </div>
         <div class="heat-legend-strip" aria-hidden="true"></div>
         <div class="heat-legend-scale">
           <span v-for="band in heatLegendBands" :key="band.label">
@@ -6793,7 +6963,6 @@ function escapeHtml(value: string) {
           </span>
         </div>
         <p>{{ ui.heatLegendNote }}</p>
-        <small>{{ ui.heatLegendUnit }}</small>
       </aside>
 
       <div class="map-status-chip" aria-live="polite">
@@ -6960,13 +7129,23 @@ function escapeHtml(value: string) {
                     </article>
                     <div
                       v-if="pndlColumnTooltipState.visible"
-                      class="pndl-column-tooltip"
+                      class="detail-chart-tooltip pndl-column-tooltip"
                       :style="{
                         left: `${pndlColumnTooltipState.x}px`,
                         top: `${pndlColumnTooltipState.y}px`,
                       }"
                     >
-                      {{ pndlColumnTooltipState.text }}
+                      <strong>{{ pndlColumnTooltipState.title }}</strong>
+                      <div class="detail-chart-tooltip-primary">
+                        <span>{{ pndlColumnTooltipState.label }}</span>
+                        <b>{{ pndlColumnTooltipState.value }}</b>
+                      </div>
+                      <div class="detail-chart-tooltip-metrics">
+                        <span v-for="metric in pndlColumnTooltipState.metrics" :key="metric.label">
+                          <small>{{ metric.label }}</small>
+                          <b>{{ metric.value }}</b>
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -7041,13 +7220,39 @@ function escapeHtml(value: string) {
                         v-for="point in trendChartPointsForSeries(series)"
                         :key="point.year"
                         class="trend-point"
+                        @mouseenter="showTrendPointTooltip(series, point, $event)"
+                        @mousemove="showTrendPointTooltip(series, point, $event)"
+                        @mouseleave="hideTrendPointTooltip"
                       >
-                        <title>{{ trendPointTooltip(series, point) }}</title>
+                        <circle class="trend-point-hit" :cx="point.x" :cy="point.y" r="14"></circle>
                         <circle :cx="point.x" :cy="point.y" r="5"></circle>
                         <text :x="point.x" :y="point.y - 12">{{ point.label }}</text>
                         <text :x="point.x" y="236">{{ point.year }}</text>
                       </g>
                     </svg>
+                    <div
+                      v-if="
+                        trendPointTooltipState.visible &&
+                        trendPointTooltipState.key === series.metricKey
+                      "
+                      class="detail-chart-tooltip trend-point-tooltip"
+                      :style="{
+                        left: `${trendPointTooltipState.x}px`,
+                        top: `${trendPointTooltipState.y}px`,
+                      }"
+                    >
+                      <strong>{{ trendPointTooltipState.title }}</strong>
+                      <div class="detail-chart-tooltip-primary">
+                        <span>{{ trendPointTooltipState.label }}</span>
+                        <b>{{ trendPointTooltipState.value }}</b>
+                      </div>
+                      <div class="detail-chart-tooltip-metrics">
+                        <span v-for="metric in trendPointTooltipState.metrics" :key="metric.label">
+                          <small>{{ metric.label }}</small>
+                          <b>{{ metric.value }}</b>
+                        </span>
+                      </div>
+                    </div>
                   </article>
                 </div>
               </section>
@@ -7121,6 +7326,42 @@ function escapeHtml(value: string) {
                     <span :title="sourceRecordReference(record)">{{
                       sourceRecordReference(record)
                     }}</span>
+                  </div>
+                </div>
+              </details>
+
+              <details
+                v-if="detailReportedSites.length"
+                class="source-record-section reported-site-section"
+              >
+                <summary>
+                  <div>
+                    <h3>{{ ui.reportedSites }}</h3>
+                    <span>{{ formatNumber(detailReportedSites.length) }}</span>
+                  </div>
+                </summary>
+                <div class="source-record-table reported-site-table">
+                  <div class="source-record-row head">
+                    <span>{{ ui.siteIdentity }}</span>
+                    <span>{{ ui.siteName }}</span>
+                    <span>{{ ui.siteLinkStatus }}</span>
+                    <span>{{ ui.siteCoverage }}</span>
+                  </div>
+                  <div
+                    v-for="site in detailReportedSites"
+                    :key="site.effectiveSiteKey"
+                    class="source-record-row"
+                  >
+                    <strong :title="reportedSiteLocation(site)">{{
+                      reportedSiteIdentity(site)
+                    }}</strong>
+                    <span
+                      :title="`${reportedSiteLocation(site)}${site.siteNote ? ` · ${site.siteNote}` : ''}`"
+                    >
+                      {{ reportedSiteName(site) }}
+                    </span>
+                    <span>{{ localizedBackendLabel(site.matchStatus) || ui.noData }}</span>
+                    <span>{{ formatNumber(site.recordCount ?? 0) }}</span>
                   </div>
                 </div>
               </details>
@@ -8478,23 +8719,93 @@ function escapeHtml(value: string) {
   font-weight: 850;
 }
 
-.pndl-column-tooltip {
+.detail-chart-tooltip {
   position: absolute;
   z-index: 12;
-  width: 238px;
-  padding: 9px 11px;
-  border-radius: 7px;
-  color: #ffffff;
-  background: rgba(22, 29, 48, 0.96);
-  box-shadow: 0 16px 36px rgba(19, 46, 63, 0.24);
+  box-sizing: border-box;
+  width: 270px;
+  display: grid;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  color: #f8fbfd;
+  background: rgba(19, 43, 58, 0.97);
+  box-shadow: 0 14px 34px rgba(19, 46, 63, 0.26);
   font-size: 11px;
-  font-weight: 850;
-  line-height: 1.55;
+  line-height: 1.35;
   pointer-events: none;
   text-align: left;
   transform: translate(-50%, -100%);
-  white-space: pre-line;
   animation: tooltipIn 0.12s ease both;
+}
+
+.detail-chart-tooltip > strong {
+  overflow: hidden;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-chart-tooltip-primary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  color: #49606e;
+  background: #ffffff;
+}
+
+.detail-chart-tooltip-primary span,
+.detail-chart-tooltip-metrics small {
+  color: inherit;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.detail-chart-tooltip-primary b {
+  min-width: 0;
+  overflow: hidden;
+  color: #9a3412;
+  font-size: 12px;
+  font-weight: 950;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-chart-tooltip-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.detail-chart-tooltip-metrics > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 5px 6px;
+  border-radius: 5px;
+  color: rgba(232, 240, 244, 0.74);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.detail-chart-tooltip-metrics b {
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.trend-point-tooltip {
+  width: 252px;
+}
+
+.trend-point-tooltip .detail-chart-tooltip-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .pndl-column-barbox {
@@ -8704,6 +9015,7 @@ function escapeHtml(value: string) {
 }
 
 .trend-chart-card {
+  position: relative;
   min-height: 230px;
   padding: 12px 14px;
   border: 1px solid rgba(91, 117, 132, 0.14);
@@ -8846,10 +9158,25 @@ function escapeHtml(value: string) {
   stroke-width: 4;
 }
 
-.trend-point circle {
+.trend-point {
+  cursor: pointer;
+}
+
+.trend-point circle:not(.trend-point-hit) {
   fill: #ffffff;
   stroke: #3d5dcb;
   stroke-width: 3;
+}
+
+.trend-point:hover circle:not(.trend-point-hit) {
+  fill: #fff7d6;
+  stroke: #c2410c;
+  stroke-width: 4;
+}
+
+.trend-point .trend-point-hit {
+  fill: transparent;
+  stroke: none;
 }
 
 .trend-point text {
@@ -9417,7 +9744,7 @@ function escapeHtml(value: string) {
 
 :deep(.map-tooltip-grid) {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   border-top: 1px solid #e2e8f0;
   border-bottom: 1px solid #e2e8f0;
 }
@@ -9485,6 +9812,14 @@ function escapeHtml(value: string) {
   display: block;
   margin-top: 2px;
   font-size: 13px;
+}
+
+:deep(.map-tooltip-centroid) {
+  padding: 0 10px 7px;
+  color: #7b8794;
+  font-size: 9px;
+  font-weight: 750;
+  line-height: 1.35;
 }
 
 :deep(.map-tooltip-hint) {
@@ -9779,6 +10114,575 @@ function escapeHtml(value: string) {
 
   .page-title {
     font-size: 17px;
+  }
+}
+
+/* Academic visual system: restrained, rectilinear and publication-oriented. */
+.map-page {
+  --academic-accent: #174f7c;
+  --academic-accent-dark: #123e62;
+  --academic-ink: #183244;
+  --academic-muted: #5f7180;
+  --academic-border: #cbd5dc;
+  --academic-border-light: #dde4e9;
+  --academic-surface: #ffffff;
+  --academic-surface-muted: #f5f7f8;
+  --academic-radius: 4px;
+  --academic-shadow: 0 1px 3px rgba(24, 50, 68, 0.12);
+  color: var(--academic-ink);
+  background: #edf1f4;
+  font-family:
+    Inter, 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.map-page strong {
+  font-weight: 700;
+}
+
+.map-page button,
+.map-page input,
+.map-page select {
+  font-weight: 600;
+}
+
+.site-header {
+  position: relative;
+  z-index: 50;
+  border-bottom-color: var(--academic-border);
+  background: var(--academic-surface);
+  box-shadow: var(--academic-shadow);
+  backdrop-filter: none;
+  animation: none;
+}
+
+.brand-logo {
+  border-color: #123e62;
+  border-radius: var(--academic-radius);
+  background: var(--academic-accent);
+  box-shadow: none;
+}
+
+.brand strong {
+  font-weight: 700;
+}
+
+.brand small {
+  color: var(--academic-muted);
+  letter-spacing: 0.02em;
+}
+
+.page-title {
+  border-left-width: 2px;
+  border-left-color: var(--academic-accent);
+  color: var(--academic-ink);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.location-search input,
+.location-search > button,
+.search-results,
+.search-results button,
+.language-menu > button,
+.language-popover,
+.language-popover button,
+.login-button {
+  border-radius: var(--academic-radius);
+  box-shadow: none;
+}
+
+.location-search input,
+.language-menu > button {
+  border-color: var(--academic-border);
+  background: var(--academic-surface);
+}
+
+.location-search input {
+  border-radius: 6px;
+}
+
+.language-menu > button {
+  width: 50px;
+  box-sizing: border-box;
+  justify-content: center;
+}
+
+.location-search input:focus,
+.language-menu.open > button {
+  border-color: var(--academic-accent);
+  box-shadow: 0 0 0 2px rgba(23, 79, 124, 0.14);
+}
+
+.search-results,
+.language-popover {
+  border-color: var(--academic-border);
+  background: var(--academic-surface);
+  box-shadow: var(--academic-shadow);
+}
+
+.search-results button:hover,
+.language-popover button:hover,
+.language-popover button.active {
+  color: var(--academic-ink);
+  background: #edf3f7;
+}
+
+.login-button {
+  width: 98px;
+  min-width: 98px;
+  flex: 0 0 98px;
+  box-sizing: border-box;
+  padding-inline: 12px;
+  border: 1px solid var(--academic-accent);
+  background: var(--academic-accent);
+  font-weight: 600;
+}
+
+.login-button:hover {
+  border-color: var(--academic-accent-dark);
+  background: var(--academic-accent-dark);
+}
+
+.map-stage {
+  border-top-color: var(--academic-border);
+  color: var(--academic-muted);
+}
+
+.map-stage::before {
+  display: none;
+}
+
+.map-canvas,
+.filter-shell,
+.map-tool-stack {
+  animation: none;
+}
+
+.map-tool-button,
+.layer-panel {
+  border-color: var(--academic-border);
+  border-radius: var(--academic-radius);
+  background: var(--academic-surface);
+  box-shadow: var(--academic-shadow);
+  backdrop-filter: none;
+}
+
+.map-tool-button:hover,
+.layer-control.open .map-tool-button {
+  border-color: #9eacb6;
+  background: var(--academic-surface-muted);
+  box-shadow: var(--academic-shadow);
+  transform: none;
+}
+
+.floating-filters {
+  border-color: var(--academic-border);
+  border-radius: var(--academic-radius);
+  background: var(--academic-surface);
+  box-shadow: var(--academic-shadow);
+  backdrop-filter: none;
+}
+
+.filter-head {
+  border-bottom-color: var(--academic-border-light);
+}
+
+.filter-head strong {
+  color: var(--academic-ink);
+  font-weight: 700;
+}
+
+.filter-head small,
+.floating-filters span,
+.floating-filters label {
+  color: var(--academic-muted);
+  font-weight: 600;
+}
+
+.filter-toggle {
+  right: -18px;
+  width: 26px;
+  height: 52px;
+  border-color: var(--academic-border);
+  border-radius: 0 var(--academic-radius) var(--academic-radius) 0;
+  background: var(--academic-surface);
+  box-shadow: var(--academic-shadow);
+  backdrop-filter: none;
+}
+
+.filter-toggle:hover {
+  background: var(--academic-surface-muted);
+  transform: none;
+}
+
+.floating-filters select,
+.floating-filters .filter-reset-button,
+.floating-filters .filter-refresh-button {
+  border-radius: var(--academic-radius);
+  font-weight: 600;
+}
+
+.floating-filters select,
+.floating-filters .filter-reset-button {
+  border-color: var(--academic-border);
+  color: var(--academic-ink);
+  background: var(--academic-surface);
+}
+
+.floating-filters .filter-reset-button:hover {
+  border-color: #9eacb6;
+  color: var(--academic-ink);
+  background: var(--academic-surface-muted);
+}
+
+.floating-filters .filter-refresh-button {
+  border: 1px solid var(--academic-accent);
+  background: var(--academic-accent);
+  box-shadow: none;
+}
+
+.floating-filters .filter-refresh-button:hover:not(:disabled) {
+  border-color: var(--academic-accent-dark);
+  background: var(--academic-accent-dark);
+  box-shadow: none;
+}
+
+.map-message,
+.boundary-loading-chip,
+.map-status-chip,
+.map-heat-legend {
+  border-color: var(--academic-border);
+  border-radius: var(--academic-radius);
+  background: var(--academic-surface);
+  box-shadow: var(--academic-shadow);
+  backdrop-filter: none;
+}
+
+.map-heat-legend {
+  left: 18px;
+  width: min(236px, calc(100% - 36px));
+  gap: 4px;
+  padding: 9px 10px 8px;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(24, 50, 68, 0.1);
+}
+
+.heat-legend-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.heat-legend-heading small {
+  color: var(--academic-muted);
+  font-size: 9px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.boundary-loading-chip,
+.map-status-chip span,
+.map-heat-legend p,
+.map-heat-legend small,
+.heat-legend-scale i {
+  color: var(--academic-muted);
+  font-weight: 500;
+}
+
+.map-status-chip strong,
+.map-heat-legend strong,
+.heat-legend-scale b {
+  color: var(--academic-ink);
+  font-weight: 700;
+}
+
+.map-heat-legend strong {
+  font-size: 12px;
+}
+
+.map-heat-legend p {
+  font-size: 9.5px;
+  line-height: 1.25;
+}
+
+.heat-legend-strip {
+  border-color: #aebbc4;
+  border-radius: 3px;
+}
+
+.map-stage:not(.filters-closed) .map-heat-legend {
+  left: 18px;
+}
+
+.detail-drawer {
+  border-color: var(--academic-border);
+  border-radius: var(--academic-radius);
+  background: var(--academic-surface);
+  box-shadow: var(--academic-shadow);
+  transform: translateX(calc(100% + 28px));
+  backdrop-filter: none;
+}
+
+.detail-drawer::before {
+  display: none;
+}
+
+.detail-drawer.open {
+  transform: translateX(0);
+}
+
+.detail-drawer header {
+  border-bottom-color: var(--academic-border-light);
+  background: var(--academic-surface);
+}
+
+.detail-drawer header span,
+.detail-metrics dt {
+  color: var(--academic-muted);
+  font-weight: 600;
+}
+
+.detail-actions button,
+.pndl-modebar button,
+.full-detail-panel header button {
+  border-color: var(--academic-border);
+  border-radius: var(--academic-radius);
+  color: var(--academic-ink);
+  background: var(--academic-surface);
+  box-shadow: none;
+  font-weight: 600;
+}
+
+.detail-actions button:hover,
+.pndl-modebar button:hover,
+.full-detail-panel header button:hover {
+  border-color: #9eacb6;
+  background: var(--academic-surface-muted);
+  transform: none;
+}
+
+.detail-callout,
+.detail-loading-card,
+.detail-summary-grid.compact,
+.detail-summary-grid article,
+.region-explorer-section,
+.region-biomarker-action,
+.pndl-chart-section,
+.pndl-column-wrap,
+.pndl-status-card,
+.pndl-coverage-note,
+.pndl-ranking-table,
+.physchem-card,
+.trend-chart-section,
+.trend-chart-card,
+.pndl-ranking-section,
+.source-record-section,
+.detail-note-section,
+.source-record-table,
+.detail-table,
+.breakdown-list article,
+.source-table article,
+.source-list article {
+  border-color: var(--academic-border-light);
+  border-radius: var(--academic-radius);
+  background: var(--academic-surface);
+  box-shadow: none;
+}
+
+.detail-callout,
+.pndl-coverage-note {
+  border-left-color: var(--academic-accent);
+  background: #f2f6f8;
+}
+
+.detail-summary-grid.compact,
+.detail-summary-grid article,
+.pndl-column-wrap,
+.trend-chart-card {
+  background: var(--academic-surface);
+}
+
+.region-biomarker-action:hover:not(:disabled) {
+  border-color: #9fb4c3;
+  background: var(--academic-surface-muted);
+  box-shadow: none;
+  transform: none;
+}
+
+.region-biomarker-name i,
+.physchem-values span,
+.location-chip-list span {
+  border-radius: var(--academic-radius);
+  font-weight: 600;
+}
+
+.detail-chart-tooltip,
+.detail-chart-tooltip-primary,
+.detail-chart-tooltip-metrics > span {
+  border-radius: var(--academic-radius);
+  box-shadow: var(--academic-shadow);
+}
+
+.pndl-column-bar {
+  border-radius: 1px 1px 0 0;
+  background: #6b80b8;
+  box-shadow: inset 0 0 0 1px rgba(45, 62, 112, 0.24);
+}
+
+.pndl-column-item.selected .pndl-column-bar {
+  background: #d75a2b;
+  box-shadow: inset 0 0 0 1px rgba(116, 45, 18, 0.3);
+}
+
+.pndl-ranking-row.head,
+.detail-table-row.head,
+.source-record-row.head {
+  background: var(--academic-surface-muted);
+  font-weight: 600;
+}
+
+.full-detail-backdrop {
+  backdrop-filter: none;
+}
+
+.full-detail-panel {
+  border-color: var(--academic-border);
+  border-radius: var(--academic-radius);
+  background: var(--academic-surface);
+  box-shadow: 0 2px 6px rgba(24, 50, 68, 0.16);
+  transform: translateY(0);
+}
+
+.full-detail-panel header {
+  border-bottom-color: var(--academic-border);
+  background: var(--academic-surface);
+}
+
+.full-detail-panel header span {
+  color: var(--academic-accent);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.full-detail-panel header h2,
+.full-detail-content h3 {
+  color: var(--academic-ink);
+  font-weight: 700;
+}
+
+.full-detail-panel header p,
+.section-title-row span,
+.region-explorer-note,
+.pndl-ranking-row,
+.detail-table-row,
+.source-record-row,
+.breakdown-list article,
+.source-table article,
+.source-list article {
+  font-weight: 500;
+}
+
+.pndl-modebar button.active,
+.pndl-modebar button:hover {
+  color: var(--academic-accent-dark);
+  border-color: var(--academic-accent);
+  background: #edf3f7;
+}
+
+.full-detail-content {
+  background: #f7f9fa;
+}
+
+.full-detail-modal-enter-active,
+.full-detail-modal-leave-active,
+.full-detail-modal-enter-active .full-detail-panel,
+.full-detail-modal-leave-active .full-detail-panel {
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+
+.full-detail-modal-enter-from .full-detail-panel,
+.full-detail-modal-leave-to .full-detail-panel {
+  transform: translateY(6px);
+}
+
+:deep(.maplibregl-ctrl-group),
+:deep(.maplibregl-popup-content),
+:deep(.map-tooltip-card),
+:deep(.map-tooltip-heat) {
+  border-radius: var(--academic-radius);
+  box-shadow: var(--academic-shadow);
+}
+
+:deep(.maplibregl-ctrl-group),
+:deep(.map-tooltip-card) {
+  border: 1px solid var(--academic-border);
+  background: var(--academic-surface);
+  backdrop-filter: none;
+}
+
+:deep(.maplibregl-ctrl-group button:hover) {
+  background: var(--academic-surface-muted);
+}
+
+.map-page button:focus-visible,
+.map-page input:focus-visible,
+.map-page select:focus-visible,
+.map-page a:focus-visible {
+  outline: 2px solid var(--academic-accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 860px) {
+  .map-stage.compact-detail-open .filter-shell {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(calc(-100% - 7px));
+  }
+
+  .map-stage:not(.compact-detail-open) .map-heat-legend {
+    right: auto;
+    left: 12px;
+  }
+
+  .map-stage.compact-detail-open .map-heat-legend {
+    right: auto;
+    left: 12px;
+  }
+
+  .detail-drawer {
+    transform: translateY(calc(100% + 32px));
+  }
+
+  .detail-drawer.open {
+    transform: translateY(0);
+  }
+
+  .full-detail-panel {
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 560px) {
+  .map-stage {
+    height: 100%;
+  }
+
+  .filter-shell {
+    width: min(260px, calc(100% - 54px));
+  }
+
+  .full-detail-backdrop {
+    top: 0;
+    padding: 8px;
+  }
+
+  .full-detail-panel {
+    width: 100%;
+    height: 100%;
   }
 }
 </style>

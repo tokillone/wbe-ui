@@ -38,6 +38,20 @@ const PREVIEW_COLUMNS: Record<string, string[]> = {
   数据表: ['文献编号', '目标类别', '目标物质类别', '药物', '生物标记物名称', '污水厂名称', 'PNDL_value', 'PNDL_unit', 'DOI'],
   药物疾病ICD11映射: ['目标类别', '药物', 'ICD11_Level1_Name', 'ICD11_Level2_Name', 'ICD11_Level3_Name', '映射层级', '是否进入桑基图'],
   文献基础信息: ['文献编号', '文献名', 'DOI', 'keywords'],
+  点位关联表: [
+    '文献编号',
+    'DOI',
+    '国家',
+    '省/州',
+    '市',
+    '原始污水厂名称',
+    '规范污水厂名称',
+    'reported_site_key',
+    'confirmed_site_id',
+    '是否计入点位数',
+    '点位说明',
+    '同一污水厂确认依据',
+  ],
 }
 
 const FIELD_GROUPS = [
@@ -112,6 +126,7 @@ const PERMISSION_FILTERS = [
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50]
 const PREVIEW_ISSUE_LIMIT = 6
+const MAX_UPLOAD_FILE_SIZE = 50 * 1024 * 1024
 
 const BULK_ACTIONS = [
   { value: 'role-editor', label: '设为管理人员' },
@@ -236,7 +251,7 @@ const hiddenBatchWarningCount = computed(() =>
 const previewBlockingMessage = computed(() => {
   if (!preview.value) return ''
   if (preview.value.batch.status === 'VALIDATION_FAILED') {
-    return '该文件未通过完整工作簿校验，不能同步入库。请确认三张业务工作表及其表头、跨表文献引用和 ICD11 映射层级均正确。'
+    return '该文件未通过完整工作簿校验，不能同步入库。请确认四张业务工作表及其表头、跨表文献引用、点位关联和 ICD11 映射层级均正确。'
   }
   if (preview.value.batch.errorRows > 0) {
     return '存在阻断错误的行，不能同步入库。请查看行预览中的问题字段，修正后重新上传。'
@@ -387,16 +402,36 @@ function permissionFilterValue(value: PermissionFilter) {
   return value === 'true'
 }
 
+function validateSelectedFile(file: File) {
+  if (!file.name.toLowerCase().endsWith('.xlsx')) return '仅支持 .xlsx 文件'
+  if (file.size === 0) return '上传文件不能为空'
+  if (file.size > MAX_UPLOAD_FILE_SIZE) return '上传文件不能超过 50MB'
+  return ''
+}
+
+function selectUploadFile(file: File | null) {
+  if (!file) {
+    selectedFile.value = null
+    message.value = ''
+    return
+  }
+  const validationMessage = validateSelectedFile(file)
+  selectedFile.value = validationMessage ? null : file
+  if (validationMessage) {
+    setMessage('error', validationMessage)
+  } else {
+    message.value = ''
+  }
+}
+
 function handleFileChange(event: Event) {
   const input = event.target as HTMLInputElement
-  selectedFile.value = input.files?.[0] ?? null
-  message.value = ''
+  selectUploadFile(input.files?.[0] ?? null)
 }
 
 function handleDrop(event: DragEvent) {
   isDragging.value = false
-  selectedFile.value = event.dataTransfer?.files?.[0] ?? null
-  message.value = ''
+  selectUploadFile(event.dataTransfer?.files?.[0] ?? null)
 }
 
 async function handleDownloadTemplate() {
@@ -411,6 +446,11 @@ async function handleDownloadTemplate() {
 async function handlePreview() {
   if (!selectedFile.value) {
     setMessage('error', '请先选择 .xlsx 文件')
+    return
+  }
+  const validationMessage = validateSelectedFile(selectedFile.value)
+  if (validationMessage) {
+    setMessage('error', validationMessage)
     return
   }
   try {
@@ -808,7 +848,7 @@ async function handleLogout() {
               >
                 <input type="file" accept=".xlsx" @change="handleFileChange" />
                 <strong>{{ selectedFileLabel }}</strong>
-                <span>.xlsx / 三张业务工作表 / 原始字段无损保留</span>
+                <span>.xlsx / 最大 50MB / 四张业务工作表 / 原始字段无损保留</span>
               </label>
               <button type="button" class="primary-action" :disabled="isUploading" @click="handlePreview">
                 {{ isUploading ? '正在解析' : '开始校验' }}
@@ -876,12 +916,12 @@ async function handleLogout() {
               <span>上传要求</span>
               <h3>文件必须匹配 WBE 汇总表格式。</h3>
               <p>
-                仅支持 .xlsx 文件；必须同时包含“数据表”“药物疾病ICD11映射”“文献基础信息”；各表字段需与模板完全一致。
+                仅支持不超过 50MB 的非空 .xlsx 文件；必须同时包含“数据表”“药物疾病ICD11映射”“文献基础信息”“点位关联表”；各表字段需与模板完全一致。
                 普通用户开放上传后，校验通过的批次会进入待审核队列。
               </p>
               <div class="template-actions">
                 <button type="button" @click="handleDownloadTemplate">下载 Excel 模板</button>
-                <small>模板包含三张业务工作表，并附字段说明与上传说明。</small>
+                <small>模板包含四张业务工作表，并附字段说明与上传说明。</small>
               </div>
             </div>
             <div class="requirements-grid">

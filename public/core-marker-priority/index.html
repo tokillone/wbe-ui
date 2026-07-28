@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>核心标记物优先级识别</title>
+  <script src="_assets/core-marker-priority/echarts.min.js"></script>
+  <style>
+    :root{
+      --bg:#f2f5f7;--panel:#fff;--line:#d7dee6;--line-strong:#aeb9c6;
+      --text:#17212b;--muted:#667382;--nav:#20262d;--blue:#2566d4;
+      --blue-soft:#eaf1ff;--orange:#e48121;--red:#bd3e35;--green:#16845b;
+      --literature:#155f9d;--space:#3d7fb4;--year:#74a9ca;--cf:#16845b;--gs:#59a482;
+      --tier-high:#2566d4;--tier-medium:#e48121;--tier-low:#8a96a3;--tier-none:#d7dee6;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:"Microsoft YaHei","PingFang SC",Arial,sans-serif;letter-spacing:0}
+    button,input,select{font:inherit}button{cursor:pointer}
+    .topbar{background:var(--nav);color:#fff;border-bottom:3px solid var(--blue)}
+    .topbar-inner{max-width:1920px;margin:auto;padding:15px 24px 13px;display:flex;align-items:flex-end;justify-content:space-between;gap:20px}
+    h1{margin:0;font-size:23px;line-height:1.25}.subtitle{margin-top:5px;color:#cbd4dd;font-size:11px}
+    .meta{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:7px 14px;color:#d5dce4;font-size:10px}.meta b{color:#fff}
+    .shell{max-width:1920px;margin:auto;padding:13px 24px 30px}.panel{min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:6px}
+    .btn{height:36px;border:1px solid var(--line-strong);border-radius:4px;background:#fff;color:var(--text);padding:0 12px;font-weight:650;white-space:nowrap}
+    .btn:hover{background:#f5f8fb}.btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}.btn.dark{background:transparent;border-color:#7e8996;color:#fff}
+    .filters{overflow:hidden}.filter-toolbar{padding:11px;display:grid;grid-template-columns:minmax(260px,1fr) auto;gap:8px;align-items:end}
+    .cascade-row{padding:10px 11px 11px;border-top:1px solid #e6ebf0;background:#f8fafc;display:grid;grid-template-columns:auto repeat(4,minmax(150px,1fr));gap:8px;align-items:end}
+    .cascade-title{align-self:center;padding:17px 5px 0 1px;color:#394551;font-size:11px;font-weight:780;white-space:nowrap}
+    .field{min-width:0}.field label{display:block;margin-bottom:4px;color:var(--muted);font-size:10px;font-weight:750}.field input,.field select{width:100%;height:36px;border:1px solid var(--line-strong);border-radius:4px;background:#fff;padding:0 9px;outline:none;color:var(--text)}
+    .field input:focus,.field select:focus{border-color:var(--blue);box-shadow:0 0 0 2px rgba(37,102,212,.12)}.field select:disabled{background:#f2f4f6;color:#929ca7}
+    .search-box{position:relative}.search-suggestions{position:absolute;z-index:30;left:0;right:0;top:calc(100% + 4px);display:none;overflow:hidden;border:1px solid #b9c5d1;border-radius:5px;background:#fff;box-shadow:0 14px 32px rgba(20,35,52,.16)}.search-suggestions.open{display:block}.suggestion{width:100%;min-height:48px;padding:7px 10px;border:0;border-bottom:1px solid #edf0f3;background:#fff;text-align:left;color:var(--text)}.suggestion:last-child{border-bottom:0}.suggestion:hover,.suggestion.active{background:#eef4ff}.suggestion-main{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:750}.suggestion-main mark{padding:0;background:#ffe7a8;color:inherit}.suggestion-match{margin-left:auto;flex:none;color:#2566d4;font-size:9px;font-weight:650}.suggestion-sub{margin-top:3px;overflow:hidden;color:var(--muted);font-size:9px;white-space:nowrap;text-overflow:ellipsis}.suggestion-empty{padding:12px;color:var(--muted);font-size:10px;line-height:1.55}
+    .scope-wrap{display:flex;align-items:center;justify-content:flex-end;gap:8px}.scope-wrap label{color:var(--muted);font-size:10px;font-weight:750;white-space:nowrap}.segmented{display:inline-flex;height:34px;border:1px solid var(--line-strong);border-radius:4px;overflow:hidden;background:#fff}
+    .segmented button{min-width:116px;border:0;border-right:1px solid var(--line-strong);background:#fff;padding:0 8px;color:#394551;font-size:10px}.segmented button:last-child{border-right:0}.segmented button.active{background:var(--blue-soft);color:var(--blue);font-weight:780}.segmented button[hidden]{display:none}.segmented button:not([hidden]):last-of-type{border-right:0}
+    .filter-summary{padding:8px 11px;border-top:1px solid #e6ebf0;display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:10px;line-height:1.5}.filter-summary b{color:var(--text)}
+    .kpis{margin-top:10px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:#fff;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+    .kpi{padding:12px 14px;border-right:1px solid var(--line);min-width:0}.kpi:last-child{border-right:0}.kpi-label{font-size:11px;color:var(--muted);font-weight:650}.kpi-value{margin-top:3px;font-size:26px;font-weight:780;line-height:1.1;font-variant-numeric:tabular-nums}.kpi-note{margin-top:4px;color:var(--muted);font-size:9px;line-height:1.45}
+    .layout{margin-top:11px;display:grid;grid-template-columns:minmax(0,1.78fr) minmax(350px,.66fr);gap:11px;align-items:start}.layout>*{min-width:0}
+    .section-head{min-height:49px;padding:10px 13px 8px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}.section-title{font-size:14px;font-weight:780}.section-note{margin-top:2px;color:var(--muted);font-size:10px;line-height:1.45}.head-actions{display:flex;gap:7px;align-items:center}.ranking-tools{display:grid;justify-items:end;gap:7px;min-width:0}.break-summary{display:flex;justify-content:flex-end;gap:5px;flex-wrap:wrap}.break-chip,.tier-badge{display:inline-flex;align-items:center;min-height:22px;padding:2px 7px;border-radius:3px;background:#eef2f6;color:#4c5967;font-size:9px;font-weight:750;white-space:nowrap}.break-chip.high,.tier-badge.high{background:#eaf1ff;color:var(--tier-high)}.break-chip.medium,.tier-badge.medium{background:#fff1e3;color:#a95509}.break-chip.low,.tier-badge.low{background:#edf0f3;color:#5d6975}.break-chip.review{background:#fff8ea;color:#875b17}
+    .legend{display:flex;gap:9px;flex-wrap:wrap;color:var(--muted);font-size:10px}.legend span:before{content:"";display:inline-block;width:8px;height:8px;margin-right:4px;border-radius:50%;background:var(--dot)}
+    .chart{width:100%;min-width:0;max-width:100%;height:535px;overflow:hidden;contain:inline-size}.chart.density,.chart.groups{height:360px}.chart.compare{height:320px}
+    .selected{position:sticky;top:11px;overflow:hidden}.selected-body{padding:14px}.selected-name{font-size:19px;font-weight:780;line-height:1.35;overflow-wrap:anywhere}.selected-cat{margin-top:4px;color:var(--muted);font-size:11px;line-height:1.45}.scope-badge{display:inline-flex;align-items:center;min-height:24px;padding:2px 7px;border:1px solid var(--blue);border-radius:3px;color:var(--blue);font-size:10px;font-weight:750;white-space:nowrap}
+    .score-summary{margin:13px 0;display:grid;grid-template-columns:1.15fr 1fr 1fr 1.15fr;border:1px solid var(--line)}.score-summary>div{padding:9px;border-right:1px solid var(--line);min-width:0}.score-summary>div:last-child{border-right:0}.score-summary strong{display:block;font-size:24px;line-height:1.1;font-variant-numeric:tabular-nums}.score-summary strong.tier-text{font-size:13px;line-height:1.35;padding-top:2px}.score-summary span{display:block;margin-top:3px;color:var(--muted);font-size:9px}
+    .segments{height:18px;display:flex;overflow:hidden;border:1px solid #cad1d9;background:#edf1f5;border-radius:3px}.segment{height:100%;min-width:0;display:grid;place-items:center;color:#fff;font-size:8px;font-weight:750}.segment.rest{background:#edf1f5;color:transparent}
+    .component-grid{margin-top:11px;display:grid;grid-template-columns:1fr auto;border-top:1px solid var(--line)}.component-grid>div{padding:7px 0;border-bottom:1px solid #e9edf1;font-size:11px}.component-grid .num{text-align:right;font-weight:750;font-variant-numeric:tabular-nums}
+    .metric-grid{margin-top:12px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--line)}.metric{padding:8px;border-right:1px solid var(--line);min-width:0}.metric:last-child{border-right:0}.metric b{display:block;font-size:17px}.metric span{display:block;margin-top:2px;color:var(--muted);font-size:8px}
+    .warning{margin-top:11px;padding:9px 10px;background:#fff2f0;border-left:4px solid var(--red);color:#7f2923;font-size:10px;line-height:1.55}.shortfall{margin-top:10px;color:var(--red);font-size:11px}.actions{margin-top:11px;display:flex;gap:7px}.actions .btn{flex:1}
+    .analytics{margin-top:11px;display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:11px}.analytics>*{min-width:0;overflow:hidden}
+    .compare-panel,.table-panel{margin-top:11px;overflow:hidden;min-width:0;max-width:100%}
+    .table-panel.collapsed .section-head{border-bottom:0}.table-panel.collapsed .table-wrap{display:none}.table-wrap{width:100%;max-width:100%;min-width:0;max-height:660px;overflow:auto}
+    table{width:100%;min-width:1680px;border-collapse:collapse;font-size:11px}th{position:sticky;top:0;z-index:2;background:#edf1f5;color:#394551;padding:8px 7px;border-bottom:1px solid var(--line-strong);text-align:left;white-space:nowrap}td{padding:7px;border-bottom:1px solid #e7ebef;vertical-align:middle}tbody tr:hover{background:#f5f8fc}tbody tr.active{background:#eaf1ff}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}.marker-cell{max-width:230px}.marker-cell b,.marker-cell span{display:block;overflow-wrap:anywhere}.marker-cell span{margin-top:2px;color:var(--muted);font-size:9px}.mini{border:0;background:transparent;color:var(--blue);font-weight:750;padding:3px}.table-filter-select{display:block;width:100%;height:28px;border:1px solid var(--line-strong);border-radius:3px;background:#fff;padding:0 24px 0 6px;font-size:10px}
+    .drawer-backdrop{display:none;position:fixed;inset:0;z-index:50;background:rgba(18,24,31,.46)}.drawer-backdrop.open{display:block}.drawer{display:none;position:fixed;z-index:51;top:0;right:0;width:min(720px,94vw);height:100vh;background:#fff;border-left:1px solid var(--line);flex-direction:column}.drawer.open{display:flex}.drawer-head{padding:14px 17px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px}.drawer-title{font-size:18px;font-weight:780;overflow-wrap:anywhere}.icon-btn{width:34px;height:34px;border:1px solid var(--line);border-radius:4px;background:#fff;font-size:19px}.tabs{display:flex;overflow-x:auto;border-bottom:1px solid var(--line);padding:0 17px}.tab{border:0;border-bottom:3px solid transparent;background:transparent;padding:11px 12px 9px;color:var(--muted);font-weight:650;white-space:nowrap}.tab.active{color:var(--blue);border-bottom-color:var(--blue)}.drawer-body{flex:1;overflow:auto;padding:17px}
+    .detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.detail{padding:9px;border:1px solid var(--line);border-radius:4px;min-width:0}.detail.wide{grid-column:1/-1}.detail label{display:block;color:var(--muted);font-size:9px;font-weight:750}.detail div{margin-top:4px;line-height:1.55;overflow-wrap:anywhere}.notice{margin-bottom:12px;padding:10px 11px;border-left:4px solid var(--orange);background:#fff8ea;color:#694917;font-size:11px;line-height:1.6}.notice.red{border-left-color:var(--red);background:#fff2f0;color:#7a2d27}.rule-title{margin:16px 0 7px;font-size:13px;font-weight:780}.rule-table{min-width:0;border:1px solid var(--line)}.rule-table th{position:static}.rule-table th,.rule-table td{padding:8px}.empty{padding:38px 12px;text-align:center;color:var(--muted);font-size:12px}
+    .page-state{min-height:420px;margin:18px 24px;padding:42px 18px;display:grid;place-items:center;text-align:center}.page-state[hidden]{display:none}.page-state-card{max-width:520px}.page-state-card strong{display:block;font-size:18px}.page-state-card span{display:block;margin-top:8px;color:var(--muted);font-size:11px;line-height:1.7}.page-state-card .btn{margin-top:16px}.chart-tip{min-width:180px;max-width:310px;color:#26313c}.chart-tip-title{font-size:12px;font-weight:780;line-height:1.45}.chart-tip-sub{margin:2px 0 7px;color:#6b7885;font-size:9px;line-height:1.45}.chart-tip-row{display:flex;justify-content:space-between;gap:16px;padding:2px 0;font-size:10px}.chart-tip-row i{width:7px;height:7px;margin:4px 5px 0 0;display:inline-block;border-radius:50%;vertical-align:top}.chart-tip-row b{font-variant-numeric:tabular-nums}.chart-tip-hint{margin-top:7px;padding-top:6px;border-top:1px solid #e4e9ee;color:#71808e;font-size:9px}
+    @media(max-width:1220px){.filter-toolbar{grid-template-columns:minmax(240px,1fr) auto}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.kpi:nth-child(3n){border-right:0}.layout{grid-template-columns:1fr}.selected{position:static}.analytics{grid-template-columns:1fr}}
+    @media(max-width:900px){.cascade-row{grid-template-columns:repeat(2,minmax(0,1fr))}.cascade-title{grid-column:1/-1;padding:0}}
+    @media(max-width:680px){.topbar-inner{display:block;padding:13px 11px}.meta{margin-top:10px;justify-content:flex-start}.shell{padding:9px 9px 22px}.filter-toolbar{grid-template-columns:1fr}.segmented{width:100%}.segmented button{min-width:0;flex:1;padding:0 5px}.cascade-row{grid-template-columns:1fr}.filter-summary{flex-direction:column;gap:3px}.kpis{grid-template-columns:1fr 1fr}.kpi{border-bottom:1px solid var(--line)}.chart{height:500px}.chart.density,.chart.groups{height:340px}.section-head{align-items:flex-start}.ranking-head{display:block}.ranking-tools{margin-top:9px;justify-items:stretch}.ranking-tools .scope-wrap{display:block}.ranking-tools .scope-wrap label{display:block;margin-bottom:4px}.ranking-tools .legend{margin-top:1px}.score-summary{grid-template-columns:1fr}.score-summary>div{border-right:0;border-bottom:1px solid var(--line)}.detail-grid{grid-template-columns:1fr}.detail.wide{grid-column:auto}.table-panel,.table-wrap{max-width:calc(100vw - 18px)}}
+  </style>
+</head>
+<body>
+  <section class="page-state" id="pageState"><div class="page-state-card"><strong id="pageStateTitle">正在加载核心标记物数据</strong><span id="pageStateDetail">正在连接后端 API，请稍候。</span><button class="btn primary" id="pageStateRetry" type="button" hidden>重新加载</button></div></section>
+  <header class="topbar"><div class="topbar-inner">
+    <div><h1>核心标记物优先级识别</h1><div class="subtitle">目标类别、目标物质类别、目标物质子类与目标物质细类四级独立组内评价</div></div>
+    <div class="meta"><span>版本 <b id="metaVersion"></b></span><span>数据 <b id="metaRows"></b></span><span>更新 <b id="metaTime"></b></span><span>校验 <b id="metaHash"></b></span><button class="btn dark" id="ruleButton">计算规则</button></div>
+  </div></header>
+  <main class="shell" id="application" hidden>
+    <section class="panel filters">
+      <div class="filter-toolbar">
+        <div class="field search-box"><label>搜索标记物、药物、中文名或 CAS</label><input id="searchInput" type="search" autocomplete="off" aria-autocomplete="list" aria-controls="searchSuggestions" aria-expanded="false" placeholder="例如 Metformin、二甲双胍、EDDP"><div class="search-suggestions" id="searchSuggestions" role="listbox"></div></div>
+        <button class="btn" id="resetButton">重置筛选</button>
+      </div>
+      <div class="cascade-row">
+        <div class="cascade-title">分类定位</div>
+        <div class="field"><label>目标类别</label><select id="categoryFilter"></select></div>
+        <div class="field"><label>目标物质类别</label><select id="typeFilter"></select></div>
+        <div class="field"><label>目标物质子类</label><select id="subtypeFilter"></select></div>
+        <div class="field"><label>目标物质细类</label><select id="fineFilter"></select></div>
+      </div>
+      <div class="filter-summary"><span id="filterPath"></span><span id="filterCount"></span></div>
+    </section>
+    <section class="kpis">
+      <div class="kpi"><div class="kpi-label">当前结果</div><div class="kpi-value" id="kpiTotal">0</div><div class="kpi-note" id="kpiTotalNote"></div></div>
+      <div class="kpi"><div class="kpi-label">当前评分组</div><div class="kpi-value" id="kpiGroups">0</div><div class="kpi-note" id="kpiGroupsNote"></div></div>
+      <div class="kpi"><div class="kpi-label">参数证据完整</div><div class="kpi-value" id="kpiComplete">0</div><div class="kpi-note">校准与管道衰减证据均具备</div></div>
+    </section>
+
+    <section class="layout">
+      <section class="panel">
+        <div class="section-head ranking-head">
+          <div><div class="section-title" id="rankingTitle">组内得分排名</div><div class="section-note" id="rankingNote"></div></div>
+          <div class="ranking-tools">
+             <div class="scope-wrap"><label>评分层级</label><div class="segmented"><button class="active" data-scope="category">目标类别内评价</button><button data-scope="targetType">目标物质类别内评价</button><button data-scope="targetSubtype" hidden>目标物质子类内评价</button><button data-scope="targetFine" hidden>目标物质细类内评价</button></div></div>
+             <div class="break-summary" id="breakSummary"></div>
+            <div class="legend"><span style="--dot:var(--literature)">文献</span><span style="--dot:var(--space)">空间</span><span style="--dot:var(--year)">年份</span><span style="--dot:var(--cf)">校准系数</span><span style="--dot:var(--gs)">管道衰减系数</span></div>
+          </div>
+        </div>
+        <div id="rankingChart" class="chart"></div>
+      </section>
+      <aside class="panel selected"><div class="section-head"><div><div class="section-title">当前标记物</div><div class="section-note">当前评分层级的整数展示结果</div></div><span class="scope-badge" id="selectedScope"></span></div><div class="selected-body" id="selectedBody"></div></aside>
+    </section>
+
+    <section class="analytics">
+      <section class="panel"><div class="section-head"><div><div class="section-title">评分组合密度</div><div class="section-note">关注证据得分与参数证据完整度的组合分布</div></div><button class="btn" id="clearScoreCell">清除组合筛选</button></div><div id="densityChart" class="chart density"></div></section>
+      <section class="panel"><div class="section-head"><div><div class="section-title" id="groupTitle">各目标类别的相对层级构成</div><div class="section-note" id="groupNote"></div></div></div><div id="groupChart" class="chart groups"></div></section>
+    </section>
+
+    <section class="panel compare-panel" id="comparePanel" hidden><div class="section-head"><div><div class="section-title">标记物评分构成比较</div><div class="section-note">最多选择5项，按当前评分层级比较</div></div><button class="btn" id="clearCompare">清空比较</button></div><div id="compareChart" class="chart compare"></div></section>
+
+    <section class="panel table-panel collapsed" id="tablePanel"><div class="section-head"><div><div class="section-title">评分排名明细</div><div class="section-note" id="tableNote"></div></div><div class="head-actions"><button class="btn" id="toggleRows" hidden>显示全部</button><button class="btn" id="tableCollapseButton" aria-expanded="false">展开明细</button></div></div><div class="table-wrap"><table><thead><tr>
+      <th>比较</th><th class="num">当前排名</th><th>biomarker</th><th>目标类别</th><th>目标物质类别</th><th>目标物质子类</th><th>目标物质细类</th><th class="num">组内样本量</th><th>组内层级</th><th class="num">总分</th><th class="num">文献</th><th class="num">空间</th><th class="num">年份</th><th class="num">校准系数</th><th class="num">管道衰减系数</th><th class="num">国家/点位</th><th>样本提示</th><th>证据短板</th><th>操作</th>
+    </tr></thead><tbody id="resultBody"></tbody></table></div></section>
+  </main>
+
+  <div class="drawer-backdrop" id="drawerBackdrop"></div><aside class="drawer" id="drawer" aria-hidden="true"><div class="drawer-head"><div class="drawer-title" id="drawerTitle"></div><button class="icon-btn" id="drawerClose" title="关闭">×</button></div><div class="tabs" id="drawerTabs"></div><div class="drawer-body" id="drawerBody"></div></aside>
+
+  <script>
+    let DATA=[],SUMMARY={};
+    const $=id=>document.getElementById(id);
+    const esc=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+    const show=value=>value===null||value===undefined||value===""?"—":esc(value);
+    const CHART_TOOLTIP={backgroundColor:"#fff",borderColor:"#cfd8e1",borderWidth:1,padding:[9,10],extraCssText:"box-shadow:0 10px 28px rgba(20,35,52,.16);border-radius:5px",textStyle:{color:"#26313c",fontSize:10},confine:true};
+    function chartTip({title,subtitle="",rows=[],hint=""}){return `<div class="chart-tip"><div class="chart-tip-title">${esc(title)}</div>${subtitle?`<div class="chart-tip-sub">${esc(subtitle)}</div>`:""}${rows.map(row=>`<div class="chart-tip-row"><span>${row.color?`<i style="background:${row.color}"></i>`:""}${esc(row.label)}</span><b>${esc(row.value)}</b></div>`).join("")}${hint?`<div class="chart-tip-hint">${esc(hint)}</div>`:""}</div>`}
+    const SCOPE_LABEL={category:"目标类别内评价",targetType:"目标物质类别内评价",targetSubtype:"目标物质子类内评价",targetFine:"目标物质细类内评价"};
+    const COMPONENTS=[
+      {key:"literatureScore",name:"文献",max:30,color:"#155f9d"},
+      {key:"spaceScore",name:"空间",max:30,color:"#3d7fb4"},
+      {key:"yearScore",name:"年份",max:20,color:"#74a9ca"},
+      {key:"cfScore",name:"校准系数",max:10,color:"#16845b"},
+      {key:"gsScore",name:"管道衰减系数",max:10,color:"#59a482"}
+    ];
+    const state={scope:"category",filtered:[],selectedId:null,compare:new Set(),showAll:false,tableExpanded:false,scoreCell:null,drawerMode:"marker",drawerTab:"overview"};
+    const byId=new Map(),loadedDetailIds=new Set(),detailPromises=new Map();
+    let rankingChart=null,densityChart=null,groupChart=null,compareChart=null,suggestionIndex=-1;
+    const REQUEST_TIMEOUT_MS=12000;
+    const REQUIRED_SCORE_SCOPES=["category","targetType","targetSubtype","targetFine"];
+    class RequestTimeoutError extends Error{constructor(){super("请求超时");this.name="RequestTimeoutError"}}
+
+    function markerName(d){return d.name||d.biomarker||"未命名标记物"}
+    function shortageLabel(value){return String(value||"").replaceAll("CF","校准系数").replaceAll("GS","管道衰减系数")}
+    function score(d,scope=state.scope){return d.scoreByScope?.[scope]||{available:false,sampleSize:0,literatureScore:null,spaceScore:null,yearScore:null,totalScore:null,rank:null}}
+    function componentValue(d,c){const s=score(d);if(s.available===false)return 0;return c.key==="cfScore"||c.key==="gsScore"?d[c.key]||0:s[c.key]||0}
+    function attention(d){const s=score(d);return (s.literatureScore||0)+(s.spaceScore||0)+(s.yearScore||0)}
+    function groupKey(d,scope=state.scope){if(scope==="category")return d.category;if(scope==="targetType")return `${d.category}\u0001${d.targetType}`;if(scope==="targetSubtype")return `${d.category}\u0001${d.targetType}\u0001${d.targetSubtype}`;return `${d.category}\u0001${d.targetType}\u0001${d.targetSubtype}\u0001${d.targetFine}`}
+    function groupLabel(d,scope=state.scope){return scope==="category"?d.category:scope==="targetType"?d.targetType:scope==="targetSubtype"?d.targetSubtype:d.targetFine}
+    function scopeStatus(d,scope=state.scope){return scope==="targetFine"?d.fineStatus:scope==="targetSubtype"?d.subtypeStatus:""}
+    function scopeNote(d,scope=state.scope){return scope==="targetFine"?d.fineNote:scope==="targetSubtype"?d.subtypeNote:scope==="targetType"?d.sampleNote:""}
+    function scopeLevel(scope=state.scope){return scope==="targetFine"?"四级":scope==="targetSubtype"?"三级":scope==="targetType"?"二级":"一级"}
+    function tierMeta(d,scope=state.scope){return SUMMARY.tierGroups?.[scope]?.[groupKey(d,scope)]||{status:"仅排名",thresholds:[],stability:"不适用",sampleSize:score(d,scope).sampleSize}}
+    function tierClass(s){return s?.tierCode||"none"}
+    function tierShort(s){return s?.tierCode==="high"?"高":s?.tierCode==="medium"?"中":s?.tierCode==="low"?"低":"仅排名"}
+    function formatBreak(value){return Number(value).toFixed(1)}
+    function breakRange(meta){return meta?.thresholds?.length===2?`${formatBreak(meta.thresholds[0])} / ${formatBreak(meta.thresholds[1])}`:"—"}
+    function breakCi(meta){const ci=meta?.bootstrap?.ci95;return ci?.length===2?`${formatBreak(ci[0][0])}–${formatBreak(ci[0][1])}；${formatBreak(ci[1][0])}–${formatBreak(ci[1][1])}`:"—"}
+    function sortRows(a,b){const sa=score(a),sb=score(b);return (sa.rank??9999)-(sb.rank??9999)||(Number(sb.totalScore??-1)-Number(sa.totalScore??-1))||markerName(a).localeCompare(markerName(b),"zh-CN")}
+    function unique(field,rows=DATA){return [...new Set(rows.map(d=>d[field]).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"zh-CN"))}
+    function fillSelect(id,values,placeholder,labeler=value=>value){const el=$(id),old=el.value;el.innerHTML=`<option value="">${esc(placeholder)}</option>`+values.map(value=>`<option value="${esc(value)}">${esc(labeler(value))}</option>`).join("");if(values.includes(old))el.value=old}
+    function selectedLabel(id){return $(id).selectedOptions[0]?.textContent||""}
+    async function requestData(url,timeoutMs=REQUEST_TIMEOUT_MS){const controller=new AbortController(),timer=window.setTimeout(()=>controller.abort(),timeoutMs);let response;try{response=await fetch(url,{headers:{Accept:"application/json"},cache:"no-store",signal:controller.signal})}catch(error){if(controller.signal.aborted)throw new RequestTimeoutError();throw new Error("无法连接核心标记物数据服务")}finally{window.clearTimeout(timer)}let payload;try{payload=await response.json()}catch{throw new Error("后端返回了无法解析的数据")}if(!response.ok||payload?.code!==200)throw new Error(payload?.message||`数据请求失败（${response.status}）`);return payload.data}
+    function validateOverviewPayload(payload){
+      const rows=Array.isArray(payload?.rows)?payload.rows:[],summary=payload?.summary||{};
+      if(!rows.length)return{rows,summary};
+      const invalid=rows.filter(row=>!row?.id||!row?.scoreByScope||REQUIRED_SCORE_SCOPES.some(scope=>!row.scoreByScope[scope]));
+      if(invalid.length){const version=summary.scoreVersion||"未知版本";throw new Error(`数据库中的核心标记物评分数据版本 ${version} 不兼容当前四级评价界面，请重启后端以执行托管数据迁移`)}
+      if(summary.rowCount&&Number(summary.rowCount)!==rows.length)throw new Error(`数据库元数据记录数 ${summary.rowCount} 与实际返回 ${rows.length} 不一致`);
+      return{rows,summary}
+    }
+    async function loadOverview(){const payload=await requestData("/api/core-marker-priority/overview"),validated=validateOverviewPayload(payload);DATA=validated.rows;SUMMARY=validated.summary;byId.clear();DATA.forEach(row=>byId.set(String(row.id),row))}
+    function ensureDetails(id){const key=String(id);if(loadedDetailIds.has(key))return Promise.resolve();if(detailPromises.has(key))return detailPromises.get(key);const promise=requestData(`/api/core-marker-priority/details/${encodeURIComponent(key)}`).then(detail=>{const row=byId.get(key);if(row&&detail)Object.assign(row,detail);loadedDetailIds.add(key)}).finally(()=>detailPromises.delete(key));detailPromises.set(key,promise);return promise}
+    function notifyParent(message){if(window.parent!==window)window.parent.postMessage(message,window.location.origin)}
+    function showPageState(title,detail,retry=false){$("pageStateTitle").textContent=title;$("pageStateDetail").textContent=detail;$("pageStateRetry").hidden=!retry;$("pageState").hidden=false;$("application").hidden=true}
+    function showApplication(){$("pageState").hidden=true;$("application").hidden=false;requestAnimationFrame(()=>[rankingChart,densityChart,groupChart,compareChart].filter(Boolean).forEach(chart=>chart.resize()))}
+
+    function initialize(){
+      $("metaVersion").textContent=SUMMARY.scoreVersion||"—";$("metaRows").textContent=`${SUMMARY.rowCount||DATA.length}项`;$("metaTime").textContent=SUMMARY.generatedAt||"—";$("metaHash").textContent=SUMMARY.sourceHash||"—";
+      fillSelect("categoryFilter",unique("category"),"全部目标类别");
+      refreshHierarchy();
+      $("searchInput").addEventListener("input",()=>{renderSearchSuggestions();applyFilters()});
+      $("searchInput").addEventListener("focus",renderSearchSuggestions);
+      $("searchInput").addEventListener("keydown",handleSuggestionKeys);
+      document.addEventListener("pointerdown",event=>{if(!event.target.closest(".search-box"))closeSearchSuggestions()});
+      $("categoryFilter").addEventListener("change",()=>{refreshHierarchy();if(state.scope==="targetSubtype"||state.scope==="targetFine")state.scope="category";syncScopeButtons();applyFilters()});
+      $("typeFilter").addEventListener("change",()=>{refreshHierarchy();state.scope=$("typeFilter").value?"targetType":"category";syncScopeButtons();applyFilters()});
+      $("subtypeFilter").addEventListener("change",()=>{refreshHierarchy();state.scope=$("subtypeFilter").value?"targetSubtype":($("typeFilter").value?"targetType":"category");syncScopeButtons();applyFilters()});
+      $("fineFilter").addEventListener("change",()=>{refreshHierarchy();state.scope=$("fineFilter").value?"targetFine":($("subtypeFilter").value?"targetSubtype":($("typeFilter").value?"targetType":"category"));syncScopeButtons();applyFilters()});
+      document.querySelectorAll("[data-scope]").forEach(button=>button.addEventListener("click",()=>setScope(button.dataset.scope)));
+      $("resetButton").addEventListener("click",()=>{["searchInput","categoryFilter","typeFilter","subtypeFilter","fineFilter"].forEach(id=>$(id).value="");closeSearchSuggestions();state.scoreCell=null;state.scope="category";syncScopeButtons();refreshHierarchy();applyFilters()});
+      $("clearScoreCell").addEventListener("click",()=>{state.scoreCell=null;applyFilters()});
+      $("clearCompare").addEventListener("click",()=>{state.compare.clear();renderCompare();renderSelected();renderTable()});
+      $("tableCollapseButton").addEventListener("click",()=>{state.tableExpanded=!state.tableExpanded;renderTable()});
+      $("toggleRows").addEventListener("click",()=>{state.showAll=!state.showAll;renderTable()});
+      $("ruleButton").addEventListener("click",openRules);$("drawerClose").addEventListener("click",closeDrawer);$("drawerBackdrop").addEventListener("click",closeDrawer);
+      window.addEventListener("resize",()=>[rankingChart,densityChart,groupChart,compareChart].filter(Boolean).forEach(chart=>chart.resize()));
+      applyFilters();
+    }
+
+    function normalizeSearch(value){return String(value||"").toLowerCase().replace(/[\s\-_,，。/()（）]+/g,"")}
+    function editDistance(left,right){const a=normalizeSearch(left),b=normalizeSearch(right);if(!a)return b.length;if(!b)return a.length;const row=Array.from({length:b.length+1},(_,index)=>index);for(let i=1;i<=a.length;i++){let previous=row[0];row[0]=i;for(let j=1;j<=b.length;j++){const current=row[j];row[j]=Math.min(row[j]+1,row[j-1]+1,previous+(a[i-1]===b[j-1]?0:1));previous=current}}return row[b.length]}
+    function searchMatch(d,rawQuery){
+      const query=normalizeSearch(rawQuery),fields=[["中文名",d.name],["英文名",d.biomarker],["药物",d.drug],["CAS",d.cas]];
+      let best={score:-1,label:""};
+      fields.forEach(([label,value])=>{const normalized=normalizeSearch(value);if(!normalized)return;let valueScore=-1;if(normalized===query)valueScore=140;else if(normalized.startsWith(query))valueScore=115;else if(normalized.includes(query))valueScore=85;else if(query.length>=3){const distance=editDistance(query,normalized.slice(0,Math.max(query.length,Math.min(normalized.length,query.length+2))));if(distance<=2)valueScore=58-distance*8}if(valueScore>best.score)best={score:valueScore,label}});
+      if(best.score<0&&normalizeSearch(d.searchText).includes(query))best={score:35,label:"关联字段"};
+      const contextMatch=(!$("categoryFilter").value||d.category===$("categoryFilter").value)&&(!$("typeFilter").value||d.targetType===$("typeFilter").value)&&(!$("subtypeFilter").value||d.targetSubtype===$("subtypeFilter").value)&&(!$("fineFilter").value||d.targetFine===$("fineFilter").value);
+      if(contextMatch&&best.score>=0)best.score+=12;
+      return best
+    }
+    function suggestionRows(){
+      const query=$("searchInput").value.trim();
+      if(!query)return DATA.slice().sort((a,b)=>(score(a,"category").rank??9999)-(score(b,"category").rank??9999)||markerName(a).localeCompare(markerName(b),"zh-CN")).slice(0,6).map(d=>({d,match:{label:"类别内优先",score:1}}));
+      return DATA.map(d=>({d,match:searchMatch(d,query)})).filter(item=>item.match.score>=0).sort((a,b)=>b.match.score-a.match.score||(score(a.d,"category").rank??9999)-(score(b.d,"category").rank??9999)||markerName(a.d).localeCompare(markerName(b.d),"zh-CN")).slice(0,8)
+    }
+    function highlightSuggestion(value,query){const safe=esc(value);if(!query)return safe;const escaped=String(query).replace(/[.*+?^${}()|[\]\\]/g,"\\$&");return safe.replace(new RegExp(`(${escaped})`,"ig"),"<mark>$1</mark>")}
+    function renderSearchSuggestions(){
+      const box=$("searchSuggestions"),query=$("searchInput").value.trim(),rows=suggestionRows();suggestionIndex=-1;
+      if(!rows.length){box.innerHTML=`<div class="suggestion-empty">未找到直接匹配。可尝试中文名、英文 biomarker、药物名或完整 CAS；输入轻微拼写偏差时也会给出近似建议。</div>`}
+      else box.innerHTML=rows.map(({d,match})=>`<button class="suggestion" type="button" role="option" data-suggestion-id="${d.id}"><span class="suggestion-main"><span>${highlightSuggestion(markerName(d),query)}</span><span class="suggestion-match">${esc(match.label)}</span></span><span class="suggestion-sub">${esc([d.biomarker!==markerName(d)?d.biomarker:"",d.drug,d.cas,d.targetFine].filter(Boolean).join(" · "))}</span></button>`).join("");
+      box.querySelectorAll("[data-suggestion-id]").forEach(button=>button.addEventListener("pointerdown",event=>{event.preventDefault();selectSuggestion(button.dataset.suggestionId)}));
+      box.classList.add("open");$("searchInput").setAttribute("aria-expanded","true")
+    }
+    function closeSearchSuggestions(){$("searchSuggestions").classList.remove("open");$("searchInput").setAttribute("aria-expanded","false");suggestionIndex=-1}
+    function selectSuggestion(id){const d=byId.get(String(id));if(!d)return;$("searchInput").value=d.biomarker||d.name||d.drug||d.cas;state.selectedId=String(id);closeSearchSuggestions();applyFilters()}
+    function handleSuggestionKeys(event){const buttons=[...$("searchSuggestions").querySelectorAll(".suggestion")];if(event.key==="Escape"){closeSearchSuggestions();return}if(!buttons.length||!["ArrowDown","ArrowUp","Enter"].includes(event.key))return;if(!$("searchSuggestions").classList.contains("open"))renderSearchSuggestions();event.preventDefault();if(event.key==="Enter"){if(suggestionIndex>=0)selectSuggestion(buttons[suggestionIndex].dataset.suggestionId);return}suggestionIndex=event.key==="ArrowDown"?(suggestionIndex+1)%buttons.length:(suggestionIndex-1+buttons.length)%buttons.length;buttons.forEach((button,index)=>button.classList.toggle("active",index===suggestionIndex));buttons[suggestionIndex].scrollIntoView({block:"nearest"})}
+
+    function refreshHierarchy(){
+      const cat=$("categoryFilter").value,type=$("typeFilter").value,sub=$("subtypeFilter").value,fine=$("fineFilter").value;
+      const catRows=DATA.filter(d=>!cat||d.category===cat);
+      fillSelect("typeFilter",unique("targetType",catRows),"全部目标物质类别");
+      if(type&&!catRows.some(d=>d.targetType===type))$("typeFilter").value="";
+      const typeValue=$("typeFilter").value;
+      const typeRows=catRows.filter(d=>!typeValue||d.targetType===typeValue);
+      fillSelect("subtypeFilter",unique("targetSubtype",typeRows),"全部目标物质子类");
+      if(sub&&!typeRows.some(d=>d.targetSubtype===sub))$("subtypeFilter").value="";
+      const subtype=$("subtypeFilter").value;
+      const subtypeRows=typeRows.filter(d=>!subtype||d.targetSubtype===subtype);
+      fillSelect("fineFilter",unique("targetFine",subtypeRows),"全部目标物质细类");
+      if(fine&&!subtypeRows.some(d=>d.targetFine===fine))$("fineFilter").value="";
+    }
+
+    function setScope(scope){
+      const button=document.querySelector(`[data-scope="${scope}"]`);
+      if(!SCOPE_LABEL[scope]||state.scope===scope||!button||button.hidden)return;
+      state.scope=scope;state.scoreCell=null;syncScopeButtons();applyFilters()
+    }
+    function scopeHasResults(scope,rows=state.filtered){
+      if(scope==="targetSubtype"&&!$("subtypeFilter").value)return false;
+      if(scope==="targetFine"&&!$("fineFilter").value)return false;
+      return rows.some(d=>score(d,scope).available!==false)
+    }
+    function availableScopes(rows=state.filtered){return["category","targetType","targetSubtype","targetFine"].filter(scope=>scopeHasResults(scope,rows))}
+    function preferredScope(scopes){
+      const order=$("fineFilter").value?["targetFine","targetSubtype","targetType","category"]:$("subtypeFilter").value?["targetSubtype","targetType","category"]:$("typeFilter").value?["targetType","category"]:["category","targetType"];
+      return order.find(scope=>scopes.includes(scope))||scopes[0]||"category"
+    }
+    function syncScopeButtons(){
+      const scopes=availableScopes();
+      if(!scopes.includes(state.scope))state.scope=preferredScope(scopes);
+      document.querySelectorAll("[data-scope]").forEach(button=>{button.hidden=!scopes.includes(button.dataset.scope);button.classList.toggle("active",!button.hidden&&button.dataset.scope===state.scope)})
+    }
+
+    function applyFilters(){
+      const q=$("searchInput").value.trim().toLowerCase(),cat=$("categoryFilter").value,type=$("typeFilter").value,sub=$("subtypeFilter").value,fine=$("fineFilter").value;
+      state.filtered=DATA.filter(d=>(!q||d.searchText.includes(q))&&(!cat||d.category===cat)&&(!type||d.targetType===type)&&(!sub||d.targetSubtype===sub)&&(!fine||d.targetFine===fine)&&(!state.scoreCell||(score(d).available!==false&&attention(d)===state.scoreCell.attention&&d.evidenceScore===state.scoreCell.evidence)));
+      syncScopeButtons();
+      state.filtered.sort(sortRows);
+      if(!state.filtered.some(d=>String(d.id)===String(state.selectedId)))state.selectedId=state.filtered[0]?String(state.filtered[0].id):null;
+      renderAll()
+    }
+
+    function renderAll(){syncScopeButtons();renderFilterSummary();renderKpis();renderRanking();renderSelected();renderDensity();renderGroups();renderCompare();renderTable()}
+    function renderFilterSummary(){const parts=["categoryFilter","typeFilter","subtypeFilter","fineFilter"].filter(id=>$(id).value).map(selectedLabel),extra=[];if($("searchInput").value.trim())extra.push(`搜索“${$("searchInput").value.trim()}”`);$("filterPath").innerHTML=`当前筛选：<b>${esc([...parts,...extra].join(" / ")||"全部核心标记物")}</b> · ${esc(SCOPE_LABEL[state.scope])}`;$("filterCount").innerHTML=`结果 <b>${state.filtered.length}</b> / ${SUMMARY.rowCount||DATA.length} 项`}
+    function renderKpis(){const groups=new Set(state.filtered.map(d=>groupKey(d)));$("kpiTotal").textContent=state.filtered.length;$("kpiTotalNote").textContent=`占全表 ${((state.filtered.length/(SUMMARY.rowCount||DATA.length))*100).toFixed(1)}%`;$("kpiGroups").textContent=groups.size;$("kpiGroupsNote").textContent=state.scope==="category"?"目标类别组":state.scope==="targetType"?"目标类别 × 目标物质类别组":state.scope==="targetSubtype"?"目标类别 × 目标物质类别 × 子类组":"目标类别 × 目标物质类别 × 子类 × 细类组";$("kpiComplete").textContent=state.filtered.filter(d=>d.evidenceScore===20).length}
+
+    function rankingRows(){
+      const cat=$("categoryFilter").value,type=$("typeFilter").value,sub=$("subtypeFilter").value,fine=$("fineFilter").value;
+      if(state.scope==="category"&&cat)return state.filtered.slice();
+      if(state.scope==="targetType"&&type)return state.filtered.slice();
+      if(state.scope==="targetSubtype"&&sub)return state.filtered.slice();
+      if(state.scope==="targetFine"&&fine)return state.filtered.slice();
+      const maxRank=state.scope==="targetType"&&!cat?1:3;
+      return state.filtered.filter(d=>score(d).available!==false&&score(d).rank<=maxRank).sort((a,b)=>groupLabel(a).localeCompare(groupLabel(b),"zh-CN")||sortRows(a,b))
+    }
+    function renderRanking(){
+      if(!rankingChart){rankingChart=echarts.init($("rankingChart"));rankingChart.on("click",p=>{if(p.data?.item){state.selectedId=String(p.data.item.id);renderSelected();renderTable()}})}
+      const rawRows=rankingRows(),rows=rawRows.filter(d=>score(d).available!==false),compact=window.innerWidth<=680;
+      const groupMode=!(state.scope==="category"&&$("categoryFilter").value)&&!(state.scope==="targetType"&&$("typeFilter").value)&&!(state.scope==="targetSubtype"&&$("subtypeFilter").value)&&!(state.scope==="targetFine"&&$("fineFilter").value);
+      const groupTitle=state.scope==="category"?"各目标类别前3名":state.scope==="targetType"?"各目标物质类别代表标记物":state.scope==="targetSubtype"?"各目标物质子类代表标记物":"各目标物质细类代表标记物";
+      $("rankingTitle").textContent=groupMode?groupTitle:`${groupLabel(rawRows[0]||{},state.scope)} · ${rows.length?"组内得分排名":"样本不足"}`;
+      $("rankingNote").textContent=groupMode?"各组独立计算，不比较组与组的绝对优劣":rows.length?`当前组 ${score(rows[0]).sampleSize} 项；排名依据为内部精确得分`:`当前组 ${rawRows[0]?score(rawRows[0]).sampleSize:0} 项；样本不足，不生成${scopeLevel()}得分和排名`;
+      const meta=rawRows[0]?tierMeta(rawRows[0]):null;
+      $("breakSummary").innerHTML=groupMode
+        ?`<span class="break-chip">各组独立断点</span>`
+        :meta?.thresholds?.length===2
+          ?`<span class="break-chip low">低 &lt; ${formatBreak(meta.thresholds[0])}</span><span class="break-chip medium">中 ${formatBreak(meta.thresholds[0])}–${formatBreak(meta.thresholds[1])}</span><span class="break-chip high">高 ≥ ${formatBreak(meta.thresholds[1])}</span><span class="break-chip review">${esc(meta.stability)}</span>`
+          :`<span class="break-chip">${esc(meta?.status||"仅排名")}</span>`;
+      if(rawRows.length&&!rows.length){rankingChart.setOption({series:[],xAxis:{show:false},yAxis:{show:false},graphic:[{type:"text",left:"center",top:"middle",style:{text:`当前${state.scope==="targetFine"?"细类":"子类"}样本量不足\\n未生成${scopeLevel()}得分和排名`,textAlign:"center",lineHeight:22,fill:"#667382",font:"12px Microsoft YaHei"}}]},true);return}
+      if(!rows.length){rankingChart.setOption({series:[],graphic:[{type:"text",left:"center",top:"middle",style:{text:"当前筛选下没有标记物",fill:"#667382",font:"12px Microsoft YaHei"}}]},true);return}
+      const zoom=rows.length>18?[{type:"inside",yAxisIndex:0,start:0,end:Math.min(100,18/rows.length*100)},{type:"slider",yAxisIndex:0,right:5,width:12,start:0,end:Math.min(100,18/rows.length*100)}]:[];
+      const series=COMPONENTS.map(c=>({name:c.name,type:"bar",stack:"score",barMaxWidth:22,data:rows.map(d=>({value:componentValue(d,c),item:d,itemStyle:{color:c.color}})),label:{show:true,position:"inside",formatter:p=>p.value>=7?p.value:"",fontSize:9,color:"#fff"}}));
+      if(!groupMode&&meta?.thresholds?.length===2)series[0].markLine={silent:true,symbol:["none","none"],z:20,label:{show:false},data:[{name:"低/中",xAxis:meta.thresholds[0],lineStyle:{color:"#e48121",type:"solid",width:2.5,opacity:.95,shadowColor:"rgba(228,129,33,.28)",shadowBlur:2}},{name:"中/高",xAxis:meta.thresholds[1],lineStyle:{color:"#2566d4",type:"solid",width:2.5,opacity:.95,shadowColor:"rgba(37,102,212,.28)",shadowBlur:2}}]};
+      series.push({name:"摘要",type:"bar",silent:true,barGap:"-100%",barMaxWidth:22,data:rows.map(d=>({value:100,item:d})),itemStyle:{color:"rgba(255,255,255,.001)"},label:{show:true,position:"right",distance:7,color:"#3b4754",fontSize:9,formatter:p=>`${score(p.data.item).totalScore}/100 · ${tierShort(score(p.data.item))}`}})
+      rankingChart.setOption({animationDuration:260,graphic:[],grid:{left:compact?88:145,right:compact?72:100,top:18,bottom:42},dataZoom:zoom,legend:{show:false},tooltip:{...CHART_TOOLTIP,trigger:"axis",axisPointer:{type:"shadow",shadowStyle:{color:"rgba(37,102,212,.06)"}},formatter:params=>{const d=params.find(p=>p.data?.item?.id)?.data.item;if(!d)return"";const s=score(d);return chartTip({title:markerName(d),subtitle:[groupLabel(d),d.targetFine].filter((value,index,all)=>value&&all.indexOf(value)===index).join(" · "),rows:[{label:"整数总分",value:`${s.totalScore} / 100`},{label:"组内排名",value:`${s.rank} / ${s.sampleSize}`},...COMPONENTS.map(c=>({label:c.name,value:`${componentValue(d,c)} / ${c.max}`,color:c.color}))],hint:"点击条形可同步更新右侧当前标记物"})}},xAxis:{type:"value",min:0,max:100,interval:20,name:"整数得分 / 100",nameLocation:"middle",nameGap:28,splitLine:{lineStyle:{color:"#edf0f3"}}},yAxis:{type:"category",inverse:true,data:rows.map(d=>String(d.id)),axisLabel:{width:compact?80:128,overflow:"truncate",fontSize:compact?8:9,formatter:value=>markerName(byId.get(String(value)))},axisTick:{show:false}},series},true)
+    }
+
+    function renderSelected(){
+      const d=byId.get(String(state.selectedId));$("selectedScope").textContent=SCOPE_LABEL[state.scope];
+      if(!d){$("selectedBody").innerHTML=`<div class="empty">当前筛选下没有标记物</div>`;return}
+      const s=score(d),used=COMPONENTS.reduce((sum,c)=>sum+componentValue(d,c),0);
+      if(s.available===false){
+        $("selectedBody").innerHTML=`<div class="selected-name">${esc(markerName(d))}</div><div class="selected-cat">${esc(d.category)} · ${show(d.targetType)}${d.targetSubtype?` · ${esc(d.targetSubtype)}`:""}${d.targetFine?` · ${esc(d.targetFine)}`:""}</div>
+          <div class="score-summary"><div><strong style="color:var(--muted)">—</strong><span>未生成${scopeLevel()}得分</span></div><div><strong>—</strong><span>未生成${scopeLevel()}排名</span></div><div><strong>${s.sampleSize}</strong><span>组内样本量</span></div><div><strong class="tier-text">仅排名</strong><span>组内层级</span></div></div>
+          <div class="warning">${esc(scopeStatus(d)||"样本不足")}：${esc(scopeNote(d)||`当前${state.scope==="targetFine"?"细类":"子类"}样本量不足，不生成${scopeLevel()}得分和排名。`)}</div>
+          <div class="metric-grid"><div class="metric"><b>${d.doiCount}</b><span>文献数（唯一DOI）</span></div><div class="metric"><b>${d.countryCount}</b><span>覆盖国家</span></div><div class="metric"><b>${d.siteCount}</b><span>采样点位</span></div><div class="metric"><b>${d.yearCount}</b><span>覆盖年份</span></div></div>
+          <div class="shortfall"><b>证据短板：</b>${esc(shortageLabel(d.shortage))}</div><div class="actions"><button class="btn primary" data-detail="${d.id}">完整详情</button></div>`;
+        $("selectedBody").querySelector("[data-detail]").addEventListener("click",()=>openMarker(String(d.id)));return
+      }
+      $("selectedBody").innerHTML=`<div class="selected-name">${esc(markerName(d))}</div><div class="selected-cat">${esc(d.category)} · ${show(d.targetType)}${d.targetSubtype?` · ${esc(d.targetSubtype)}`:""}${d.targetFine?` · ${esc(d.targetFine)}`:""}</div>
+        <div class="score-summary"><div><strong style="color:var(--blue)">${s.totalScore}</strong><span>整数总分 / 100</span></div><div><strong>${s.rank??"—"}</strong><span>当前层级排名</span></div><div><strong>${s.sampleSize}</strong><span>组内样本量</span></div><div><strong class="tier-text tier-badge ${tierClass(s)}">${esc(s.tierLabel||"仅排名")}</strong><span>组内相对层级</span></div></div>
+        <div class="segments">${COMPONENTS.map(c=>`<div class="segment" style="width:${componentValue(d,c)}%;background:${c.color}" title="${c.name}">${componentValue(d,c)||""}</div>`).join("")}<div class="segment rest" style="width:${Math.max(0,100-used)}%"></div></div>
+        <div class="component-grid">${COMPONENTS.map(c=>`<div>${c.name}</div><div class="num">${componentValue(d,c)} / ${c.max}</div>`).join("")}</div>
+        <div class="metric-grid"><div class="metric"><b>${d.doiCount}</b><span>文献数（唯一DOI）</span></div><div class="metric"><b>${d.countryCount}</b><span>覆盖国家</span></div><div class="metric"><b>${d.siteCount}</b><span>采样点位</span></div><div class="metric"><b>${d.yearCount}</b><span>覆盖年份</span></div></div>
+        ${state.scope==="targetType"&&d.sampleNote?`<div class="warning">${esc(d.sampleNote)}（${s.rank}/${s.sampleSize}）</div>`:""}
+        ${state.scope==="targetSubtype"&&d.subtypeStatus&&d.subtypeStatus!=="正式评价"?`<div class="warning">${esc(d.subtypeStatus)}：${esc(d.subtypeNote||"")}</div>`:""}
+        ${state.scope==="targetFine"&&d.fineStatus&&d.fineStatus!=="正式评价"?`<div class="warning">${esc(d.fineStatus)}：${esc(d.fineNote||"")}</div>`:""}
+        <div class="shortfall"><b>证据短板：</b>${esc(shortageLabel(d.shortage))}</div><div class="actions"><button class="btn primary" data-detail="${d.id}">完整详情</button><button class="btn" data-compare="${d.id}">${state.compare.has(String(d.id))?"移出比较":"加入比较"}</button></div>`;
+      $("selectedBody").querySelector("[data-detail]").addEventListener("click",()=>openMarker(String(d.id)));$("selectedBody").querySelector("[data-compare]").addEventListener("click",()=>toggleCompare(String(d.id)))
+    }
+
+    function renderDensity(){
+      if(!densityChart){densityChart=echarts.init($("densityChart"));densityChart.on("click",p=>{if(p.data?.item){state.scoreCell={attention:p.data.item.attention,evidence:p.data.item.evidence};applyFilters()}})}
+      const scored=state.filtered.filter(d=>score(d).available!==false);
+      if(!scored.length){densityChart.setOption({series:[],xAxis:{show:false},yAxis:{show:false},graphic:[{type:"text",left:"center",top:"middle",style:{text:"当前层级暂无可评分数据",fill:"#667382",font:"12px Microsoft YaHei"}}]},true);return}
+      const grouped=new Map();scored.forEach(d=>{const key=`${attention(d)}|${d.evidenceScore}`;if(!grouped.has(key))grouped.set(key,{attention:attention(d),evidence:d.evidenceScore,rows:[]});grouped.get(key).rows.push(d)});const cells=[...grouped.values()];
+      densityChart.setOption({animationDuration:230,graphic:[],grid:{left:62,right:25,top:25,bottom:48},tooltip:{...CHART_TOOLTIP,formatter:p=>chartTip({title:"评分组合",rows:[{label:"关注证据",value:`${p.data.item.attention} / 80`},{label:"参数证据",value:`${p.data.item.evidence} / 20`},{label:"核心标记物",value:`${p.data.item.rows.length} 项`}],hint:"点击气泡可筛选这一评分组合"})},xAxis:{show:true,type:"category",data:["0","10","20"],name:"参数证据 / 20",nameLocation:"middle",nameGap:28,axisTick:{alignWithLabel:true},splitLine:{show:true,lineStyle:{color:"#edf0f3"}}},yAxis:{show:true,type:"value",min:0,max:80,interval:20,name:"文献 + 空间 + 年份 / 80",nameLocation:"middle",nameGap:42,splitLine:{lineStyle:{color:"#edf0f3"}}},series:[{type:"scatter",data:cells.map(x=>({value:[String(x.evidence),x.attention,x.rows.length],item:x})),symbolSize:v=>Math.max(12,Math.min(48,8+Math.sqrt(v[2])*5)),itemStyle:{color:"#3d7fb4",opacity:.76,borderColor:"#fff",borderWidth:1},label:{show:true,formatter:p=>p.value[2]>=4?p.value[2]:"",color:"#fff",fontWeight:"bold"},emphasis:{label:{show:true,formatter:p=>p.value[2]}}}]},true)
+    }
+
+    function focusGroup(item){
+      if(!item)return;
+      $("categoryFilter").value=item.category;refreshHierarchy();
+      if(item.scope==="targetType"||item.scope==="targetSubtype"||item.scope==="targetFine"){$("typeFilter").value=item.targetType;refreshHierarchy()}
+      if(item.scope==="targetSubtype"||item.scope==="targetFine"){$("subtypeFilter").value=item.targetSubtype;refreshHierarchy()}
+      if(item.scope==="targetFine"){$("fineFilter").value=item.targetFine;refreshHierarchy()}
+      state.scope=item.scope;state.scoreCell=null;syncScopeButtons();applyFilters();window.scrollTo({top:0,behavior:"smooth"})
+    }
+    function groupDisplayScope(){
+      if($("fineFilter").value)return"targetFine";
+      if($("subtypeFilter").value)return"targetFine";
+      if($("typeFilter").value)return"targetSubtype";
+      if($("categoryFilter").value)return"targetType";
+      return"category"
+    }
+    function renderGroups(){
+      if(!groupChart){groupChart=echarts.init($("groupChart"));groupChart.on("click",p=>{const item=p.data?.item||groupChart.__groupItems?.find(group=>group.label===p.value);focusGroup(item)})}
+      const displayScope=groupDisplayScope(),map=new Map(),groupRows=state.filtered;
+      groupRows.forEach(d=>{const key=groupKey(d,displayScope);if(!map.has(key))map.set(key,{key,scope:displayScope,label:groupLabel(d,displayScope),category:d.category,targetType:displayScope==="category"?"":d.targetType,targetSubtype:displayScope==="targetSubtype"||displayScope==="targetFine"?d.targetSubtype:"",targetFine:displayScope==="targetFine"?d.targetFine:"",count:0,high:0,medium:0,low:0,none:0,meta:tierMeta(d,displayScope)});const item=map.get(key),code=score(d,displayScope).tierCode||"none";item.count++;item[code]=(item[code]||0)+1});
+      const groups=[...map.values()].sort((a,b)=>b.count-a.count||a.label.localeCompare(b.label,"zh-CN")),compact=window.innerWidth<=680;groupChart.__groupItems=groups;
+      const cat=$("categoryFilter").value,type=$("typeFilter").value,sub=$("subtypeFilter").value,fine=$("fineFilter").value,missingFine=displayScope==="targetFine"?state.filtered.filter(d=>d.targetFine==="未设置细类").length:0;
+      $("groupTitle").textContent=fine?`${fine} · 当前细类构成`:sub?`${sub} · 目标物质细类构成`:type?`${type} · 目标物质子类构成`:cat?`${cat} · 目标物质类别构成`:"各目标类别的相对层级构成";
+      const baseNote=fine?"已到当前分类体系最末层":displayScope==="category"?"点击目标类别可查看其物质类别":displayScope==="targetType"?"点击物质类别可继续查看其子类":displayScope==="targetSubtype"?"点击物质子类可继续查看其细类":"点击物质细类可定位到该层级";
+      $("groupNote").textContent=baseNote+(missingFine?`；${missingFine} 项未设置目标物质细类`:"");
+      if(!groups.length){groupChart.setOption({series:[],xAxis:{show:false},yAxis:{show:false},graphic:[{type:"text",left:"center",top:"middle",style:{text:"当前筛选下没有可展示的细类",fill:"#667382",font:"12px Microsoft YaHei"}}]},true);return}
+      const zoom=groups.length>14?[{type:"inside",yAxisIndex:0,start:0,end:Math.min(100,14/groups.length*100)},{type:"slider",yAxisIndex:0,right:4,width:11,start:0,end:Math.min(100,14/groups.length*100)}]:[];
+      const tierSeries=[["组内高优先级","high","#2566d4"],["组内中优先级","medium","#e48121"],["组内低优先级","low","#8a96a3"],["仅排名","none","#d7dee6"]];
+      groupChart.setOption({animationDuration:230,grid:{left:compact?92:145,right:38,top:34,bottom:40},dataZoom:zoom,legend:{top:7,data:tierSeries.map(x=>x[0]),itemWidth:9,itemHeight:9,textStyle:{fontSize:9,color:"#667382"}},tooltip:{...CHART_TOOLTIP,trigger:"axis",axisPointer:{type:"shadow"},formatter:params=>{const item=params.find(p=>p.data?.item)?.data.item;if(!item)return"";const metaValue=item.meta?.thresholds?.length===2?`断点 ${breakRange(item.meta)} · ${item.meta.stability}`:(item.meta?.status||"仅排名");return chartTip({title:item.label,rows:[{label:"组内高优先级",value:`${item.high} 项`,color:"#2566d4"},{label:"组内中优先级",value:`${item.medium} 项`,color:"#e48121"},{label:"组内低优先级",value:`${item.low} 项`,color:"#8a96a3"},{label:"仅排名",value:`${item.none} 项`,color:"#d7dee6"}],hint:`${metaValue}；点击继续下钻`})}},xAxis:{type:"value",min:0,name:"biomarker 数",nameLocation:"middle",nameGap:27,splitLine:{lineStyle:{color:"#edf0f3"}}},yAxis:{type:"category",inverse:true,triggerEvent:true,data:groups.map(g=>g.label),axisLabel:{width:compact?82:128,overflow:"truncate",fontSize:9},axisTick:{show:false}},series:tierSeries.map(([name,key,color])=>({name,type:"bar",stack:"tier",barMaxWidth:20,itemStyle:{color},data:groups.map(g=>({value:g[key],item:g})),label:{show:true,position:"inside",formatter:p=>p.value>=3?p.value:"",fontSize:8,color:key==="none"?"#52606d":"#fff"}}))},true)
+    }
+
+    function renderCompare(){
+      const rows=[...state.compare].map(id=>byId.get(id)).filter(d=>d&&score(d).available!==false).sort(sortRows),panel=$("comparePanel");panel.hidden=!rows.length;if(!rows.length){if(compareChart)compareChart.clear();return}if(!compareChart)compareChart=echarts.init($("compareChart"));compareChart.resize();compareChart.setOption({animationDuration:230,grid:{left:170,right:35,top:24,bottom:34},legend:{top:1,data:COMPONENTS.map(c=>c.name),textStyle:{fontSize:9}},tooltip:{trigger:"axis",axisPointer:{type:"shadow"}},xAxis:{type:"value",max:100,name:"整数得分 / 100",splitLine:{lineStyle:{color:"#edf0f3"}}},yAxis:{type:"category",data:rows.map(markerName),axisLabel:{width:155,overflow:"truncate",fontSize:9}},series:COMPONENTS.map(c=>({name:c.name,type:"bar",stack:"score",barMaxWidth:22,data:rows.map(d=>({value:componentValue(d,c),itemStyle:{color:c.color}})),label:{show:true,position:"inside",formatter:p=>p.value?p.value:"",fontSize:9}}))},true)
+    }
+    function toggleCompare(id){if(state.compare.has(id))state.compare.delete(id);else if(state.compare.size<5)state.compare.add(id);else{alert("最多同时比较5个标记物。");return}renderCompare();renderSelected();renderTable()}
+
+    function renderTable(){
+      const panel=$("tablePanel"),button=$("tableCollapseButton");panel.classList.toggle("collapsed",!state.tableExpanded);button.textContent=state.tableExpanded?"收起明细":"展开明细";button.setAttribute("aria-expanded",String(state.tableExpanded));$("toggleRows").hidden=!state.tableExpanded;if(!state.tableExpanded){$("tableNote").textContent=`当前 ${state.filtered.length} 项，明细已收起`;$("resultBody").innerHTML="";return}
+      const limit=state.showAll?state.filtered.length:Math.min(50,state.filtered.length),rows=state.filtered.slice(0,limit);$("tableNote").textContent=`${SCOPE_LABEL[state.scope]} · 当前 ${state.filtered.length} 项，${state.showAll?"已显示全部":`显示前 ${limit} 项`}`;$("toggleRows").textContent=state.showAll?"收起":"显示全部";
+      $("resultBody").innerHTML=rows.map(d=>{const s=score(d),available=s.available!==false,note=state.scope==="targetType"?d.sampleNote:state.scope==="targetSubtype"?`${d.subtypeStatus||""}${d.subtypeNote?`：${d.subtypeNote}`:""}`:state.scope==="targetFine"?`${d.fineStatus||""}${d.fineNote?`：${d.fineNote}`:""}`:"";return `<tr data-row="${d.id}" class="${String(d.id)===String(state.selectedId)?"active":""}"><td><input type="checkbox" data-compare-id="${d.id}" ${state.compare.has(String(d.id))?"checked":""} ${available?"":"disabled"}></td><td class="num">${s.rank??"—"}</td><td class="marker-cell"><b>${esc(d.biomarker||d.name)}</b>${d.name&&d.name!==d.biomarker?`<span>${esc(d.name)}</span>`:""}</td><td>${show(d.category)}</td><td>${show(d.targetType)}</td><td>${show(d.targetSubtype)}</td><td>${show(d.targetFine)}</td><td class="num">${s.sampleSize}</td><td><span class="tier-badge ${tierClass(s)}">${esc(s.tierLabel||"仅排名")}</span></td><td class="num"><b>${available?s.totalScore:"—"}</b></td><td class="num">${available?s.literatureScore:"—"}</td><td class="num">${available?s.spaceScore:"—"}</td><td class="num">${available?s.yearScore:"—"}</td><td class="num">${available?d.cfScore:"—"}</td><td class="num">${available?d.gsScore:"—"}</td><td class="num">${d.countryCount}/${d.siteCount}</td><td>${note?esc(note):"—"}</td><td>${esc(shortageLabel(d.shortage))}</td><td><button class="mini" data-detail-id="${d.id}">详情</button></td></tr>`}).join("")||`<tr><td colspan="19" class="empty">没有符合条件的记录</td></tr>`;
+      $("resultBody").querySelectorAll("tr[data-row]").forEach(tr=>tr.addEventListener("click",event=>{if(event.target.matches("input,button"))return;state.selectedId=tr.dataset.row;renderSelected();renderTable()}));$("resultBody").querySelectorAll("[data-compare-id]").forEach(el=>el.addEventListener("change",()=>toggleCompare(el.dataset.compareId)));$("resultBody").querySelectorAll("[data-detail-id]").forEach(el=>el.addEventListener("click",()=>openMarker(el.dataset.detailId)))
+    }
+
+    const tabs=[{id:"overview",label:"概览"},{id:"category",label:"目标类别内评价"},{id:"targetType",label:"目标物质类别内评价"},{id:"targetSubtype",label:"目标物质子类内评价"},{id:"targetFine",label:"目标物质细类内评价"},{id:"coverage",label:"点位覆盖"},{id:"aux",label:"辅助证据"},{id:"source",label:"文献与身份"}];
+    function openMarker(id){state.drawerMode="marker";state.selectedId=String(id);state.drawerTab="overview";renderSelected();renderTable();renderDrawer();openDrawer();$("drawerBody").innerHTML=`<div class="notice">正在按需加载该标记物的文献、点位与参数详情…</div>`;ensureDetails(id).then(()=>{if(state.drawerMode==="marker"&&String(state.selectedId)===String(id))renderDrawer()}).catch(error=>{$("drawerBody").innerHTML=`<div class="notice red">${error instanceof RequestTimeoutError?"详情接口响应超时，请稍后重试。":esc(error.message)}</div>`})}
+    function openRules(){state.drawerMode="rules";renderDrawer();openDrawer()}function openDrawer(){$("drawer").classList.add("open");$("drawerBackdrop").classList.add("open");$("drawer").setAttribute("aria-hidden","false")}function closeDrawer(){$("drawer").classList.remove("open");$("drawerBackdrop").classList.remove("open");$("drawer").setAttribute("aria-hidden","true")}
+    function detail(label,value,wide=false){return `<div class="detail ${wide?"wide":""}"><label>${esc(label)}</label><div>${show(value)}</div></div>`}
+    function renderDrawer(){if(state.drawerMode==="rules"){$("drawerTitle").textContent="四级独立评分计算规则";$("drawerTabs").innerHTML="";$("drawerBody").innerHTML=ruleHtml();return}const d=byId.get(String(state.selectedId));if(!d)return;$("drawerTitle").textContent=markerName(d);$("drawerTabs").innerHTML=tabs.map(tab=>`<button class="tab ${state.drawerTab===tab.id?"active":""}" data-tab="${tab.id}">${tab.label}</button>`).join("");$("drawerTabs").querySelectorAll("[data-tab]").forEach(button=>button.addEventListener("click",()=>{state.drawerTab=button.dataset.tab;renderDrawer()}));$("drawerBody").innerHTML=detailHtml(d,state.drawerTab)}
+    function scoreDetails(d,scope){
+      const s=score(d,scope),meta=tierMeta(d,scope),scopeName=SCOPE_LABEL[scope],sampleNote=scopeNote(d,scope),status=scopeStatus(d,scope),level=scopeLevel(scope),statusLabel=scope==="targetFine"?"四级评价状态":"三级评价状态";
+      if(s.available===false)return `<div class="notice red"><b>${scopeName}</b>：${esc(status||"样本不足")}。${esc(sampleNote||`当前分组样本不足，不生成${level}得分和排名。`)}</div><div class="detail-grid">${detail("组内样本量",s.sampleSize)}${detail(statusLabel,status||"样本不足")}</div>`;
+      return `<div class="detail-grid">${detail("整数综合得分",`${s.totalScore} / 100`)}${detail("组内排名",`${s.rank} / ${s.sampleSize}`)}${detail("组内相对层级",s.tierLabel||"仅排名")}${detail("分层状态",meta.status)}${detail("组内断点",breakRange(meta))}${detail("边界稳定性",meta.stability)}${meta.thresholds?.length===2?detail("断点 Bootstrap 95% 区间",breakCi(meta),true):""}${detail("文献得分",`${s.literatureScore} / 30`)}${detail("空间得分",`${s.spaceScore} / 30`)}${detail("年份得分",`${s.yearScore} / 20`)}${detail("校准系数得分",`${d.cfScore} / 10`)}${detail("管道衰减系数得分",`${d.gsScore} / 10`)}${detail("文献百分位",Number(s.literaturePercentile).toFixed(4))}${detail("国家百分位",Number(s.countryPercentile).toFixed(4))}${detail("点位百分位",Number(s.sitePercentile).toFixed(4))}${detail("空间覆盖百分位",Number(s.spacePercentile).toFixed(4))}${detail("年份百分位",Number(s.yearPercentile).toFixed(4))}${scope==="targetType"&&sampleNote?detail("二级样本提示",sampleNote,true):""}${scope==="targetSubtype"?detail("三级评价状态",d.subtypeStatus||"—"):""}${scope==="targetSubtype"&&sampleNote?detail("三级样本提示",sampleNote,true):""}${scope==="targetFine"?detail("四级评价状态",d.fineStatus||"—"):""}${scope==="targetFine"&&sampleNote?detail("四级样本提示",sampleNote,true):""}</div>`
+    }
+    function detailHtml(d,tab){
+      const sub=score(d,"targetSubtype"),fine=score(d,"targetFine"),subScore=sub.available===false?"—":sub.totalScore,subRank=sub.available===false?`— / ${sub.sampleSize}`:`${sub.rank} / ${sub.sampleSize}`,fineScore=fine.available===false?"—":fine.totalScore,fineRank=fine.available===false?`— / ${fine.sampleSize}`:`${fine.rank} / ${fine.sampleSize}`;
+      if(tab==="overview")return `<div class="detail-grid">${detail("目标类别内得分",score(d,"category").totalScore)}${detail("目标类别内排名",`${score(d,"category").rank} / ${score(d,"category").sampleSize}`)}${detail("物质类别内得分",score(d,"targetType").totalScore)}${detail("物质类别内排名",`${score(d,"targetType").rank} / ${score(d,"targetType").sampleSize}`)}${detail("物质子类内得分",subScore)}${detail("物质子类内排名",subRank)}${detail("物质细类内得分",fineScore)}${detail("物质细类内排名",fineRank)}${detail("三级评价状态",d.subtypeStatus||"—")}${detail("四级评价状态",d.fineStatus||"—")}${detail("目标类别",d.category)}${detail("目标物质类别",d.targetType)}${detail("目标物质子类",d.targetSubtype)}${detail("目标物质细类",d.targetFine)}${detail("代表目标物质/药物",d.drug)}${detail("证据短板",shortageLabel(d.shortage),true)}${detail("异常检查",d.anomaly||"无",true)}</div>`;
+      if(tab==="category")return scoreDetails(d,"category");
+      if(tab==="targetType")return scoreDetails(d,"targetType");
+      if(tab==="targetSubtype")return scoreDetails(d,"targetSubtype");
+      if(tab==="targetFine")return scoreDetails(d,"targetFine");
+      if(tab==="coverage")return `<div class="notice"><b>点位口径：</b>同一文献按 reported_site_key 识别；跨文献仅在 confirmed_site_id 有明确证据时合并。</div><div class="detail-grid">${detail("覆盖国家数",d.countryCount)}${detail("采样点位数",d.siteCount)}${detail("无点位记录数",d.missingSiteCount)}${detail("点位识别层级摘要",d.siteLevelSummary,true)}${detail("空间点位 ID 列表",d.siteList,true)}</div>`;
+      if(tab==="aux")return `<div class="notice"><b>以下字段不参与当前四套得分。</b></div><div class="detail-grid">${detail("含 MDL/MQL 的文献",`${d.quantDoiCount}（覆盖 ${d.quantCoverage}%）`)}${detail("含浓度结果的文献",`${d.concentrationDoiCount}（覆盖 ${d.concentrationCoverage}%）`)}${detail("含 PNDL 的文献",`${d.pndlDoiCount}（覆盖 ${d.pndlCoverage}%）`)}${detail("浓度/MQL 中位数",d.detectionMarginMedian)}${detail("最长采样跨度（月）",d.maxSpanMonths)}${detail("≥3月纵向文献数",d.longitudinalDoiCount)}${detail("人体排泄率值/说明",d.excretionValues,true)}</div>`;
+      return `<div class="detail-grid">${detail("biomarker",d.biomarker)}${detail("生物标记物名称",d.name)}${detail("CAS 代表值",d.cas)}${detail("CAS 列表",d.casList,true)}${detail("原始记录数",d.recordCount)}${detail("文献数（唯一 DOI）",d.doiCount)}${detail("关联目标物质类别",d.targetTypeList,true)}${detail("目标物质类别冲突",d.targetTypeConflict||"无")}${detail("关联目标物质子类",d.targetSubtypeList,true)}${detail("目标物质子类冲突",d.targetSubtypeConflict||"无")}${detail("关联目标物质细类",d.targetFineList,true)}${detail("目标物质细类冲突",d.targetFineConflict||"无")}${detail("文献编号列表",d.literatureList,true)}${detail("DOI 列表",d.doiList,true)}${detail("覆盖国家",d.countryList,true)}${detail("覆盖年份",d.yearList,true)}</div>`
+    }
+    function ruleHtml(){return `<div class="rule-title">组内独立评价</div><div class="notice">目标类别、目标物质类别、目标物质子类和目标物质细类分别在各自组内计算得分、排名和候选分层，不使用516项共同断点，也不跨层汇聚得分。</div><div class="rule-title">中秩百分位</div><div class="notice">计数为0时百分位记为0；计数大于0时：P =（小于当前值的数量 + 0.5 × 等于当前值的数量）÷ 当前组样本量。</div><div class="rule-title">空间覆盖</div><div class="notice">空间覆盖百分位 = √（国家百分位 × 点位百分位）。任一项为0时，空间覆盖得分为0。</div><div class="rule-title">精确总分</div><table class="rule-table"><thead><tr><th>指标</th><th class="num">满分</th></tr></thead><tbody><tr><td>文献数（按唯一 DOI 去重）</td><td class="num">30</td></tr><tr><td>空间覆盖</td><td class="num">30</td></tr><tr><td>覆盖年份</td><td class="num">20</td></tr><tr><td>校准系数</td><td class="num">10</td></tr><tr><td>管道衰减系数</td><td class="num">10</td></tr></tbody></table><div class="rule-title">组内自然断点</div><div class="notice">每个评分组使用未四舍五入精确得分，采用约束 Fisher–Jenks 三类自然断点，最小化低、中、高三层内部离差。相同得分不会被拆到不同层。</div><table class="rule-table"><thead><tr><th>组内样本量</th><th>分层处理</th></tr></thead><tbody><tr><td>n ≥ 15</td><td>正式候选分层；每层至少 max（3，向上取整 15% × n）项</td></tr><tr><td>10 ≤ n &lt; 15</td><td>探索性分层；每层至少2项</td></tr><tr><td>n &lt; 10</td><td>仅显示得分和排名，不强制三层</td></tr></tbody></table><div class="rule-title">边界稳定性</div><div class="notice">各组进行300次组内 Bootstrap，重新计算百分位、得分与断点，并报告两个断点的95%区间。页面中的稳定性提示用于识别边界波动，不改变原始得分和排名。</div><div class="rule-title">整数化与排名</div><div class="notice">文献、空间、年份使用最大余数法整数化，确保五项整数分数之和等于整数总分。排名和断点均使用未四舍五入精确总分。</div>`}
+
+    async function loadApplication(){
+      showPageState("正在加载核心标记物数据","正在连接后端 API，请稍候。");
+      try{
+        await loadOverview();
+        if(!DATA.length){showPageState("暂无核心标记物数据","后端接口响应成功，但当前数据集为空。请确认新汇总表是否已经入库。",true);notifyParent({type:"core-marker-priority:error",kind:"empty",message:"后端暂无可显示的核心标记物数据。"});return}
+        initialize();showApplication();notifyParent({type:"core-marker-priority:ready",summary:{rowCount:SUMMARY.rowCount,scoreVersion:SUMMARY.scoreVersion,targetFineGroupCount:SUMMARY.targetFineGroupCount,sourceModifiedAt:SUMMARY.sourceModifiedAt}})
+      }catch(error){
+        const timeout=error instanceof RequestTimeoutError,message=timeout?"请求超过 12 秒仍未完成，请检查网络或后端负载后重试。":`${error.message}。请确认后端服务和核心标记物接口可用。`;
+        showPageState(timeout?"核心标记物接口响应超时":"核心标记物数据加载失败",message,true);notifyParent({type:"core-marker-priority:error",kind:timeout?"timeout":"failure",message})
+      }
+    }
+    $("pageStateRetry").addEventListener("click",loadApplication);
+    loadApplication();
+  </script>
+</body>
+</html>

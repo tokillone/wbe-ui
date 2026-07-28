@@ -9,6 +9,7 @@ const apiMocks = vi.hoisted(() => ({
   logout: vi.fn(),
   fetchUploads: vi.fn(),
   fetchUploadRows: vi.fn(),
+  uploadPreview: vi.fn(),
   fetchUsers: vi.fn(),
 }))
 
@@ -27,6 +28,7 @@ vi.mock('../services/dataUploads', async () => {
     ...actual,
     fetchUploads: apiMocks.fetchUploads,
     fetchUploadRows: apiMocks.fetchUploadRows,
+    uploadPreview: apiMocks.uploadPreview,
   }
 })
 
@@ -107,6 +109,7 @@ describe('data entry permissions', () => {
     vi.clearAllMocks()
     apiMocks.fetchUploads.mockResolvedValue(emptyBatchPage)
     apiMocks.fetchUsers.mockResolvedValue(emptyUserPage)
+    apiMocks.uploadPreview.mockReset()
     apiMocks.logout.mockResolvedValue({ success: true, message: 'ok' })
   })
 
@@ -131,6 +134,22 @@ describe('data entry permissions', () => {
 
     expect(workspaceModules(wrapper)).toEqual(['上传录入', '上传批次'])
     expect(wrapper.text()).not.toContain('账号权限')
+    wrapper.unmount()
+  })
+
+  it('rejects an oversized workbook before sending it to the backend', async () => {
+    const wrapper = await mountFor(user({ canUpload: true }))
+    const oversized = new File(['x'], 'large.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    Object.defineProperty(oversized, 'size', { value: 50 * 1024 * 1024 + 1 })
+    const input = wrapper.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [oversized] })
+
+    await input.trigger('change')
+
+    expect(wrapper.text()).toContain('上传文件不能超过 50MB')
+    expect(apiMocks.uploadPreview).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

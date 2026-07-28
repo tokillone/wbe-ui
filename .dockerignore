@@ -1,0 +1,9 @@
+.git
+.gitignore
+.vscode
+dist
+node_modules
+coverage
+deploy/nginx/README.md
+.env*.local
+npm-debug.log*

@@ -47,10 +47,10 @@ export function excludeGeometryFromFilter(originalFilter: unknown, geometry: unk
 }
 
 export const MAP_LEVEL_ZOOM = {
-  countryActiveEnd: 4.2,
+  countryActiveEnd: 3.6,
   adminActiveEnd: 6.3,
-  countryFadeStart: 4,
-  countryFadeEnd: 4.4,
+  countryFadeStart: 3.3,
+  countryFadeEnd: 3.6,
   cityFadeStart: 5.9,
   cityFadeEnd: 6.3,
 } as const
@@ -62,18 +62,37 @@ export function displayLevelForZoom(zoom: number): MapDisplayLevel {
 }
 
 export function visibleLevelsForZoom(zoom: number): MapDisplayLevel[] {
-  const levels: MapDisplayLevel[] = []
-  if (zoom < MAP_LEVEL_ZOOM.countryFadeEnd) levels.push('country')
-  if (zoom >= MAP_LEVEL_ZOOM.countryFadeStart && zoom < MAP_LEVEL_ZOOM.cityFadeEnd) {
-    levels.push('admin1')
-  }
-  if (zoom >= MAP_LEVEL_ZOOM.cityFadeStart) levels.push('city')
-  return levels
+  return [displayLevelForZoom(zoom)]
 }
 
 export function heatRegionLevelForDisplayLevel(level: MapDisplayLevel): MapDisplayLevel {
-  if (level === 'country') return 'admin1'
-  return 'city'
+  return level
+}
+
+export function usesCompactHeatFootprint(
+  regionLevel: MapDisplayLevel,
+  displayLevel: MapDisplayLevel,
+) {
+  const hierarchyRank: Record<MapDisplayLevel, number> = {
+    country: 0,
+    admin1: 1,
+    city: 2,
+  }
+  return hierarchyRank[regionLevel] < hierarchyRank[displayLevel]
+}
+
+export function compactHeatFootprintPadding(level: MapDisplayLevel) {
+  if (level === 'country') return 7
+  if (level === 'admin1') return 5
+  return 3
+}
+
+export function firstActiveRegionCandidate<T>(
+  candidates: T[],
+  activeRegionIds: ReadonlySet<string>,
+  regionId: (candidate: T) => string,
+) {
+  return candidates.find((candidate) => activeRegionIds.has(regionId(candidate)))
 }
 
 export function selectRowsForDisplayLevel<T extends MapHierarchyRow>(
@@ -143,7 +162,14 @@ export function regionFillOpacityExpression(hasSpecificBiomarker: boolean) {
   return [
     'case',
     ['==', ['get', 'hasPndlValue'], true],
-    ['case', ['==', ['get', 'level'], 'city'], 0.82, ['==', ['get', 'level'], 'admin1'], 0.8, 0.78],
+    [
+      'case',
+      ['==', ['get', 'level'], 'city'],
+      0.76,
+      ['==', ['get', 'level'], 'admin1'],
+      0.72,
+      0.68,
+    ],
     0,
   ]
 }

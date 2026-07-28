@@ -5,8 +5,10 @@ import type { MapDetailResponse, MapRegionStat, MapStatsResponse } from '../type
 import {
   canExploreBiomarker,
   compactExplorerSummaryCards,
+  compactHeatFootprintPadding,
   displayLevelForZoom,
   excludeGeometryFromFilter,
+  firstActiveRegionCandidate,
   heatRegionLevelForDisplayLevel,
   isMainlandChinaCity,
   overviewSummaryCards,
@@ -16,6 +18,7 @@ import {
   selectionYearRange,
   sortBiomarkersByLiterature,
   temperatureBandIndex,
+  usesCompactHeatFootprint,
   visibleLevelsForZoom,
 } from '../utils/mapVisualization'
 
@@ -53,29 +56,53 @@ describe('map visualization hierarchy', () => {
   })
 
   it('switches from country to admin1 to city at the configured thresholds', () => {
-    expect(displayLevelForZoom(3.9)).toBe('country')
-    expect(displayLevelForZoom(4.4)).toBe('admin1')
+    expect(displayLevelForZoom(3.5)).toBe('country')
+    expect(displayLevelForZoom(3.6)).toBe('admin1')
     expect(displayLevelForZoom(6.2)).toBe('admin1')
     expect(displayLevelForZoom(6.3)).toBe('city')
   })
 
-  it('only overlaps levels inside the two short fade windows', () => {
-    expect(visibleLevelsForZoom(3.9)).toEqual(['country'])
-    expect(visibleLevelsForZoom(4.2)).toEqual(['country', 'admin1'])
+  it('keeps exactly one interactive bubble level visible while zooming', () => {
+    expect(visibleLevelsForZoom(3.2)).toEqual(['country'])
+    expect(visibleLevelsForZoom(3.4)).toEqual(['country'])
+    expect(visibleLevelsForZoom(3.6)).toEqual(['admin1'])
     expect(visibleLevelsForZoom(5.2)).toEqual(['admin1'])
-    expect(visibleLevelsForZoom(6.1)).toEqual(['admin1', 'city'])
+    expect(visibleLevelsForZoom(6.1)).toEqual(['admin1'])
     expect(visibleLevelsForZoom(6.4)).toEqual(['city'])
   })
 
-  it('uses one finer hierarchy for the heat fill while keeping bubble levels unchanged', () => {
-    expect(heatRegionLevelForDisplayLevel('country')).toBe('admin1')
-    expect(heatRegionLevelForDisplayLevel('admin1')).toBe('city')
+  it('aggregates heat fill at the same hierarchy as the visible bubbles', () => {
+    expect(heatRegionLevelForDisplayLevel('country')).toBe('country')
+    expect(heatRegionLevelForDisplayLevel('admin1')).toBe('admin1')
     expect(heatRegionLevelForDisplayLevel('city')).toBe('city')
   })
 
+  it('uses a compact heat footprint only for coarse fallback rows at deeper zooms', () => {
+    expect(usesCompactHeatFootprint('country', 'country')).toBe(false)
+    expect(usesCompactHeatFootprint('country', 'admin1')).toBe(true)
+    expect(usesCompactHeatFootprint('admin1', 'country')).toBe(false)
+    expect(usesCompactHeatFootprint('admin1', 'admin1')).toBe(false)
+    expect(usesCompactHeatFootprint('city', 'admin1')).toBe(false)
+    expect(usesCompactHeatFootprint('city', 'city')).toBe(false)
+    expect(compactHeatFootprintPadding('country')).toBe(7)
+    expect(compactHeatFootprintPadding('admin1')).toBe(5)
+    expect(compactHeatFootprintPadding('city')).toBe(3)
+  })
+
+  it('ignores finer heat regions when only the country level is interactive', () => {
+    const candidates = [
+      { id: 'admin1|china|guangdong', label: '广东省' },
+      { id: 'country|china', label: '中国' },
+    ]
+
+    expect(
+      firstActiveRegionCandidate(candidates, new Set(['country|china']), (item) => item.id),
+    ).toEqual({ id: 'country|china', label: '中国' })
+  })
+
   it('maps low and high values to opposite temperature bands', () => {
-    expect(temperatureBandIndex(1, 1, 1000, 7)).toBe(0)
-    expect(temperatureBandIndex(1000, 1, 1000, 7)).toBe(6)
+    expect(temperatureBandIndex(1, 1, 1000, 4)).toBe(0)
+    expect(temperatureBandIndex(1000, 1, 1000, 4)).toBe(3)
   })
 
   it('keeps the backend heat range stable when the visible hierarchy changes', () => {
@@ -101,10 +128,10 @@ describe('map visualization hierarchy', () => {
       [
         'case',
         ['==', ['get', 'level'], 'city'],
-        0.82,
+        0.76,
         ['==', ['get', 'level'], 'admin1'],
-        0.8,
-        0.78,
+        0.72,
+        0.68,
       ],
       0,
     ])

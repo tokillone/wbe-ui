@@ -7,6 +7,7 @@ import type {
   MapRegionStat,
   MapStatsResponse,
 } from '../types/map'
+import { API_BASE_URL } from '../config/api'
 
 interface ApiResponse<T> {
   code: number
@@ -14,21 +15,34 @@ interface ApiResponse<T> {
   data: T
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
+export function buildMapApiUrl(
+  endpoint: string,
+  params?: Record<string, string | undefined>,
+) {
+  if (!endpoint.startsWith('/') || endpoint.startsWith('//')) {
+    throw new Error('地图接口必须使用 /api 下的相对路径')
+  }
+  const searchParams = new URLSearchParams()
+  Object.entries(params ?? {}).forEach(([key, value]) => {
+    if (value) searchParams.set(key, value)
+  })
+  const query = searchParams.toString()
+  return `${API_BASE_URL}${endpoint}${query ? `?${query}` : ''}`
+}
 
 async function requestMap<T>(
   endpoint: string,
   params?: Record<string, string | undefined>,
   signal?: AbortSignal,
 ): Promise<T> {
-  const url = new URL(`${API_BASE_URL}${endpoint}`, window.location.origin)
-  Object.entries(params ?? {}).forEach(([key, value]) => {
-    if (value) url.searchParams.set(key, value)
-  })
+  const url = buildMapApiUrl(endpoint, params)
 
   let response: Response
   try {
-    response = await fetch(url, { signal })
+    response = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal,
+    })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error
     throw new Error('无法连接后端地图接口，请确认后端服务已启动')
@@ -57,13 +71,16 @@ async function postMap<T>(
   body: unknown,
   signal?: AbortSignal,
 ): Promise<T> {
-  const url = new URL(`${API_BASE_URL}${endpoint}`, window.location.origin)
+  const url = buildMapApiUrl(endpoint)
 
   let response: Response
   try {
     response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify(body),
       signal,
     })

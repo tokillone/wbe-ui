@@ -80,6 +80,25 @@ export interface MapRegionStat {
   pndlPointCount?: number | null
   pndlYearCount?: number | null
   pndlSources?: string | null
+  pointCountBasis?: 'reported_site_key' | string | null
+  crossDocumentMergeEnabled?: boolean | null
+  pointGeometryBasis?: 'region_centroid' | string | null
+}
+
+export interface MapReportedSite {
+  reportedSiteKey: string
+  effectiveSiteKey: string
+  literatureCode: string
+  doi?: string | null
+  country?: string | null
+  province?: string | null
+  city?: string | null
+  rawPlantName?: string | null
+  canonicalPlantName?: string | null
+  confirmedSiteId?: string | null
+  siteNote?: string | null
+  matchStatus?: string | null
+  recordCount?: number | null
 }
 
 export interface MapStatsResponse {
@@ -218,4 +237,5 @@ export interface MapDetailResponse {
   categoryBreakdown?: MapBreakdownItem[] | null
   sources: MapSourceRecord[]
   sourceRecords?: MapSourceRecord[] | null
+  reportedSites?: MapReportedSite[] | null
 }

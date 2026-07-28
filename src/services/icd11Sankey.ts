@@ -4,8 +4,16 @@ import type {
   Icd11SankeyGraph,
 } from '../types/icd11Sankey'
 
-export function fetchIcd11SankeyCategories() {
-  return requestApi<Icd11SankeyCategoryResponse>('/icd11-sankey/categories?schema=all-level1-v1')
+export const ICD11_CATEGORY_TIMEOUT_MS = 10_000
+export const ICD11_GRAPH_TIMEOUT_MS = 25_000
+
+const normalizedGraphCache = new WeakMap<Icd11SankeyGraph, Icd11SankeyGraph>()
+
+export function fetchIcd11SankeyCategories(signal?: AbortSignal) {
+  return requestApi<Icd11SankeyCategoryResponse>('/icd11-sankey/categories?schema=all-level1-v1', {
+    signal,
+    timeoutMs: ICD11_CATEGORY_TIMEOUT_MS,
+  })
 }
 
 export async function fetchIcd11SankeyGraph(category?: string, signal?: AbortSignal) {
@@ -13,11 +21,16 @@ export async function fetchIcd11SankeyGraph(category?: string, signal?: AbortSig
   params.set('schema', 'all-level1-v1')
   if (category) params.set('category', category)
   const suffix = params.toString() ? `?${params.toString()}` : ''
-  const graph = await requestApi<Icd11SankeyGraph>(`/icd11-sankey/graph-v2${suffix}`, { signal })
+  const graph = await requestApi<Icd11SankeyGraph>(`/icd11-sankey/graph-v2${suffix}`, {
+    signal,
+    timeoutMs: ICD11_GRAPH_TIMEOUT_MS,
+  })
   return normalizeIcd11SankeyGraph(graph)
 }
 
 export function normalizeIcd11SankeyGraph(graph: Icd11SankeyGraph): Icd11SankeyGraph {
+  const cached = normalizedGraphCache.get(graph)
+  if (cached) return cached
   const paths = graph.paths.map((path) => ({
     ...path,
     level3: path.level3 || null,
@@ -34,7 +47,7 @@ export function normalizeIcd11SankeyGraph(graph: Icd11SankeyGraph): Icd11SankeyG
   const level2OnlyPaths = paths.filter((path) => path.mappingLevel === 'Level2')
   const level3Paths = paths.filter((path) => path.mappingLevel === 'Level3')
 
-  return {
+  const normalized = {
     ...graph,
     nodes: allNodes,
     paths,
@@ -49,4 +62,7 @@ export function normalizeIcd11SankeyGraph(graph: Icd11SankeyGraph): Icd11SankeyG
       level3Weight: level3Paths.reduce((sum, path) => sum + Number(path.weight || 0), 0),
     },
   }
+  normalizedGraphCache.set(graph, normalized)
+  normalizedGraphCache.set(normalized, normalized)
+  return normalized
 }
