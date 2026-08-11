@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
+import BrandMark from '../components/BrandMark.vue'
 import {
   AuthRequestError,
   fetchCaptcha,
@@ -19,7 +20,7 @@ import { fetchHomeOverview, HomeOverviewRequestError } from '../services/home'
 import { clearSession, getStoredSession, saveSession, updateStoredUser } from '../services/session'
 
 type AuthMode = 'login' | 'register' | 'reset'
-type PendingAction = 'download' | 'operator' | null
+type PendingAction = 'operator' | null
 type BiomarkerSortMode = 'frequency' | 'frequencyAsc' | 'name'
 type TargetGroupMode = 'all' | 'drug' | 'consumer'
 type ActionNoticeTone = 'success' | 'info' | 'warning'
@@ -145,25 +146,6 @@ interface WordCloudItem {
   aliases?: string[]
 }
 
-interface CatalogItem {
-  title: string
-  detail: string
-  meta: string
-}
-
-interface AccessRuleItem {
-  title: string
-  detail: string
-  state: string
-}
-
-interface HomeModuleItem {
-  index: string
-  title: string
-  detail: string
-  target: string
-}
-
 interface HomeData {
   metrics: HeroMetric[]
   trends: TrendItem[]
@@ -172,9 +154,6 @@ interface HomeData {
   biomarkerFrequencies: BiomarkerFrequencyItem[]
   targetCategoryOptions?: TargetCategoryOption[]
   keywords: WordCloudItem[]
-  catalogItems: CatalogItem[]
-  accessRules: AccessRuleItem[]
-  homeModules: HomeModuleItem[]
   activity: ActivityItem[]
 }
 
@@ -517,23 +496,6 @@ const mockHomeData: HomeData = {
     { name: 'Azithromycin', value: 9, rows: 30, docs: 9, countries: 7, regions: 9, category: '抗生素', tone: '#1f77b4', targetLabel: '药物类' },
     { name: '阿托伐他汀', value: 9, rows: 82, docs: 9, countries: 7, regions: 15, category: '降血脂药', tone: '#6f5fa8', targetLabel: '药物类' },
   ],
-  catalogItems: [
-    { title: '目标物质与类别', detail: '32 类目标物质，覆盖药物类、消费品类和暴露/生活方式标志物。', meta: '类别、别名、归并规则' },
-    { title: '生物标记物', detail: '601 项生物标记物，保留去重文献数、数据行数和覆盖地区。', meta: '中文名、英文名、代谢物' },
-    { title: '空间覆盖', detail: '45 个国家/地区与 259 个省级或城市层级地区。', meta: '国家、地区、城市、流域' },
-    { title: '文献证据', detail: '198 篇 WBE 文献，覆盖 2004-2025 年。', meta: '题名、年份、DOI、期刊' },
-  ],
-  accessRules: [
-    { title: '开放检索', detail: '目标物质、词云、类别分布和字段说明对访客开放。', state: '公开' },
-    { title: '受控下载', detail: '按筛选条件导出完整数据包前需要登录并记录用途。', state: '登录后' },
-    { title: '数据维护', detail: '上传、批量校验、字段修订和版本发布仅面向操作员。', state: '操作员' },
-  ],
-  homeModules: [
-    { index: '01', title: '数据说明', detail: '查看开放字段、权限边界和来源说明。', target: 'about' },
-    { index: '02', title: '词云图谱', detail: '按 DOI 去重研究数理解高频标记物。', target: 'visual' },
-    { index: '03', title: '类别分布', detail: '对比目标物质类别的数据行数和覆盖范围。', target: 'visual' },
-    { index: '04', title: '方法质量', detail: '查看字段口径、质量控制和版本说明。', target: 'methods' },
-  ],
   activity: [
     {
       date: '2026 Q2',
@@ -654,9 +616,8 @@ const pageTitle = computed(() => {
   return '登录平台'
 })
 const authLead = computed(() => {
-  if (pendingAction.value === 'download') return '登录后将继续下载当前数据包。'
   if (pendingAction.value === 'operator') return '登录后可进入数据上传与批量校验。'
-  return '用于受控下载、字段维护和数据版本发布。'
+  return '用于账号权限、字段维护和数据版本发布。'
 })
 const submitText = computed(() => {
   if (isRegister.value) return '创建账号'
@@ -1191,9 +1152,6 @@ async function loadHomeData() {
         ? result.targetCategoryOptions
         : (homeData.value.targetCategoryOptions ?? mockHomeData.targetCategoryOptions),
       keywords: result.keywords?.length ? result.keywords : mockHomeData.keywords,
-      catalogItems: result.catalogItems?.length ? result.catalogItems : mockHomeData.catalogItems,
-      accessRules: result.accessRules?.length ? result.accessRules : mockHomeData.accessRules,
-      homeModules: result.homeModules?.length ? result.homeModules : mockHomeData.homeModules,
       activity: result.activity?.length ? result.activity : mockHomeData.activity,
     }
     homeLoadState.value = hasOverviewData ? 'success' : 'empty'
@@ -1413,16 +1371,7 @@ function continueProtectedAction() {
   if (action) runProtectedAction(action)
 }
 
-function runProtectedAction(action: Exclude<PendingAction, null>) {
-  if (action === 'download') {
-    if (!currentUserCanDownload.value) {
-      showActionNotice('暂不可下载', '当前账号未获得数据下载权限，请联系系统管理员。', 'warning')
-      return
-    }
-    showActionNotice('下载权限已确认', '现在可以按当前筛选条件发起受控下载。')
-    return
-  }
-
+function runProtectedAction(_action: Exclude<PendingAction, null>) {
   openUploadWorkspace()
 }
 
@@ -1716,11 +1665,7 @@ onBeforeUnmount(() => {
   <main class="site-shell">
     <header class="site-header">
       <a class="brand" href="#top" aria-label="污水信息因子数据库首页">
-        <span class="brand-logo" aria-hidden="true">
-          <span class="brand-drop"></span>
-          <span class="brand-bars"><i></i><i></i><i></i></span>
-          <span class="brand-line"><i></i><i></i></span>
-        </span>
+        <BrandMark :size="44" />
         <span>
           <strong>污水信息因子数据库</strong>
           <small>Wastewater Biomarker Evidence</small>
@@ -1728,8 +1673,8 @@ onBeforeUnmount(() => {
       </a>
 
       <nav class="main-nav" aria-label="主导航">
-        <a href="#about">数据说明</a>
         <a href="#visual-entry">可视化</a>
+        <a href="#visual">图谱分析</a>
         <a href="#methods">方法与质量</a>
         <a href="#news">更新</a>
       </nav>
@@ -1820,15 +1765,15 @@ onBeforeUnmount(() => {
           整合 WBE 文献、目标物质、地区覆盖和生物标记物关系，支持数据检索、证据追踪和可视化分析。
         </p>
         <div class="hero-actions">
-          <button type="button" class="primary-action" @click="scrollToSection('about')">
-            查看数据说明
+          <button type="button" class="primary-action" @click="scrollToSection('visual-entry')">
+            进入可视化中心
           </button>
           <button
             type="button"
             class="secondary-action"
-            @click="scrollToSection('visual-entry')"
+            @click="scrollToSection('visual')"
           >
-            进入可视化中心
+            浏览数据图谱
           </button>
         </div>
       </div>
@@ -1865,9 +1810,9 @@ onBeforeUnmount(() => {
         </div>
         <div class="board-foot">
           <span>{{
-            isAuthenticated ? '已登录：开放检索，按账号权限受控下载。' : '访客模式：公开检索可用，下载与维护需登录。'
+            isAuthenticated ? '已登录：可按账号权限使用数据能力。' : '访客模式：公开检索与分析功能可用。'
           }}</span>
-          <button type="button" @click="scrollToSection('about')">查看说明</button>
+          <button type="button" @click="scrollToSection('visual')">查看图谱</button>
         </div>
       </div>
     </section>
@@ -1899,81 +1844,6 @@ onBeforeUnmount(() => {
             </span>
             <span class="glance-value">{{ item.value }}</span>
           </button>
-        </div>
-      </div>
-    </section>
-
-    <section id="about" class="about-band" aria-label="数据说明">
-      <div class="data-dossier">
-        <div class="dossier-header">
-          <div class="about-intro">
-            <p class="section-kicker">ABOUT DATA</p>
-            <h2>数据说明</h2>
-            <p>
-              面向污水流行病学研究，按目标物质、地区覆盖、研究年份和来源文献组织字段，
-              支持开放检索、证据追踪和受控下载。
-            </p>
-          </div>
-          <div class="dossier-guide" aria-label="数据说明导览">
-            <article>
-              <span>可检索内容</span>
-              <strong>查字段与对象</strong>
-              <p>访客可检索目标物质、标记物、地区覆盖和文献证据字段。</p>
-            </article>
-            <article>
-              <span>使用边界</span>
-              <strong>分级开放使用</strong>
-              <p>检索开放，完整下载需登录；数据录入和维护仅限操作员。</p>
-            </article>
-            <article>
-              <span>证据追踪</span>
-              <strong>来源与版本可查</strong>
-              <p>保留 DOI、年份、期刊、地区覆盖和字段版本用于复核。</p>
-            </article>
-          </div>
-        </div>
-
-        <div class="dossier-body">
-          <article class="metadata-panel field-panel">
-            <header>
-              <span>字段结构</span>
-              <strong>开放检索字段</strong>
-            </header>
-            <div class="field-table" role="table" aria-label="开放检索字段">
-              <div class="field-table-head" role="row">
-                <span role="columnheader">对象</span>
-                <span role="columnheader">覆盖说明</span>
-                <span role="columnheader">开放字段</span>
-              </div>
-              <article v-for="item in homeData.catalogItems" :key="item.title">
-                <strong>{{ item.title }}</strong>
-                <span>{{ item.detail }}</span>
-                <em>{{ item.meta }}</em>
-              </article>
-            </div>
-          </article>
-
-          <article class="metadata-panel access-panel">
-            <header>
-              <span>权限边界</span>
-              <strong>检索开放，下载受控</strong>
-            </header>
-            <div class="permission-table" aria-label="权限边界">
-              <article v-for="item in homeData.accessRules" :key="item.title">
-                <span>{{ item.state }}</span>
-                <div>
-                  <strong>{{ item.title }}</strong>
-                  <p>{{ item.detail }}</p>
-                </div>
-              </article>
-            </div>
-            <div class="permission-actions">
-              <button type="button" @click="openAuth('download')">下载申请</button>
-              <button v-if="canAccessDataEntry" type="button" @click="openUploadWorkspace">
-                数据录入
-              </button>
-            </div>
-          </article>
         </div>
       </div>
     </section>
@@ -2286,23 +2156,18 @@ onBeforeUnmount(() => {
 
     <footer id="news" class="site-footer">
       <div class="footer-brand">
-        <span class="brand-logo small" aria-hidden="true">
-          <span class="brand-drop"></span>
-          <span class="brand-bars"><i></i><i></i><i></i></span>
-          <span class="brand-line"><i></i><i></i></span>
-        </span>
+        <BrandMark :size="32" compact />
         <span>
           <strong>污水信息因子数据库</strong>
           <p>服务于污水流行病学数据整合、公共健康研究和证据型决策。</p>
         </span>
       </div>
       <nav aria-label="页脚导航">
-        <a href="#about">数据说明</a>
+        <a href="#visual-entry">分析入口</a>
         <a href="#visual">图谱分析</a>
         <a href="#methods">方法与质量</a>
-        <button type="button" @click="openAuth('download')">下载申请</button>
       </nav>
-      <small>© 2026 WBE Information Platform · 字段版本与数据更新保持可追溯</small>
+      <small>© 2026 Wastewater Biomarker Evidence · 字段版本与数据更新保持可追溯</small>
     </footer>
 
     <div v-if="selectedWord" class="word-popover-layer" @click.self="closeWordPopover">
@@ -2372,10 +2237,7 @@ onBeforeUnmount(() => {
           ×
         </button>
         <header class="auth-header">
-          <span class="auth-logo" aria-hidden="true">
-            <span class="auth-logo-drop"></span>
-            <span class="auth-logo-bars"><i></i><i></i><i></i></span>
-          </span>
+          <BrandMark :size="40" />
           <h2 id="authTitle">{{ pageTitle }}</h2>
           <p>{{ authLead }}</p>
         </header>
@@ -2586,7 +2448,7 @@ onBeforeUnmount(() => {
               class="ghost-action"
               @click="continueProtectedAction"
             >
-              {{ pendingAction === 'download' ? '继续下载' : '进入数据上传' }}
+              进入数据上传
             </button>
           </div>
 

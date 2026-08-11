@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref } from 'vue'
 
+import BrandMark from '../components/BrandMark.vue'
 import { login, register, resetPassword, sendVerificationCode } from '../services/auth'
 
 type AuthMode = 'login' | 'register' | 'reset'
@@ -213,9 +214,9 @@ onBeforeUnmount(() => {
 
     <section class="auth-card" aria-label="账号认证">
       <header class="auth-header">
-        <div class="brand-mark">WBE</div>
-        <h1>污水信息物质信息库</h1>
-        <p>基于污水监测的数据可视化与公共健康研究平台</p>
+        <BrandMark :size="44" />
+        <h1>污水信息因子数据库</h1>
+        <p>Wastewater Biomarker Evidence</p>
       </header>
 
       <form class="auth-form" @submit.prevent="handleSubmit">
@@ -224,7 +225,7 @@ onBeforeUnmount(() => {
           <input
             v-model.trim="form.email"
             :type="isLogin ? 'text' : 'email'"
-            autocomplete="email"
+            :autocomplete="isLogin ? 'username' : 'email'"
             :placeholder="isLogin ? '用户名或 name@example.com' : 'name@example.com'"
           />
         </label>
@@ -353,7 +354,7 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <footer class="page-footer">v1.0.0 © 2026 WBE Information Platform</footer>
+    <footer class="page-footer">v1.0.0 © 2026 Wastewater Biomarker Evidence</footer>
   </main>
 </template>
 
@@ -593,6 +594,10 @@ input {
 
 .auth-header {
   text-align: center;
+}
+
+.auth-header :deep(.site-emblem) {
+  margin: 0 auto 18px;
 }
 
 .brand-mark {

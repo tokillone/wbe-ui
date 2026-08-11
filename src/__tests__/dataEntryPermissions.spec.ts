@@ -9,6 +9,7 @@ const apiMocks = vi.hoisted(() => ({
   logout: vi.fn(),
   fetchUploads: vi.fn(),
   fetchUploadRows: vi.fn(),
+  fetchReviewPackages: vi.fn(),
   uploadPreview: vi.fn(),
   fetchUsers: vi.fn(),
 }))
@@ -28,6 +29,7 @@ vi.mock('../services/dataUploads', async () => {
     ...actual,
     fetchUploads: apiMocks.fetchUploads,
     fetchUploadRows: apiMocks.fetchUploadRows,
+    fetchReviewPackages: apiMocks.fetchReviewPackages,
     uploadPreview: apiMocks.uploadPreview,
   }
 })
@@ -109,6 +111,16 @@ describe('data entry permissions', () => {
     vi.clearAllMocks()
     apiMocks.fetchUploads.mockResolvedValue(emptyBatchPage)
     apiMocks.fetchUsers.mockResolvedValue(emptyUserPage)
+    apiMocks.fetchUploadRows.mockResolvedValue({
+      uploadId: 10,
+      page: 1,
+      size: 20,
+      total: 0,
+      rowView: 'submission',
+      reviewPackageId: null,
+      rows: [],
+    })
+    apiMocks.fetchReviewPackages.mockResolvedValue([])
     apiMocks.uploadPreview.mockReset()
     apiMocks.logout.mockResolvedValue({ success: true, message: 'ok' })
   })
@@ -164,13 +176,17 @@ describe('data entry permissions', () => {
 
     expect(workspaceModules(wrapper)).toEqual(['上传批次'])
     expect(apiMocks.fetchUploads).toHaveBeenLastCalledWith(
-      expect.objectContaining({ status: 'PENDING_REVIEW', scope: 'pendingReview' }),
+      expect.objectContaining({ status: 'all', scope: 'pendingReview' }),
     )
     expect(wrapper.findAll('.row-actions button').map((button) => button.text())).toEqual([
       '查看/审核',
       '下载',
-      '审核通过',
     ])
+    await wrapper.find('.row-actions button').trigger('click')
+    await flushPromises()
+    expect(apiMocks.fetchUploadRows).toHaveBeenCalledWith(10, 1, 20, 'all', 'submission')
+    expect(wrapper.find('.drawer-actions').text()).toContain('通过初审')
+    expect(wrapper.find('.drawer-actions').text()).not.toContain('终审通过')
     wrapper.unmount()
   })
 
@@ -185,7 +201,7 @@ describe('data entry permissions', () => {
 
     expect(workspaceModules(wrapper)).toEqual(['上传批次'])
     expect(apiMocks.fetchUploads).toHaveBeenLastCalledWith(
-      expect.objectContaining({ status: 'APPROVED', scope: 'approved' }),
+      expect.objectContaining({ status: 'all', scope: 'approved' }),
     )
     expect(wrapper.findAll('.row-actions button').map((button) => button.text())).toEqual([
       '查看',

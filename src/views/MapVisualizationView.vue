@@ -4,6 +4,8 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
+import BrandMark from '../components/BrandMark.vue'
+import MapFilterSelect, { type MapFilterSelectOption } from '../components/MapFilterSelect.vue'
 import {
   buildSelectionKey,
   fetchMapClusterDetail,
@@ -38,15 +40,24 @@ import type {
   Popup,
 } from 'maplibre-gl'
 import {
+  biomarkerExplorerMetricKeys,
   canExploreBiomarker,
   compactExplorerSummaryCards,
   compactHeatFootprintPadding,
+  countryLabelStyleForArea,
+  detailFilterContext,
   displayLevelForZoom,
+  excludeUnassignedCityRows,
   excludeGeometryFromFilter,
   firstActiveRegionCandidate,
   heatRegionLevelForDisplayLevel,
   isMainlandChinaCity,
+  isUnassignedAdmin1GeoKey,
+  isUnassignedGeoKey,
   overviewSummaryCards,
+  pndlChartAxisTicks,
+  pndlChartScalePercent,
+  pndlComparisonsForRegion,
   regionFillOpacityExpression,
   resolveStableHeatRange,
   selectRowsForDisplayLevel,
@@ -87,6 +98,7 @@ type CachedFeatureCollection = {
   boundaryVersion: number
   locale: Locale
   level: MapDisplayLevel
+  specificBiomarker?: boolean
   collection: FeatureCollection
 }
 type BoundaryHitIndex = {
@@ -182,10 +194,13 @@ const REGION_HOVER_PRIORITY_LAYERS = [
   'country-hit',
 ] as const
 const POINT_INTERACTIVE_LAYERS = [
+  'pndl-country-bubble-icons',
   'pndl-country-bubbles',
   'pndl-country-bubble-count',
+  'pndl-admin1-bubble-icons',
   'pndl-admin1-bubbles',
   'pndl-admin1-bubble-count',
+  'pndl-city-bubble-icons',
   'pndl-city-bubbles',
   'pndl-city-bubble-count',
 ] as const
@@ -279,19 +294,63 @@ const MAP_HIGHLIGHT_STYLE = {
   selectedFill: '#eef0f0',
   selectedLine: '#173f55',
   selectedHalo: '#ffffff',
-  bubble: '#f3cc7a',
-  bubbleHover: '#edb956',
-  bubbleSelected: '#e6a43c',
-  bubbleLine: '#9b7432',
-  bubbleHoverLine: '#82591e',
-  bubbleSelectedLine: '#694313',
+  bubble: '#4f8bc9',
+  bubbleHover: '#2f73b7',
+  bubbleSelected: '#174f8a',
+  bubbleLine: '#2e669f',
+  bubbleHoverLine: '#1d568f',
+  bubbleSelectedLine: '#123e6f',
   bubbleSelectedOuter: '#ffffff',
 } as const
 const MAP_HEAT_COLORS = ['#ffff8c', '#fdae61', '#f46d43', '#d73027'] as const
 const BUBBLE_IMAGE_BUCKETS: Record<MapDisplayLevel, readonly number[]> = {
-  country: [24, 34, 46, 60, 74],
-  admin1: [16, 22, 30, 40, 52],
-  city: [12, 16, 22, 28, 36],
+  country: [28, 38, 52, 68, 82],
+  admin1: [18, 25, 34, 45, 58],
+  city: [14, 18, 25, 32, 40],
+} as const
+const BUBBLE_COUNT_THRESHOLDS: Record<MapDisplayLevel, readonly number[]> = {
+  country: [20, 80, 300, 1000],
+  admin1: [5, 20, 80, 300],
+  city: [3, 10, 30, 100],
+} as const
+type BubblePinVariant = 'overview' | 'biomarker' | 'unassigned'
+type BubblePinPalette = {
+  top: string
+  middle: string
+  bottom: string
+  highlight: string
+  text: string
+  stroke: string
+  shadow: string
+}
+const BUBBLE_PIN_PALETTES: Record<BubblePinVariant, BubblePinPalette> = {
+  overview: {
+    top: '#b7ddf7',
+    middle: '#6bafe0',
+    bottom: '#347fbd',
+    highlight: 'rgba(236, 248, 255, 0.76)',
+    text: '#123f65',
+    stroke: 'rgba(35, 101, 154, 0.82)',
+    shadow: 'rgba(31, 82, 122, 0.2)',
+  },
+  biomarker: {
+    top: '#ffe29a',
+    middle: '#f7ad65',
+    bottom: '#eb714b',
+    highlight: 'rgba(255, 247, 221, 0.7)',
+    text: '#6d321f',
+    stroke: 'rgba(181, 75, 44, 0.82)',
+    shadow: 'rgba(134, 58, 38, 0.2)',
+  },
+  unassigned: {
+    top: '#d7e1e7',
+    middle: '#94a9b7',
+    bottom: '#617b8c',
+    highlight: 'rgba(247, 250, 252, 0.78)',
+    text: '#263f4f',
+    stroke: 'rgba(73, 101, 119, 0.84)',
+    shadow: 'rgba(42, 65, 78, 0.18)',
+  },
 } as const
 const CHINA_COUNTRY_ALIASES = new Set([
   'china',
@@ -367,7 +426,7 @@ const UI_TEXT = {
   zh: {
     brandHome: '污水信息因子数据库首页',
     brandTitle: '污水信息因子数据库',
-    brandSubtitle: '污水生物标记物证据库',
+    brandSubtitle: 'Wastewater Biomarker Evidence',
     pageTitle: '地图可视化',
     searchPlaceholder: '搜索国家、省州、城市',
     searchLabel: '搜索地图地点',
@@ -384,14 +443,13 @@ const UI_TEXT = {
     chinese: '中文',
     english: 'English',
     layerPanelTitle: '显示图层',
-    labelsLayer: '地区名称',
     boundariesLayer: '边界线',
     pndlLayer: 'PNDL 气泡',
-    ambienceLayer: '背景动效',
     coverageNote:
       '覆盖说明：世界底图含国家和部分省州，中国含城市边界；PNDL 只显示后端数据库中可映射的位置。',
     filterTitle: '筛选条件',
-    filterSummaryEmpty: '等待后端筛选项',
+    filterOptionSearch: '搜索选项',
+    filterOptionEmpty: '没有匹配选项',
     targetClass: '目标类别',
     allTargetClasses: '全部',
     allCategories: '全部',
@@ -437,9 +495,13 @@ const UI_TEXT = {
     summaryOverview: '概览统计',
     pndlRanking: 'PNDL 排行',
     pndlComparison: 'PNDL 区域对比',
+    unassignedCountryComparison: '未定位数据（按所属国家的国家级口径比较）',
     pndlChartNeedsBiomarker:
       'PNDL 对比需要先选择具体生物标记物，避免把不同物质的负荷水平混在一起比较。',
     pndlChartNoData: '当前筛选下没有可用于对比的 PNDL 数据。',
+    pndlLogScale: '对数尺度',
+    unassignedCountryComparisonInsufficient:
+      '当前筛选仅有一个国家具备同口径 PNDL，暂不构成跨国比较；下方概览仍为该未定位数据本身。',
     clusterOverview: '聚合位置概览',
     categoryBreakdown: '目标类别构成',
     topBiomarkers: '主要生物标记物',
@@ -457,7 +519,7 @@ const UI_TEXT = {
     siteName: '报告名称',
     siteLinkStatus: '关联状态',
     siteCoverage: '覆盖记录',
-    centroidWarning: '气泡位于区域质心，不代表污水厂精确坐标',
+    inheritedBoundaryWarning: '该边界颜色继承自上级区域，数据未定位到当前层级',
     noSourceRecords: '暂无来源记录',
     sourcePending: '来源待补充',
     sourceLocation: '位置',
@@ -521,14 +583,13 @@ const UI_TEXT = {
     chinese: '中文',
     english: 'English',
     layerPanelTitle: 'Visible layers',
-    labelsLayer: 'Place labels',
     boundariesLayer: 'Boundaries',
     pndlLayer: 'PNDL bubbles',
-    ambienceLayer: 'Background motion',
     coverageNote:
       'Coverage: the world basemap includes countries and selected admin-1 areas; China includes city boundaries. PNDL points only show mappable backend records.',
     filterTitle: 'Filters',
-    filterSummaryEmpty: 'Waiting for backend filters',
+    filterOptionSearch: 'Search options',
+    filterOptionEmpty: 'No matching option',
     targetClass: 'Target class',
     allTargetClasses: 'All',
     allCategories: 'All',
@@ -576,9 +637,14 @@ const UI_TEXT = {
     summaryOverview: 'Overview',
     pndlRanking: 'PNDL ranking',
     pndlComparison: 'PNDL comparison',
+    unassignedCountryComparison:
+      'Unassigned data (compared at its parent country level)',
     pndlChartNeedsBiomarker:
       'Choose one biomarker first so PNDL values are not mixed across substances.',
     pndlChartNoData: 'No PNDL data is available for comparison under the current filters.',
+    pndlLogScale: 'Log scale',
+    unassignedCountryComparisonInsufficient:
+      'Only one country has comparable PNDL under these filters, so no cross-country comparison is shown. The overview below still describes the unassigned records.',
     clusterOverview: 'Cluster overview',
     categoryBreakdown: 'Category breakdown',
     topBiomarkers: 'Top biomarker',
@@ -596,7 +662,8 @@ const UI_TEXT = {
     siteName: 'Reported name',
     siteLinkStatus: 'Link status',
     siteCoverage: 'Records covered',
-    centroidWarning: 'Bubble marks the region centroid, not an exact plant coordinate',
+    inheritedBoundaryWarning:
+      'This boundary inherits its color from the parent region because the data is not located at this level',
     noSourceRecords: 'No source records',
     sourcePending: 'Source pending',
     sourceLocation: 'Location',
@@ -644,8 +711,14 @@ const UI_TEXT = {
 } as const
 
 const BACKEND_LABEL_TRANSLATIONS: Record<Locale, Record<string, string>> = {
-  zh: {},
+  zh: {
+    UNASSIGNED_ADMIN1: '未定位到省州',
+    UNASSIGNED_CITY: '未定位到城市',
+    'biomarker 数': '生物标记物数',
+  },
   en: {
+    UNASSIGNED_ADMIN1: 'Unassigned to state/province',
+    UNASSIGNED_CITY: 'Unassigned to city',
     'PNDL 聚合详情': 'PNDL cluster detail',
     'PNDL 详情': 'PNDL detail',
     PNDL年度趋势: 'PNDL yearly trend',
@@ -716,20 +789,20 @@ const BACKEND_LABEL_TRANSLATIONS: Record<Locale, Record<string, string>> = {
 
 const PNDL_COMPARISON_LABELS: Record<Locale, Record<string, string>> = {
   zh: {
-    country: '国家横向比较',
-    admin1: '省/州横向比较',
-    'china-city': '中国城市比较',
-    city: '中国城市横向比较',
-    'parent-city': '所属省/州内城市比较',
-    cluster: '聚合内位置对比',
+    country: '国家级',
+    admin1: '省/州级',
+    'china-city': '城市级',
+    city: '城市级',
+    'parent-city': '同省城市',
+    cluster: '聚合位置',
   },
   en: {
-    country: 'Country comparison',
-    admin1: 'Province/state comparison',
-    'china-city': 'China city comparison',
-    city: 'City comparison',
-    'parent-city': 'Cities in same province/state',
-    cluster: 'Locations in cluster',
+    country: 'Country level',
+    admin1: 'Admin-1 level',
+    'china-city': 'City level',
+    city: 'City level',
+    'parent-city': 'Same-admin cities',
+    cluster: 'Cluster locations',
   },
 }
 
@@ -816,6 +889,7 @@ let resizeTimer: number | undefined
 let regionTooltipTimer: number | undefined
 let mapStatusFrame: number | undefined
 let pointHoverFrame: number | undefined
+let hoverRefreshFrame: number | undefined
 let countryStatusTimer: number | undefined
 let pointSourceRefreshTimer: number | undefined
 let pendingCursorPoint: [number, number] | null = null
@@ -916,6 +990,28 @@ const currentYears = computed(() => {
     ] ?? []
   return withFallbackOption(years, ALL_YEAR_LABEL)
 })
+const targetClassFilterOptions = computed<MapFilterSelectOption[]>(() => [
+  { value: 'ALL', label: ui.value.allTargetClasses },
+  ...toFilterSelectOptions(
+    currentTargetClasses.value.filter((value) => value !== 'ALL'),
+    (value) => displayOptionLabel(value),
+  ),
+])
+const categoryFilterOptions = computed(() =>
+  toFilterSelectOptions(currentCategories.value, (value) => displayOptionLabel(value)),
+)
+const subcategoryFilterOptions = computed(() =>
+  toFilterSelectOptions(currentSubcategories.value, (value) => displayOptionLabel(value)),
+)
+const biomarkerFilterOptions = computed<MapFilterSelectOption[]>(() =>
+  currentBiomarkers.value.map((option) => ({
+    value: option.key,
+    label: displayOptionLabel(option.label),
+  })),
+)
+const yearFilterOptions = computed(() =>
+  toFilterSelectOptions(currentYears.value, (value) => displayOptionLabel(value)),
+)
 const selectedBiomarkerLabel = computed(
   () =>
     displayOptionLabel(
@@ -925,16 +1021,19 @@ const selectedBiomarkerLabel = computed(
       ? ui.value.allBiomarkers
       : selection.biomarkerKey),
 )
-const filterSummary = computed(() => {
-  const parts = [
-    displayOptionLabel(selection.targetClass),
-    displayOptionLabel(selection.category),
-    displayOptionLabel(selection.subcategory),
-    selectedBiomarkerLabel.value,
-    displayOptionLabel(selection.year),
-  ].filter(Boolean)
-  return parts.length ? parts.join(' / ') : ui.value.filterSummaryEmpty
-})
+const hasSpecificBiomarker = computed(() => selection.biomarkerKey !== ALL_BIOMARKER_KEY)
+const effectiveFilterContext = computed(() =>
+  detailFilterContext({
+    hasSpecificBiomarker: hasSpecificBiomarker.value,
+    biomarkerLabel: selectedBiomarkerLabel.value,
+    year: displayOptionLabel(selection.year),
+    fallbackParts: [
+      displayOptionLabel(selection.targetClass),
+      displayOptionLabel(selection.category),
+      displayOptionLabel(selection.subcategory),
+    ],
+  }),
+)
 const detailRegion = computed(() => selectedDetail.value?.region ?? null)
 const detailTitle = computed(() => {
   if (isClusterDetail.value)
@@ -951,17 +1050,23 @@ const detailSubtitle = computed(() => {
   const prefix = isClusterDetail.value
     ? ui.value.clusterOverview
     : detailRegion.value
-      ? locationPrecisionLabel(detailRegion.value.level)
+      ? isUnassignedAdmin1Stat(detailRegion.value)
+        ? ui.value.unassignedCountryComparison
+        : ''
       : ''
-  return [prefix, filterSummary.value].filter(Boolean).join(' · ') || filterSummary.value
+  return [prefix, effectiveFilterContext.value].filter(Boolean).join(' · ')
 })
+const detailLocationPrecision = computed(() =>
+  detailRegion.value && !isClusterDetail.value
+    ? locationPrecisionLabel(detailRegion.value.level)
+    : '',
+)
 const compactSummaryCards = computed(() =>
   compactExplorerSummaryCards(selectedDetail.value?.summaryCards ?? []),
 )
 const compactBiomarkers = computed(() =>
   sortBiomarkersByLiterature(selectedDetail.value?.topBiomarkers ?? []).slice(0, 20),
 )
-const hasSpecificBiomarker = computed(() => selection.biomarkerKey !== ALL_BIOMARKER_KEY)
 const availableYearRange = computed(() => selectionYearRange(currentYears.value))
 const fullDetailSummaryCards = computed(() =>
   overviewSummaryCards(
@@ -970,7 +1075,13 @@ const fullDetailSummaryCards = computed(() =>
     availableYearRange.value,
   ),
 )
-const pndlComparisons = computed(() => selectedDetail.value?.pndlComparisons ?? [])
+const pndlComparisons = computed(() =>
+  pndlComparisonsForRegion(
+    selectedDetail.value?.pndlComparisons ?? [],
+    detailRegion.value?.level,
+    detailRegion.value?.geoKey,
+  ),
+)
 const detailSourceRecords = computed(
   () => selectedDetail.value?.sourceRecords ?? selectedDetail.value?.sources ?? [],
 )
@@ -990,10 +1101,12 @@ const activePndlComparison = computed(() => {
   return comparisons.find((item) => item.key === activePndlComparisonKey.value) ?? comparisons[0]
 })
 const pndlChartRows = computed(() =>
-  ensureSelectedPndlChartRow(
-    filteredPndlComparisonRows(
-      activePndlComparison.value,
-      activePndlComparison.value?.rows ?? selectedDetail.value?.pndlRanking ?? [],
+  excludeUnassignedCityRows(
+    ensureSelectedPndlChartRow(
+      filteredPndlComparisonRows(
+        activePndlComparison.value,
+        activePndlComparison.value?.rows ?? selectedDetail.value?.pndlRanking ?? [],
+      ),
     ),
   ),
 )
@@ -1002,8 +1115,21 @@ const pndlChartColumnStyle = computed<Record<string, string>>(() => ({
   '--pndl-column-count': String(Math.max(pndlChartDisplayRows.value.length, 1)),
 }))
 const pndlRankingRows = computed(() => pndlChartRows.value.slice(0, 30))
+const isUnassignedCountryComparison = computed(
+  () =>
+    Boolean(detailRegion.value && isUnassignedAdmin1Stat(detailRegion.value)) &&
+    activePndlComparison.value?.scopeLevel === 'country',
+)
 const canRenderPndlChart = computed(
-  () => hasSpecificBiomarker.value && pndlChartRows.value.length > 0,
+  () =>
+    hasSpecificBiomarker.value &&
+    pndlChartRows.value.length > 0 &&
+    !(isUnassignedCountryComparison.value && pndlChartRows.value.length < 2),
+)
+const pndlChartStatusText = computed(() =>
+  isUnassignedCountryComparison.value && pndlChartRows.value.length === 1
+    ? ui.value.unassignedCountryComparisonInsufficient
+    : ui.value.pndlChartNoData,
 )
 const canShowPndlComparisonSection = computed(() => hasSpecificBiomarker.value)
 const pndlChartPositiveValues = computed(() =>
@@ -1016,8 +1142,12 @@ const pndlChartMin = computed(() => Math.min(...pndlChartPositiveValues.value, p
 const pndlChartUsesLogScale = computed(
   () => pndlChartMin.value > 0 && pndlChartMax.value / pndlChartMin.value > 100,
 )
-const pndlChartBottomLabel = computed(() =>
-  pndlChartUsesLogScale.value ? formatCompact(pndlChartMin.value) : '0',
+const pndlChartTicks = computed(() =>
+  pndlChartAxisTicks(
+    pndlChartMax.value,
+    pndlChartMin.value,
+    pndlChartUsesLogScale.value,
+  ),
 )
 const pndlChartTitle = computed(
   () =>
@@ -1162,8 +1292,11 @@ const compactDetailCallout = computed(() => {
     return `${formatNumber(locationCount)} ${ui.value.clusterCount} · ${ui.value.literature} ${formatNumber(detailRegion.value?.doiCount)}`
   }
   if (!detailRegion.value) return detailSubtitle.value
-  return locationPrecisionLabel(detailRegion.value.level)
+  return ''
 })
+const fullDetailCallout = computed(() =>
+  isClusterDetail.value ? compactDetailCallout.value : detailSubtitle.value,
+)
 const hasEmptyFilterData = computed(
   () =>
     Boolean(filters.value) &&
@@ -1277,6 +1410,8 @@ watch(
   () => selection.biomarkerKey,
   () => {
     if (programmaticSelectionUpdateInProgress) return
+    pointCollectionCache.clear()
+    schedulePointSourceRefresh(0)
     const nextYear =
       currentYears.value.find((item) => item === '全部年份') ?? currentYears.value[0] ?? '全部年份'
     if (selection.year !== nextYear) selection.year = nextYear
@@ -1294,12 +1429,9 @@ watch(
   },
   { deep: true },
 )
-watch(
-  () => selectedDetail.value?.pndlComparisons,
-  (comparisons) => {
-    activePndlComparisonKey.value = comparisons?.[0]?.key ?? ''
-  },
-)
+watch(pndlComparisons, (comparisons) => {
+  activePndlComparisonKey.value = comparisons[0]?.key ?? ''
+})
 watch(
   [detailRegion, activePndlComparison],
   ([region, comparison]) => {
@@ -1353,6 +1485,10 @@ onBeforeUnmount(() => {
     window.cancelAnimationFrame(pointHoverFrame)
     pointHoverFrame = undefined
   }
+  if (hoverRefreshFrame != null) {
+    window.cancelAnimationFrame(hoverRefreshFrame)
+    hoverRefreshFrame = undefined
+  }
   window.removeEventListener('resize', handleMapResize)
   window.removeEventListener('keydown', handleMapKeydown)
   statsController?.abort()
@@ -1391,6 +1527,13 @@ async function loadFilters() {
 function withFallbackOption(items: string[] | undefined, option: string) {
   const values = (items ?? []).filter(Boolean)
   return values.includes(option) ? values : [option, ...values]
+}
+
+function toFilterSelectOptions(
+  values: string[],
+  labelForValue: (value: string) => string,
+): MapFilterSelectOption[] {
+  return values.map((value) => ({ value, label: labelForValue(value) }))
 }
 
 function withAllCategory(categories?: string[]) {
@@ -1462,6 +1605,7 @@ async function initMap() {
         updateRegionHighlightSources()
       }
     })
+    map.on('movestart', clearHoverForCameraMove)
     map.on('move', scheduleLiveMapStatusUpdate)
     map.on('moveend', () => {
       const nextZoom = map?.getZoom() ?? mapZoomLevel.value
@@ -1474,6 +1618,7 @@ async function initMap() {
       }
       applyViewLayerVisibility()
       updateMapStatus()
+      scheduleHoverRefreshAtCursor()
     })
     map.on('mousemove', handleMapMouseMove)
     map.on('mouseleave', handleMapMouseLeave)
@@ -2121,9 +2266,9 @@ function addPndlLabelLayer(level: MapDisplayLevel) {
     layout: {
       'text-field': ['get', 'displayName'],
       'text-font': ['Noto Sans Medium'],
-      'text-size': ['interpolate', ['linear'], ['zoom'], minzoom, 11, 8.6, 13.5],
+      'text-size': gentleZoomTextSize(minzoom, 11, 8.6, 1.6),
       'text-variable-anchor': ['top', 'bottom', 'left', 'right'],
-      'text-radial-offset': level === 'country' ? 1.7 : level === 'admin1' ? 1.55 : 1.35,
+      'text-radial-offset': level === 'country' ? 1.8 : level === 'admin1' ? 1.62 : 1.4,
       'text-justify': 'auto',
       'text-allow-overlap': false,
       'text-ignore-placement': false,
@@ -2142,21 +2287,23 @@ function addPndlLabelLayer(level: MapDisplayLevel) {
 function addBubbleImages() {
   if (!map) return
   MAP_DISPLAY_LEVELS.forEach((level) => {
-    BUBBLE_IMAGE_BUCKETS[level].forEach((diameter, index) => {
-      const id = bubbleImageId(level, index)
-      if (map?.hasImage(id)) return
-      map?.addImage(id, createBubbleImage(diameter), { pixelRatio: 2 })
+    ;(['overview', 'biomarker', 'unassigned'] as const).forEach((variant) => {
+      BUBBLE_IMAGE_BUCKETS[level].forEach((diameter, index) => {
+        const id = bubbleImageId(level, index, variant)
+        if (map?.hasImage(id)) return
+        map?.addImage(id, createBubbleImage(diameter, variant), { pixelRatio: 2 })
+      })
     })
   })
 }
 
-function bubbleImageId(level: MapDisplayLevel, bucketIndex: number) {
-  return `wbe-bubble-${level}-${bucketIndex}`
+function bubbleImageId(level: MapDisplayLevel, bucketIndex: number, variant: BubblePinVariant) {
+  return `wbe-bubble-${variant}-${level}-${bucketIndex}`
 }
 
-function createBubbleImage(diameter: number) {
+function createBubbleImage(diameter: number, variant: BubblePinVariant) {
   const pixelRatio = 2
-  const padding = 6
+  const padding = 10
   const size = (diameter + padding * 2) * pixelRatio
   const canvas = document.createElement('canvas')
   canvas.width = size
@@ -2165,43 +2312,98 @@ function createBubbleImage(diameter: number) {
   if (!context) {
     return new ImageData(size, size)
   }
-  const center = size / 2
-  const radius = (diameter * pixelRatio) / 2
+  const palette = BUBBLE_PIN_PALETTES[variant]
+  const centerX = size / 2
+  const centerY = size / 2
+  const radius = diameter * pixelRatio * 0.43
   context.clearRect(0, 0, size, size)
-  context.shadowColor = 'rgba(31, 45, 52, 0.14)'
-  context.shadowBlur = 7 * pixelRatio
-  context.shadowOffsetY = 1.8 * pixelRatio
+
+  const pinPath = new Path2D()
+  pinPath.moveTo(centerX, centerY + radius * 1.16)
+  pinPath.bezierCurveTo(
+    centerX - radius * 0.23,
+    centerY + radius * 0.88,
+    centerX - radius * 0.94,
+    centerY + radius * 0.29,
+    centerX - radius * 0.94,
+    centerY - radius * 0.2,
+  )
+  pinPath.bezierCurveTo(
+    centerX - radius * 0.94,
+    centerY - radius * 0.78,
+    centerX - radius * 0.52,
+    centerY - radius * 1.1,
+    centerX,
+    centerY - radius * 1.1,
+  )
+  pinPath.bezierCurveTo(
+    centerX + radius * 0.54,
+    centerY - radius * 1.1,
+    centerX + radius * 0.94,
+    centerY - radius * 0.78,
+    centerX + radius * 0.94,
+    centerY - radius * 0.2,
+  )
+  pinPath.bezierCurveTo(
+    centerX + radius * 0.94,
+    centerY + radius * 0.29,
+    centerX + radius * 0.23,
+    centerY + radius * 0.88,
+    centerX,
+    centerY + radius * 1.16,
+  )
+  pinPath.closePath()
+
+  context.save()
+  context.shadowColor = palette.shadow
+  context.shadowBlur = 5 * pixelRatio
+  context.shadowOffsetY = 1.5 * pixelRatio
+  const gradient = context.createLinearGradient(
+    centerX,
+    centerY - radius * 1.1,
+    centerX,
+    centerY + radius * 1.16,
+  )
+  gradient.addColorStop(0, palette.top)
+  gradient.addColorStop(0.5, palette.middle)
+  gradient.addColorStop(1, palette.bottom)
+  context.fillStyle = gradient
+  context.fill(pinPath)
+  context.restore()
+
+  context.lineWidth = 1 * pixelRatio
+  context.strokeStyle = palette.stroke
+  context.stroke(pinPath)
+
   context.beginPath()
-  context.arc(center, center, radius, 0, Math.PI * 2)
-  context.fillStyle = 'rgba(243, 204, 122, 0.88)'
+  context.arc(centerX, centerY - radius * 0.31, radius * 0.5, 0, Math.PI * 2)
+  context.fillStyle = 'rgba(252, 254, 255, 0.94)'
   context.fill()
-  context.shadowColor = 'transparent'
-  context.lineWidth = 1.25 * pixelRatio
-  context.strokeStyle = 'rgba(155, 116, 50, 0.78)'
+  context.lineWidth = 0.9 * pixelRatio
+  context.strokeStyle = palette.highlight
   context.stroke()
   return context.getImageData(0, 0, size, size)
 }
 
 function bubbleIconImageExpression(level: MapDisplayLevel) {
+  return bubbleBucketImageExpression(level, 'biomarker')
+}
+
+function bubbleBucketImageExpression(level: MapDisplayLevel, variant: BubblePinVariant) {
   const buckets = BUBBLE_IMAGE_BUCKETS[level]
-  const thresholds =
-    level === 'country'
-      ? [20, 80, 300, 1000]
-      : level === 'admin1'
-        ? [5, 20, 80, 300]
-        : [3, 10, 30, 100]
+  const thresholds = BUBBLE_COUNT_THRESHOLDS[level]
   return [
     'step',
     pointCountNumberExpression(),
-    bubbleImageId(level, 0),
+    bubbleImageId(level, 0, variant),
     thresholds[0],
-    bubbleImageId(level, 1),
+    bubbleImageId(level, 1, variant),
     thresholds[1],
-    bubbleImageId(level, 2),
+    bubbleImageId(level, 2, variant),
     thresholds[2],
-    bubbleImageId(level, 3),
+    bubbleImageId(level, 3, variant),
     thresholds[3],
-    bubbleImageId(level, Math.min(4, buckets.length - 1)),
+    bubbleImageId(level, Math.min(4, buckets.length - 1), variant),
   ]
 }
 
@@ -2279,6 +2481,7 @@ function addMapSourcesAndLayers() {
 
   addBubbleImages()
   MAP_DISPLAY_LEVELS.forEach(addPndlPointLayers)
+  MAP_DISPLAY_LEVELS.forEach(addPndlCountLayer)
   applyMainlandCityLabelAuthority()
   applyViewLayerVisibility()
 }
@@ -2321,10 +2524,10 @@ function addPndlPointLayers(level: MapDisplayLevel) {
   const pointCount = pointCountNumberExpression()
   const baseRadius =
     level === 'country'
-      ? ['step', pointCount, 12, 20, 17, 80, 23, 300, 30, 1000, 37]
+      ? ['step', pointCount, 14, 20, 19, 80, 26, 300, 34, 1000, 41]
       : level === 'admin1'
-        ? ['step', pointCount, 8, 5, 11, 20, 15, 80, 20, 300, 26]
-        : ['step', pointCount, 6, 3, 8, 10, 10, 30, 13, 100, 17]
+        ? ['step', pointCount, 9, 5, 12.5, 20, 17, 80, 22.5, 300, 29]
+        : ['step', pointCount, 7, 3, 9, 10, 12.5, 30, 16, 100, 20]
 
   addMapLayer({
     id: pndlLayerId(level, 'heat-footprint'),
@@ -2354,12 +2557,13 @@ function addPndlPointLayers(level: MapDisplayLevel) {
     ...pndlLayerZoomRange(level),
     layout: {
       'icon-image': bubbleIconImageExpression(level),
+      'icon-anchor': 'center',
       'icon-allow-overlap': true,
-      'icon-ignore-placement': false,
+      'icon-ignore-placement': true,
       'symbol-sort-key': pointCount,
     },
     paint: {
-      'icon-opacity': levelTransitionOpacityExpression(level, level === 'city' ? 0.58 : 0.54),
+      'icon-opacity': levelTransitionOpacityExpression(level, level === 'city' ? 0.96 : 0.94),
     },
   })
 
@@ -2372,16 +2576,45 @@ function addPndlPointLayers(level: MapDisplayLevel) {
       'circle-radius': [
         '+',
         baseRadius,
-        ['case', ['boolean', ['feature-state', 'selected'], false], 5, 0],
+        [
+          'case',
+          ['boolean', ['feature-state', 'selected'], false],
+          6,
+          ['boolean', ['feature-state', 'hover'], false],
+          4.5,
+          0,
+        ],
       ],
-      'circle-color': 'rgba(255,255,255,0)',
-      'circle-stroke-color': MAP_HIGHLIGHT_STYLE.bubbleSelectedOuter,
-      'circle-stroke-width': ['case', ['boolean', ['feature-state', 'selected'], false], 3, 0],
+      'circle-color': [
+        'case',
+        ['boolean', ['feature-state', 'selected'], false],
+        'rgba(255,255,255,0.16)',
+        ['boolean', ['feature-state', 'hover'], false],
+        'rgba(255,255,255,0.22)',
+        'rgba(255,255,255,0)',
+      ],
+      'circle-stroke-color': '#b85435',
+      'circle-stroke-width': [
+        'case',
+        ['boolean', ['feature-state', 'selected'], false],
+        3,
+        ['boolean', ['feature-state', 'hover'], false],
+        2.5,
+        0,
+      ],
       'circle-opacity': [
         '*',
-        levelTransitionOpacityExpression(level, 0.9),
-        ['case', ['boolean', ['feature-state', 'selected'], false], 1, 0],
+        levelTransitionOpacityExpression(level, 0.92),
+        [
+          'case',
+          ['boolean', ['feature-state', 'selected'], false],
+          1,
+          ['boolean', ['feature-state', 'hover'], false],
+          0.9,
+          0,
+        ],
       ],
+      'circle-blur': 0.04,
     },
   })
 
@@ -2392,70 +2625,61 @@ function addPndlPointLayers(level: MapDisplayLevel) {
     ...pndlLayerZoomRange(level),
     paint: {
       'circle-radius': baseRadius,
-      'circle-color': [
-        'case',
-        ['boolean', ['feature-state', 'hover'], false],
-        MAP_HIGHLIGHT_STYLE.bubbleHover,
-        ['boolean', ['feature-state', 'selected'], false],
-        MAP_HIGHLIGHT_STYLE.bubbleSelected,
-        MAP_HIGHLIGHT_STYLE.bubble,
-      ],
-      'circle-opacity': [
-        'case',
-        ['boolean', ['feature-state', 'hover'], false],
-        levelTransitionOpacityExpression(level, 1),
-        ['boolean', ['feature-state', 'selected'], false],
-        levelTransitionOpacityExpression(level, 1),
-        levelTransitionOpacityExpression(level, level === 'city' ? 0.94 : 0.92),
-      ],
-      'circle-stroke-color': [
-        'case',
-        ['boolean', ['feature-state', 'selected'], false],
-        MAP_HIGHLIGHT_STYLE.bubbleSelectedLine,
-        ['boolean', ['feature-state', 'hover'], false],
-        MAP_HIGHLIGHT_STYLE.bubbleHoverLine,
-        MAP_HIGHLIGHT_STYLE.bubbleLine,
-      ],
-      'circle-stroke-width': [
-        'case',
-        ['boolean', ['feature-state', 'selected'], false],
-        3,
-        ['boolean', ['feature-state', 'hover'], false],
-        2.2,
-        1.45,
-      ],
-    },
-  })
-
-  addMapLayer({
-    id: pndlLayerId(level, 'bubble-count'),
-    type: 'symbol',
-    source: sourceId,
-    ...pndlLayerZoomRange(level),
-    layout: {
-      'text-field': ['to-string', ['coalesce', ['get', 'pointCount'], 1]],
-      'text-font': ['Noto Sans Regular'],
-      'text-size': ['step', pointCount, 9.8, 20, 11.2, 80, 12.6],
-      'symbol-sort-key': pointCount,
-      'text-allow-overlap': true,
-      'text-ignore-placement': true,
-    },
-    paint: {
-      'text-color': [
-        'case',
-        ['boolean', ['feature-state', 'hover'], false],
-        '#5c3c12',
-        ['boolean', ['feature-state', 'selected'], false],
-        '#5c3c12',
-        '#4b371c',
-      ],
-      'text-halo-color': 'rgba(255, 255, 255, 0.92)',
-      'text-halo-width': 0.85,
-      'text-opacity': levelTransitionOpacityExpression(level, 1),
+      'circle-color': 'rgba(0, 0, 0, 0)',
+      'circle-opacity': 0,
+      'circle-stroke-width': 0,
     },
   })
 
   addPndlLabelLayer(level)
+}
+
+function addPndlCountLayer(level: MapDisplayLevel) {
+  const pointCount = pointCountNumberExpression()
+  addMapLayer({
+    id: pndlLayerId(level, 'bubble-count'),
+    type: 'symbol',
+    source: pointSourceId(level),
+    ...pndlLayerZoomRange(level),
+    layout: {
+      'text-field': ['to-string', ['coalesce', ['get', 'pointCount'], 1]],
+      'text-font': ['Noto Sans Regular'],
+      'text-size': bubbleCountTextSize(level),
+      'symbol-sort-key': pointCount,
+      'text-offset': [0, -0.38],
+      'text-allow-overlap': true,
+      'text-ignore-placement': true,
+    },
+    paint: {
+      'text-color': BUBBLE_PIN_PALETTES.biomarker.text,
+      'text-halo-color': 'rgba(255, 255, 255, 0.72)',
+      'text-halo-width': 0.65,
+      'text-opacity': levelTransitionOpacityExpression(level, 1),
+    },
+  })
+}
+
+function bubbleCountTextSize(level: MapDisplayLevel, scale = 1) {
+  const thresholds = BUBBLE_COUNT_THRESHOLDS[level]
+  const sizes: readonly [number, number, number, number, number] =
+    level === 'country'
+      ? [9.8, 11.2, 12.6, 14, 15.2]
+      : level === 'admin1'
+        ? [8.8, 9.8, 11, 12.2, 13.4]
+        : [8.2, 9, 9.8, 10.8, 11.8]
+  return [
+    'step',
+    pointCountNumberExpression(),
+    sizes[0] * scale,
+    thresholds[0],
+    sizes[1] * scale,
+    thresholds[1],
+    sizes[2] * scale,
+    thresholds[2],
+    sizes[3] * scale,
+    thresholds[3],
+    sizes[4] * scale,
+  ]
 }
 
 function addBaseFillLayer(
@@ -2479,7 +2703,7 @@ function addBaseFillLayer(
 }
 
 function addBoundaryLineLayers() {
-  addLineLayer('country-line', 'country-boundaries', '#95a1a7', 0.9, 0, 0.42)
+  addLineLayer('country-line', 'country-boundaries', '#a9b3b8', 0.68, 0, 0.31)
   addLineLayer('admin1-line', 'admin1-boundaries', '#aab3b8', 0.6, 3.4, 0.38, [
     '!=',
     ['get', 'country_key'],
@@ -2526,7 +2750,7 @@ function addLineLayer(
               ['zoom'],
               minzoom,
               0.08,
-              minzoom + 0.8,
+              minzoom + 1.8,
               opacity,
               COUNTRY_BOUNDARY_FADE_START,
               opacity,
@@ -2584,14 +2808,14 @@ function addRegionHighlightLayers() {
     {
       fillOpacity: selectedRegionFillOpacityExpression(),
       lineOpacity: regionSourceMode === 'vector' ? 0.94 : regionOverlayOpacityExpression(0.92),
-      lineWidth: ['interpolate', ['linear'], ['zoom'], 0, 1.4, 8, 2.2],
+      lineWidth: regionHighlightLineWidthExpression('selected'),
       filter: regionVectorFilter(
         selectedRegionId() ? vectorRegionIds([selectedRegionId() as string]) : [],
       ),
       halo: {
         color: MAP_HIGHLIGHT_STYLE.selectedHalo,
         opacity: regionSourceMode === 'vector' ? 0.36 : regionOverlayOpacityExpression(0.34),
-        width: ['interpolate', ['linear'], ['zoom'], 0, 2.8, 8, 4.2],
+        width: regionSelectedHaloWidthExpression(),
       },
     },
   )
@@ -2602,7 +2826,7 @@ function addRegionHighlightLayers() {
     {
       fillOpacity: 0,
       lineOpacity: regionOverlayOpacityExpression(1),
-      lineWidth: ['interpolate', ['linear'], ['zoom'], 0, 2.1, 8, 3.1],
+      lineWidth: regionHighlightLineWidthExpression('hover'),
       filter: regionVectorFilter(
         activeHoveredRegionId() ? vectorRegionIds([activeHoveredRegionId() as string]) : [],
       ),
@@ -2625,7 +2849,7 @@ function addCityFallbackRegionLayers() {
     MAP_HIGHLIGHT_STYLE.selectedLine,
     selectedRegionFillOpacityExpression(),
     0.92,
-    ['interpolate', ['linear'], ['zoom'], 5.75, 1.3, 8, 2.2],
+    regionHighlightLineWidthExpression('selected'),
   )
   addCityFallbackLayerPair(
     'region-city-hover',
@@ -2633,7 +2857,7 @@ function addCityFallbackRegionLayers() {
     MAP_HIGHLIGHT_STYLE.hoverLine,
     0,
     1,
-    ['interpolate', ['linear'], ['zoom'], 5.75, 2.2, 8, 3.2],
+    regionHighlightLineWidthExpression('hover'),
   )
 }
 
@@ -2805,6 +3029,32 @@ function regionLevelEqualsExpression(level: string) {
   return ['any', ['==', ['get', 'boundaryLevel'], level], ['==', ['get', 'level'], level]]
 }
 
+function regionHighlightLineWidthExpression(kind: 'selected' | 'hover') {
+  const widths =
+    kind === 'selected'
+      ? { country: 1.45, admin1: 1.2, city: 0.92 }
+      : { country: 1.55, admin1: 1.28, city: 1 }
+  return [
+    'case',
+    regionLevelEqualsExpression('country'),
+    widths.country,
+    regionLevelEqualsExpression('admin1'),
+    widths.admin1,
+    widths.city,
+  ]
+}
+
+function regionSelectedHaloWidthExpression() {
+  return [
+    'case',
+    regionLevelEqualsExpression('country'),
+    2.15,
+    regionLevelEqualsExpression('admin1'),
+    1.72,
+    1.32,
+  ]
+}
+
 function regionVectorFadeExpression(opacity: number | unknown[]) {
   return [
     'interpolate',
@@ -2838,10 +3088,20 @@ function addLabelLayer(
     layout: {
       'text-field': ['get', 'display_name'],
       'text-font': ['Noto Sans Regular'],
-      'text-size': ['interpolate', ['linear'], ['zoom'], minzoom, textSize, 8, textSize + 2],
+      'text-size':
+        id === 'country-label'
+          ? [
+              '+',
+              ['to-number', ['coalesce', ['get', 'countryLabelSize'], textSize]],
+              ['interpolate', ['linear'], ['zoom'], minzoom, 0, 8, 1.1],
+            ]
+          : gentleZoomTextSize(minzoom, textSize, 8, 1.4),
+      ...(id === 'country-label'
+        ? { 'symbol-sort-key': ['to-number', ['coalesce', ['get', 'countryLabelSort'], 3]] }
+        : {}),
       'text-allow-overlap': false,
       'text-ignore-placement': false,
-      'text-padding': id === 'continent-label' ? 22 : 10,
+      'text-padding': id === 'continent-label' ? 22 : id === 'country-label' ? 7 : 10,
     },
     paint: {
       'text-color': id === 'continent-label' ? '#6d7f8a' : '#53616c',
@@ -2850,6 +3110,10 @@ function addLabelLayer(
       'text-opacity': id === 'continent-label' ? 0.74 : 0.92,
     },
   })
+}
+
+function gentleZoomTextSize(minZoom: number, baseSize: number, maxZoom: number, growth: number) {
+  return ['interpolate', ['linear'], ['zoom'], minZoom, baseSize, maxZoom, baseSize + growth]
 }
 
 function labelLayerFilter(includeChina: boolean, mainlandCitiesOnly: boolean) {
@@ -3464,12 +3728,7 @@ function buildRegionDataCollection(): FeatureCollection {
   }
   const collection: FeatureCollection = {
     type: 'FeatureCollection',
-    features: displayHeatRegionRows(level).flatMap((stat) => {
-      if (usesCompactHeatFootprint(stat.level, level)) return []
-      const feature = boundaryFeatureForStat(stat)
-      if (!feature) return []
-      return [cloneHighlightFeature(feature, stat)]
-    }),
+    features: displayHeatRegionRows(level).flatMap((stat) => heatFeaturesForStat(stat, level)),
   }
   regionDataCollectionCache = {
     stats: stats.value,
@@ -3479,6 +3738,81 @@ function buildRegionDataCollection(): FeatureCollection {
     collection,
   }
   return collection
+}
+
+function heatFeaturesForStat(stat: MapRegionStat, displayLevel: MapDisplayLevel) {
+  const fallbackBoundaries = inheritedHeatBoundaries(stat, displayLevel)
+  if (fallbackBoundaries.length) {
+    return fallbackBoundaries.map((feature) => inheritedHeatFeature(feature, stat))
+  }
+  const feature = boundaryFeatureForStat(stat)
+  return feature ? [cloneHighlightFeature(feature, stat)] : []
+}
+
+function inheritedHeatBoundaries(stat: MapRegionStat, displayLevel: MapDisplayLevel) {
+  if (stat.level === 'admin1' && isUnassignedStat(stat)) {
+    return admin1BoundariesForCountry(countryGroupKey(stat))
+  }
+  if (stat.level === 'city' && isUnassignedStat(stat)) {
+    return cityBoundariesForAdmin(unassignedParentGeoKey(stat))
+  }
+  if (stat.level === 'country' && displayLevel !== 'country') {
+    return admin1BoundariesForCountry(countryGroupKey(stat))
+  }
+  if (
+    stat.level === 'admin1' &&
+    displayLevel === 'city' &&
+    countryGroupKey(stat) === 'china'
+  ) {
+    return cityBoundariesForAdmin(stat.geoKey)
+  }
+  return []
+}
+
+function admin1BoundariesForCountry(countryKey: string) {
+  const collection = getCleanBoundaryCollection(
+    countryKey === 'china' ? 'chinaProvinces' : 'admin1',
+  )
+  if (!collection) return []
+  return collection.features.filter(
+    (feature) =>
+      canonicalCountryKey(
+        String(feature.properties.country_key ?? feature.properties.country_display ?? ''),
+      ) === canonicalCountryKey(countryKey),
+  )
+}
+
+function cityBoundariesForAdmin(parentGeoKey: string) {
+  const collection = getCleanBoundaryCollection('chinaCities')
+  if (!collection || !parentGeoKey) return []
+  return collection.features.filter((feature) => {
+    const featureParent = String(
+      feature.properties.parent_geo_key ?? feature.properties.province_key ?? '',
+    )
+    return featureParent === parentGeoKey
+  })
+}
+
+function inheritedHeatFeature(feature: GeoJsonFeature, stat: MapRegionStat) {
+  const boundaryLevel: MapRegionStat['level'] =
+    stat.level === 'country' || (stat.level === 'admin1' && !isUnassignedStat(stat))
+      ? stat.level === 'country'
+        ? 'admin1'
+        : 'city'
+      : stat.level
+  const cloned = cloneHighlightFeature(feature, stat)
+  return {
+    ...cloned,
+    properties: {
+      ...cloned.properties,
+      fallbackDisplayOnly: true,
+      boundaryLevel,
+      boundaryGeoKey: featureGeoKey(feature, boundaryLevel),
+      boundaryDisplayName: localizedBoundaryName(feature, boundaryLevel),
+      sourceLevel: stat.level,
+      sourceGeoKey: stat.geoKey,
+    },
+  }
 }
 
 function buildCityFallbackRegionDataCollection(): FeatureCollection {
@@ -3686,7 +4020,9 @@ function buildLabelPointCollection(
     const geoKey = featureGeoKey(feature, level)
     if (!geoKey || seen.has(geoKey)) return []
     const regionId = `${level}|${geoKey}`
-    const coordinates = labelPointForGeometry(feature.geometry)
+    const countryLabelArea = level === 'country' ? primaryPolygonArea(feature.geometry) : 0
+    const countryLabelStyle = countryLabelStyleForArea(countryLabelArea)
+    const coordinates = labelPointForGeometry(feature.geometry, level === 'country')
     if (!coordinates) return []
     seen.add(geoKey)
     const stat = findStatByLevelGeoKey(level, geoKey, feature.properties)
@@ -3711,6 +4047,9 @@ function buildLabelPointCollection(
           region_id: statRegionId || regionId,
           hasPndlRegion: activeRegionIds.has(statRegionId || regionId),
           isMainlandCity,
+          countryLabelArea,
+          countryLabelSize: countryLabelStyle.size,
+          countryLabelSort: countryLabelStyle.sort,
         },
         geometry: {
           type: 'Point',
@@ -3747,7 +4086,8 @@ function buildPointCollection(level: MapDisplayLevel) {
     cached.stats === stats.value &&
     cached.boundaryVersion === boundaryVersion.value &&
     cached.locale === locale.value &&
-    cached.level === level
+    cached.level === level &&
+    cached.specificBiomarker === hasSpecificBiomarker.value
   ) {
     return cached.collection
   }
@@ -3782,6 +4122,7 @@ function buildPointCollection(level: MapDisplayLevel) {
     boundaryVersion: boundaryVersion.value,
     locale: locale.value,
     level,
+    specificBiomarker: hasSpecificBiomarker.value,
     collection,
   })
   return collection
@@ -3991,6 +4332,13 @@ function titleCaseGeoKey(value: string) {
 }
 
 function representativeCoordinates(row: MapRegionStat): [number, number] | null {
+  if (isUnassignedStat(row)) {
+    const parentFeature = unassignedParentBoundaryFeature(row)
+    const parentCenter = parentFeature
+      ? labelPointForGeometry(parentFeature.geometry, true)
+      : null
+    if (parentCenter) return parentCenter
+  }
   const feature = findBoundaryFeature(row)
   const suppliedPoint =
     row.latitude != null && row.longitude != null
@@ -4031,7 +4379,7 @@ function findBoundaryFeature(row: MapRegionStat) {
   return null
 }
 
-function statProperties(stat: MapRegionStat) {
+function statProperties(stat: MapRegionStat): Record<string, unknown> {
   const featureId = pointFeatureId(stat)
   const displayName = localizedStatDisplayName(stat)
   return {
@@ -4050,6 +4398,9 @@ function statProperties(stat: MapRegionStat) {
       stat.level === 'city' &&
       isMainlandChinaCity(stat.geoKey, stat.parentGeoKey, adminGroupKey(stat)),
     biomarkerLabel: stat.biomarkerLabel,
+    specificBiomarker: hasSpecificBiomarker.value,
+    isUnassignedAdmin1: isUnassignedAdmin1Stat(stat),
+    isUnassigned: isUnassignedStat(stat),
     locationPrecision: locationPrecisionLabel(stat.level),
     pndlMedian: numberOrNull(stat.pndlMedianMgD1000inh),
     hasPndlValue: Number(stat.pndlMedianMgD1000inh ?? 0) > 0,
@@ -4078,7 +4429,21 @@ function statProperties(stat: MapRegionStat) {
   }
 }
 
-function localizedStatDisplayName(stat: MapRegionStat) {
+function localizedStatDisplayName(stat: MapRegionStat): string {
+  if (isUnassignedStat(stat)) {
+    const translationKey = stat.level === 'city' ? 'UNASSIGNED_CITY' : 'UNASSIGNED_ADMIN1'
+    const fallbackLabel =
+      stat.level === 'city'
+        ? locale.value === 'zh'
+          ? '未定位到城市'
+          : 'Unassigned to city'
+        : locale.value === 'zh'
+          ? '未定位到省州'
+          : 'Unassigned to state/province'
+    const parentName = unassignedParentDisplayName(stat)
+    const unassignedLabel = BACKEND_LABEL_TRANSLATIONS[locale.value][translationKey] || fallbackLabel
+    return parentName ? `${parentName} · ${unassignedLabel}` : unassignedLabel
+  }
   if (locale.value === 'zh') {
     const chineseName = localizedChineseStatName(stat)
     if (chineseName) return chineseName
@@ -4111,6 +4476,38 @@ function localizedChineseStatName(stat: MapRegionStat) {
   if (hasCjk(stat.city)) return singleLanguageLabel(stat.city as string, 'zh')
   if (hasCjk(stat.displayName)) return singleLanguageLabel(stat.displayName, 'zh')
   return ''
+}
+
+function isUnassignedAdmin1Stat(stat: MapRegionStat) {
+  return isUnassignedAdmin1GeoKey(stat.level, stat.geoKey)
+}
+
+function isUnassignedStat(stat: MapRegionStat) {
+  return isUnassignedGeoKey(stat.level, stat.geoKey)
+}
+
+function unassignedParentGeoKey(stat: MapRegionStat) {
+  if (stat.parentGeoKey) return stat.parentGeoKey
+  const parts = stat.geoKey.split('|')
+  return parts.length > 1 ? parts.slice(0, -1).join('|') : ''
+}
+
+function unassignedParentBoundaryFeature(stat: MapRegionStat) {
+  const parentGeoKey = unassignedParentGeoKey(stat)
+  if (!parentGeoKey) return null
+  const parentLevel: MapRegionStat['level'] = stat.level === 'city' ? 'admin1' : 'country'
+  const parentStat = findStatByLevelGeoKey(parentLevel, parentGeoKey)
+  return boundaryFeatureForLevelGeoKey(parentLevel, parentGeoKey, parentStat)
+}
+
+function unassignedParentDisplayName(stat: MapRegionStat): string {
+  const parentGeoKey = unassignedParentGeoKey(stat)
+  if (!parentGeoKey) return ''
+  const parentLevel: MapRegionStat['level'] = stat.level === 'city' ? 'admin1' : 'country'
+  const parentStat = findStatByLevelGeoKey(parentLevel, parentGeoKey)
+  if (parentStat) return localizedStatDisplayName(parentStat)
+  const feature = boundaryFeatureForLevelGeoKey(parentLevel, parentGeoKey)
+  return feature ? localizedBoundaryName(feature, parentLevel) : ''
 }
 
 function chineseAdmin1NameForStat(stat: MapRegionStat) {
@@ -4465,7 +4862,13 @@ function buildSearchCandidates() {
     const label =
       localizedStatDisplayName(row) || singleLanguageLabel(row.displayName, locale.value)
     if (!label) return
-    const center = representativeCoordinates(row) ?? undefined
+    const viewportFeature = isUnassignedStat(row)
+      ? unassignedParentBoundaryFeature(row)
+      : findBoundaryFeature(row)
+    const center =
+      (viewportFeature ? labelPointForGeometry(viewportFeature.geometry, true) : null) ??
+      representativeCoordinates(row) ??
+      undefined
     addSearchCandidate(candidates, {
       id: `stat|${row.level}|${row.geoKey}`,
       label,
@@ -4478,6 +4881,7 @@ function buildSearchCandidates() {
       level: row.level,
       geoKey: row.geoKey,
       center,
+      bbox: viewportFeature ? featureBbox(viewportFeature.geometry) ?? undefined : undefined,
     })
   })
   boundarySearchCandidates(candidates)
@@ -4513,9 +4917,15 @@ function boundarySearchCandidates(candidates: Map<string, MapSearchResult>) {
 function addSearchCandidate(candidates: Map<string, MapSearchResult>, candidate: MapSearchResult) {
   const key = `${candidate.level}|${candidate.geoKey}`
   const existing = candidates.get(key)
-  if (!existing || (!existing.center && candidate.center)) {
+  if (!existing) {
     candidates.set(key, candidate)
+    return
   }
+  candidates.set(key, {
+    ...existing,
+    center: existing.center ?? candidate.center,
+    bbox: existing.bbox ?? candidate.bbox,
+  })
 }
 
 function normalizeSearch(value: string) {
@@ -4557,15 +4967,6 @@ function focusSearchResult(result: MapSearchResult) {
   searchQuery.value = result.label
   isSearchFocused.value = false
   map.stop()
-  if (result.center) {
-    map.easeTo({
-      center: result.center,
-      zoom: clampZoom(Math.max(map.getZoom(), searchZoomForLevel(result.level))),
-      duration: 720,
-      essential: true,
-    })
-    return
-  }
   if (result.bbox) {
     map.fitBounds(
       [
@@ -4583,6 +4984,15 @@ function focusSearchResult(result: MapSearchResult) {
         maxZoom: clampZoom(searchZoomForLevel(result.level)),
       },
     )
+    return
+  }
+  if (result.center) {
+    map.easeTo({
+      center: result.center,
+      zoom: clampZoom(searchZoomForLevel(result.level)),
+      duration: 720,
+      essential: true,
+    })
   }
 }
 
@@ -5037,6 +5447,53 @@ function handleFeatureDoubleClick(event: MapLayerMouseEvent) {
   void openFeatureDetail(feature, 'full')
 }
 
+function clearHoverForCameraMove() {
+  if (hoverRefreshFrame != null) {
+    window.cancelAnimationFrame(hoverRefreshFrame)
+    hoverRefreshFrame = undefined
+  }
+  pendingPointHover = null
+  clearHoveredPoint()
+  setHoveredRegion(null)
+  hideTooltip()
+}
+
+function scheduleHoverRefreshAtCursor() {
+  if (!map || !pendingCursorPixel) return
+  if (hoverRefreshFrame != null) window.cancelAnimationFrame(hoverRefreshFrame)
+  hoverRefreshFrame = window.requestAnimationFrame(() => {
+    hoverRefreshFrame = undefined
+    refreshHoverAtCursor()
+  })
+}
+
+function refreshHoverAtCursor() {
+  if (!map || !pendingCursorPixel) return
+  const point = {
+    x: pendingCursorPixel[0],
+    y: pendingCursorPixel[1],
+  } as MapMouseEvent['point']
+  const feature = bestPointFeatureAtPoint(point)
+  if (!feature?.properties) {
+    clearHoveredPoint()
+    const fallbackRegion = bestRegionFeatureAtPoint(point)
+    if (
+      fallbackRegion &&
+      Boolean((fallbackRegion.properties as Record<string, unknown>).fallbackDisplayOnly)
+    ) {
+      setHoveredRegion(fallbackRegion)
+      showFeatureTooltip(fallbackRegion, map.unproject(pendingCursorPixel))
+    } else {
+      setHoveredRegion(null)
+      hideTooltip()
+    }
+    return
+  }
+  setHoveredPoint(feature)
+  hoverMatchingBoundaryForPoint(feature)
+  showFeatureTooltip(feature, map.unproject(pendingCursorPixel))
+}
+
 function handlePointMouseMove(event: MapLayerMouseEvent) {
   const feature = visiblePointFeatureFromEvent(event) ?? bestPointFeatureAtPoint(event.point)
   if (!feature?.properties) return
@@ -5355,7 +5812,11 @@ function regionReferenceFeatureFromProperties(props: Record<string, unknown>) {
   } as GeoJsonFeature
 }
 
-function boundaryFeatureForLevelGeoKey(level: string, geoKey: string, stat?: MapRegionStat) {
+function boundaryFeatureForLevelGeoKey(
+  level: string,
+  geoKey: string,
+  stat?: MapRegionStat,
+): GeoJsonFeature | null {
   if (!level || !geoKey) return null
   const names =
     level === 'country'
@@ -5377,7 +5838,7 @@ function enrichSingleBoundaryFeature(
   feature: GeoJsonFeature,
   level: MapRegionStat['level'],
   sourceStat?: MapRegionStat,
-) {
+): GeoJsonFeature {
   const geoKey = featureGeoKey(feature, level)
   const stat = sourceStat ?? buildStatIndex().get(`${level}|${geoKey}`)
   const statProps = stat ? statProperties(stat) : {}
@@ -5442,6 +5903,7 @@ function buildTooltipHtml(props: Record<string, unknown>) {
     props.pndlMedian == null
       ? ''
       : `<div class="map-tooltip-heat"><span>${escapeHtml(ui.value.pndlMedian)}</span><b>${median} mg/day/1000 inh</b></div>`
+  const spatialNote = props.fallbackDisplayOnly ? ui.value.inheritedBoundaryWarning : ''
   return `
     <div class="map-tooltip-card">
       <div class="map-tooltip-title">${title}</div>
@@ -5455,7 +5917,7 @@ function buildTooltipHtml(props: Record<string, unknown>) {
         <div>${escapeHtml(ui.value.biomarker)}：<b>${biomarker}</b></div>
       </div>
       ${heatLine}
-      <div class="map-tooltip-centroid">${escapeHtml(ui.value.centroidWarning)}</div>
+      ${spatialNote ? `<div class="map-tooltip-centroid">${escapeHtml(spatialNote)}</div>` : ''}
       <div class="map-tooltip-hint">${escapeHtml(ui.value.clickExploreHint)}</div>
     </div>
   `
@@ -5513,11 +5975,19 @@ function detailBiomarkerMeta(item: MapTopBiomarker) {
   ]
     .filter(Boolean)
     .join(' / ')
-  const counts = [
-    `${ui.value.records} ${formatNumber(item.recordCount)}`,
-    `${ui.value.literature} ${formatNumber(item.doiCount)}`,
-    `${ui.value.points} ${formatNumber(item.pointCount)}`,
-  ].join(' · ')
+  const metricLabels = {
+    records: ui.value.records,
+    literature: ui.value.literature,
+    points: ui.value.points,
+  }
+  const metricValues = {
+    records: item.recordCount,
+    literature: item.doiCount,
+    points: item.pointCount,
+  }
+  const counts = biomarkerExplorerMetricKeys(hasSpecificBiomarker.value)
+    .map((metric) => `${metricLabels[metric]} ${formatNumber(metricValues[metric])}`)
+    .join(' · ')
   return path ? `${path} · ${counts}` : counts
 }
 
@@ -5912,14 +6382,12 @@ function prefersReducedMotion() {
 }
 
 function pndlChartPercent(value?: number | null) {
-  const numericValue = Number(value ?? 0)
-  if (!Number.isFinite(numericValue) || numericValue <= 0 || pndlChartMax.value <= 0) return 0
-  if (pndlChartUsesLogScale.value && pndlChartMin.value > 0) {
-    const numerator = Math.log10(numericValue / pndlChartMin.value + 1)
-    const denominator = Math.log10(pndlChartMax.value / pndlChartMin.value + 1)
-    return Math.max(6, Math.min(100, (numerator / denominator) * 100))
-  }
-  return Math.max(4, Math.min(100, (numericValue / pndlChartMax.value) * 100))
+  return pndlChartScalePercent(
+    value,
+    pndlChartMax.value,
+    pndlChartMin.value,
+    pndlChartUsesLogScale.value,
+  )
 }
 
 async function applyDetailBiomarker(item: MapTopBiomarker) {
@@ -6011,8 +6479,18 @@ function handleMapMouseMove(event: MapMouseEvent) {
   pendingCursorPoint = [event.lngLat.lng, event.lngLat.lat]
   pendingCursorPixel = [event.point.x, event.point.y]
   scheduleLiveMapStatusUpdate()
-  if (hoveredPointId != null && !pointFeaturesAtPoint(event.point).length) {
+  if (pointFeaturesAtPoint(event.point).length) return
+  if (hoveredPointId != null) {
     clearHoveredPoint()
+  }
+  const fallbackRegion = bestRegionFeatureAtPoint(event.point)
+  if (
+    fallbackRegion &&
+    Boolean((fallbackRegion.properties as Record<string, unknown>).fallbackDisplayOnly)
+  ) {
+    setHoveredRegion(fallbackRegion)
+    showFeatureTooltip(fallbackRegion, event.lngLat)
+  } else {
     setHoveredRegion(null)
     hideTooltip()
   }
@@ -6215,7 +6693,10 @@ function handleMapResize() {
 function applyViewLayerVisibility() {
   if (!map) return
   const hierarchyReady = activeHierarchyBoundariesReady()
-  const pndlVisible = viewLayers.pndl && hierarchyReady
+  // Point coordinates are available independently of the staged boundary files.
+  // Keeping these layers visible avoids a blank marker interval while a newly
+  // entered hierarchy level is still loading its outlines.
+  const pndlVisible = viewLayers.pndl
   setLayerVisibility([...PNDL_LAYER_IDS], pndlVisible)
   setLayerVisibility(layerIdsForViewGroup('labels'), viewLayers.labels)
   setLayerVisibility([...PNDL_POINT_LABEL_LAYER_IDS], pndlVisible && viewLayers.labels)
@@ -6244,11 +6725,20 @@ function activeHierarchyBoundariesReady() {
 function applyHierarchyBoundaryWidths() {
   if (!map) return
   const level = activeMapLevel.value
-  setBoundaryLineWidth('country-line', level === 'country' ? 0.9 : level === 'admin1' ? 0.78 : 0.7)
-  const adminWidth = level === 'admin1' ? 0.6 : 0.58
+  setBoundaryLineWidth(
+    'country-line',
+    level === 'country' ? 0.68 : level === 'admin1' ? 0.72 : 0.64,
+  )
+  const adminWidth = level === 'city' ? 0.78 : 0.6
   setBoundaryLineWidth('admin1-line', adminWidth)
   setBoundaryLineWidth('china-province-line', adminWidth)
   setBoundaryLineWidth('china-city-line', 0.46)
+  if (map.getLayer('admin1-line')) {
+    map.setPaintProperty('admin1-line', 'line-opacity', level === 'city' ? 0.5 : 0.38)
+  }
+  if (map.getLayer('china-province-line')) {
+    map.setPaintProperty('china-province-line', 'line-opacity', level === 'city' ? 0.58 : 0.42)
+  }
   if (map.getLayer('china-city-line') && level === 'city') {
     map.setPaintProperty('china-city-line', 'line-opacity', 0.58)
     map.setPaintProperty('china-city-line', 'line-blur', 0.08)
@@ -6373,6 +6863,19 @@ function localizedSummaryCardNote(card: MapSummaryCard) {
   return localizedBackendLabel(card.note)
 }
 
+function overviewSummaryCardClass(card: MapSummaryCard) {
+  const label = String(card.label ?? '')
+    .replace(/\s+/g, '')
+    .toLowerCase()
+  if (label.includes('点位') || label.includes('位置')) return 'metric-sites'
+  if (label.includes('文献')) return 'metric-literature'
+  if (label.includes('记录')) return 'metric-records'
+  if (label.includes('biomarker') || label.includes('生物标记物')) return 'metric-biomarkers'
+  if (label.includes('pndl') || label.includes('年份')) return 'metric-years'
+  if (label.includes('城市')) return 'metric-cities'
+  return 'metric-default'
+}
+
 function localizedPndlItemDisplayName(item: MapPndlRankingItem) {
   const stat = findStatByLevelGeoKey(item.level, item.geoKey, {
     display_name: item.displayName,
@@ -6480,7 +6983,10 @@ function geometryBbox(geometry: unknown): [number, number, number, number] | nul
   return bboxFromPoints(points)
 }
 
-function labelPointForGeometry(geometry: unknown): [number, number] | null {
+function labelPointForGeometry(
+  geometry: unknown,
+  preferMaximumClearance = false,
+): [number, number] | null {
   const rings = primaryPolygonRings(geometry)
   if (!rings) {
     const bbox = featureBbox(geometry)
@@ -6490,11 +6996,83 @@ function labelPointForGeometry(geometry: unknown): [number, number] | null {
   if (exterior.length < 3) return null
   const bbox = bboxFromPoints(exterior)
   const candidates = [
+    preferMaximumClearance ? bestInteriorClearancePoint(rings, bbox) : null,
     polygonCentroid(exterior),
     [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2] as [number, number],
     bestInteriorGridPoint(rings, bbox),
   ].filter(Boolean) as [number, number][]
   return candidates.find((point) => pointInPolygon(point, rings)) ?? candidates[0] ?? null
+}
+
+function primaryPolygonArea(geometry: unknown) {
+  const rings = primaryPolygonRings(geometry)
+  return rings ? polygonArea(rings) / 2 : 0
+}
+
+function bestInteriorClearancePoint(
+  rings: unknown[],
+  bbox: [number, number, number, number],
+) {
+  const exterior = coordinateRing(rings[0])
+  const candidates: [number, number][] = []
+  const centroidPoint = polygonCentroid(exterior)
+  if (centroidPoint) candidates.push(centroidPoint)
+  candidates.push([(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2])
+  const steps = 10
+  for (let x = 1; x < steps; x += 1) {
+    for (let y = 1; y < steps; y += 1) {
+      candidates.push([
+        bbox[0] + ((bbox[2] - bbox[0]) * x) / steps,
+        bbox[1] + ((bbox[3] - bbox[1]) * y) / steps,
+      ])
+    }
+  }
+  let bestPoint: [number, number] | null = null
+  let bestClearance = -1
+  for (const point of candidates) {
+    if (!pointInPolygon(point, rings)) continue
+    const clearance = Math.min(
+      ...rings.map((ring) => distanceToRing(point, coordinateRing(ring))),
+    )
+    if (clearance > bestClearance) {
+      bestClearance = clearance
+      bestPoint = point
+    }
+  }
+  return bestPoint
+}
+
+function distanceToRing(point: [number, number], ring: [number, number][]) {
+  let distance = Infinity
+  for (let index = 0; index < ring.length; index += 1) {
+    const start = ring[index]
+    const end = ring[(index + 1) % ring.length]
+    if (!start || !end) continue
+    distance = Math.min(distance, distanceToSegment(point, start, end))
+  }
+  return distance
+}
+
+function distanceToSegment(
+  point: [number, number],
+  start: [number, number],
+  end: [number, number],
+) {
+  const deltaX = end[0] - start[0]
+  const deltaY = end[1] - start[1]
+  if (deltaX === 0 && deltaY === 0) return Math.hypot(point[0] - start[0], point[1] - start[1])
+  const projection = Math.max(
+    0,
+    Math.min(
+      1,
+      ((point[0] - start[0]) * deltaX + (point[1] - start[1]) * deltaY) /
+        (deltaX * deltaX + deltaY * deltaY),
+    ),
+  )
+  return Math.hypot(
+    point[0] - (start[0] + projection * deltaX),
+    point[1] - (start[1] + projection * deltaY),
+  )
 }
 
 function primaryPolygonRings(geometry: unknown): unknown[] | null {
@@ -6690,11 +7268,7 @@ function escapeHtml(value: string) {
   <main class="map-page">
     <header class="site-header">
       <RouterLink class="brand" to="/" :aria-label="ui.brandHome">
-        <span class="brand-logo" aria-hidden="true">
-          <span class="brand-drop"></span>
-          <span class="brand-bars"><i></i><i></i><i></i></span>
-          <span class="brand-line"><i></i><i></i></span>
-        </span>
+        <BrandMark :size="40" />
         <span>
           <strong>{{ ui.brandTitle }}</strong>
           <small>{{ ui.brandSubtitle }}</small>
@@ -6835,20 +7409,12 @@ function escapeHtml(value: string) {
           <div v-if="isLayerPanelOpen" class="layer-panel" @click.stop>
             <strong>{{ ui.layerPanelTitle }}</strong>
             <label>
-              <input v-model="viewLayers.labels" type="checkbox" />
-              <span>{{ ui.labelsLayer }}</span>
-            </label>
-            <label>
               <input v-model="viewLayers.boundaries" type="checkbox" />
               <span>{{ ui.boundariesLayer }}</span>
             </label>
             <label>
               <input v-model="viewLayers.pndl" type="checkbox" />
               <span>{{ ui.pndlLayer }}</span>
-            </label>
-            <label>
-              <input v-model="viewLayers.ambience" type="checkbox" />
-              <span>{{ ui.ambienceLayer }}</span>
             </label>
             <p>{{ ui.coverageNote }}</p>
           </div>
@@ -6859,65 +7425,56 @@ function escapeHtml(value: string) {
         <form class="floating-filters" :aria-hidden="!isFilterOpen" @submit.prevent="refreshStats">
           <div class="filter-head">
             <strong>{{ ui.filterTitle }}</strong>
-            <small>{{ filterSummary }}</small>
           </div>
-          <label>
-            <span>{{ ui.targetClass }}</span>
-            <select v-model="selection.targetClass" :disabled="isLoadingFilters || !filters">
-              <option value="ALL">{{ ui.allTargetClasses }}</option>
-              <option
-                v-for="targetClass in currentTargetClasses"
-                :key="targetClass"
-                :value="targetClass"
-              >
-                {{ displayOptionLabel(targetClass) }}
-              </option>
-            </select>
-          </label>
+          <MapFilterSelect
+            id="map-target-class-filter"
+            v-model="selection.targetClass"
+            :label="ui.targetClass"
+            :options="targetClassFilterOptions"
+            :disabled="isLoadingFilters || !filters"
+            :search-placeholder="ui.filterOptionSearch"
+            :empty-text="ui.filterOptionEmpty"
+          />
 
-          <label>
-            <span>{{ ui.category }}</span>
-            <select v-model="selection.category" :disabled="isLoadingFilters || !filters">
-              <option v-for="category in currentCategories" :key="category" :value="category">
-                {{ displayOptionLabel(category) }}
-              </option>
-            </select>
-          </label>
+          <MapFilterSelect
+            id="map-category-filter"
+            v-model="selection.category"
+            :label="ui.category"
+            :options="categoryFilterOptions"
+            :disabled="isLoadingFilters || !filters"
+            :search-placeholder="ui.filterOptionSearch"
+            :empty-text="ui.filterOptionEmpty"
+          />
 
-          <label>
-            <span>{{ ui.subcategory }}</span>
-            <select v-model="selection.subcategory" :disabled="!currentSubcategories.length">
-              <option
-                v-for="subcategory in currentSubcategories"
-                :key="subcategory"
-                :value="subcategory"
-              >
-                {{ displayOptionLabel(subcategory) }}
-              </option>
-            </select>
-          </label>
+          <MapFilterSelect
+            id="map-subcategory-filter"
+            v-model="selection.subcategory"
+            :label="ui.subcategory"
+            :options="subcategoryFilterOptions"
+            :disabled="!currentSubcategories.length"
+            :search-placeholder="ui.filterOptionSearch"
+            :empty-text="ui.filterOptionEmpty"
+          />
 
-          <label>
-            <span>{{ ui.biomarker }}</span>
-            <select v-model="selection.biomarkerKey" :disabled="!currentBiomarkers.length">
-              <option
-                v-for="biomarker in currentBiomarkers"
-                :key="biomarker.key"
-                :value="biomarker.key"
-              >
-                {{ displayOptionLabel(biomarker.label) }}
-              </option>
-            </select>
-          </label>
+          <MapFilterSelect
+            id="map-biomarker-filter"
+            v-model="selection.biomarkerKey"
+            :label="ui.biomarker"
+            :options="biomarkerFilterOptions"
+            :disabled="!currentBiomarkers.length"
+            :search-placeholder="ui.filterOptionSearch"
+            :empty-text="ui.filterOptionEmpty"
+          />
 
-          <label>
-            <span>{{ ui.year }}</span>
-            <select v-model="selection.year" :disabled="!currentYears.length">
-              <option v-for="year in currentYears" :key="year" :value="year">
-                {{ displayOptionLabel(year) }}
-              </option>
-            </select>
-          </label>
+          <MapFilterSelect
+            id="map-year-filter"
+            v-model="selection.year"
+            :label="ui.year"
+            :options="yearFilterOptions"
+            :disabled="!currentYears.length"
+            :search-placeholder="ui.filterOptionSearch"
+            :empty-text="ui.filterOptionEmpty"
+          />
 
           <div class="filter-actions">
             <button class="filter-reset-button" type="button" @click="resetFilters">
@@ -6981,8 +7538,10 @@ function escapeHtml(value: string) {
         <header>
           <div>
             <span>{{ selectedDetail?.cluster ? ui.clusterTitle : ui.detailExploreTitle }}</span>
-            <h2 v-if="selectedDetail">{{ detailTitle }}</h2>
-            <p v-if="selectedDetail">{{ detailSubtitle }}</p>
+            <div v-if="selectedDetail" class="detail-region-title-line">
+              <h2>{{ detailTitle }}</h2>
+              <small v-if="detailLocationPrecision">{{ detailLocationPrecision }}</small>
+            </div>
           </div>
           <div class="detail-actions">
             <button
@@ -7001,49 +7560,55 @@ function escapeHtml(value: string) {
           </div>
         </header>
 
-        <template v-if="isLoadingDetail">
-          <div class="detail-loading-card">
-            <strong>{{ ui.loadingDetail }}</strong>
-            <span>{{ filterSummary }}</span>
+        <Transition name="detail-content">
+          <div
+            v-if="isLoadingDetail"
+            key="loading"
+            class="detail-loading-state"
+            role="status"
+            :aria-label="ui.loadingDetail"
+          >
+            <span class="detail-loading-spinner" aria-hidden="true"></span>
+            <span class="visually-hidden">{{ ui.loadingDetail }}</span>
           </div>
-        </template>
-
-        <template v-else-if="selectedDetail">
-          <p v-if="compactDetailCallout" class="detail-callout">{{ compactDetailCallout }}</p>
-          <div v-if="compactSummaryCards.length" class="detail-summary-grid compact">
-            <article v-for="card in compactSummaryCards" :key="card.label">
-              <span>{{ compactSummaryCardLabel(card) }}</span>
-              <strong>{{ card.value }}</strong>
-            </article>
-          </div>
-
-          <section class="region-explorer-section">
-            <h3>{{ ui.detailExploreTitle }}</h3>
-            <div v-if="compactBiomarkers.length" class="region-biomarker-list">
-              <button
-                v-for="item in compactBiomarkers"
-                :key="item.biomarkerKey"
-                class="region-biomarker-action"
-                type="button"
-                :disabled="!canApplyDetailBiomarker(item)"
-                @click.stop="applyDetailBiomarker(item)"
-              >
-                <span class="region-biomarker-name">
-                  <strong>{{ item.biomarkerLabel }}</strong>
-                  <i :class="{ muted: !item.hasPndl }">
-                    {{ detailBiomarkerPill(item) }}
-                  </i>
-                </span>
-                <small>{{ detailBiomarkerMeta(item) }}</small>
-              </button>
+          <div v-else-if="selectedDetail" key="content" class="detail-loaded-content">
+            <p v-if="compactDetailCallout" class="detail-callout">{{ compactDetailCallout }}</p>
+            <div v-if="compactSummaryCards.length" class="detail-summary-grid compact">
+              <article v-for="card in compactSummaryCards" :key="card.label">
+                <span>{{ compactSummaryCardLabel(card) }}</span>
+                <strong>{{ card.value }}</strong>
+              </article>
             </div>
-            <p v-else class="drawer-message">{{ ui.detailExploreEmpty }}</p>
-            <p class="region-explorer-note">{{ ui.detailExploreNote }}</p>
-          </section>
-        </template>
 
-        <p v-else-if="!detailError" class="drawer-message">{{ ui.emptyBackendDetail }}</p>
-        <p v-if="detailError" class="drawer-message error">{{ detailError }}</p>
+            <section class="region-explorer-section">
+              <h3>{{ ui.detailExploreTitle }}</h3>
+              <div v-if="compactBiomarkers.length" class="region-biomarker-list">
+                <button
+                  v-for="item in compactBiomarkers"
+                  :key="item.biomarkerKey"
+                  class="region-biomarker-action"
+                  type="button"
+                  :disabled="!canApplyDetailBiomarker(item)"
+                  @click.stop="applyDetailBiomarker(item)"
+                >
+                  <span class="region-biomarker-name">
+                    <strong>{{ item.biomarkerLabel }}</strong>
+                    <i :class="{ muted: !item.hasPndl }">
+                      {{ detailBiomarkerPill(item) }}
+                    </i>
+                  </span>
+                  <small>{{ detailBiomarkerMeta(item) }}</small>
+                </button>
+              </div>
+              <p v-else class="drawer-message">{{ ui.detailExploreEmpty }}</p>
+              <p class="region-explorer-note">{{ ui.detailExploreNote }}</p>
+            </section>
+          </div>
+          <p v-else-if="detailError" key="error" class="drawer-message error">
+            {{ detailError }}
+          </p>
+          <p v-else key="empty" class="drawer-message">{{ ui.emptyBackendDetail }}</p>
+        </Transition>
       </aside>
 
       <Transition name="full-detail-modal">
@@ -7057,8 +7622,10 @@ function escapeHtml(value: string) {
             <header>
               <div>
                 <span>{{ ui.fullDetailTitle }}</span>
-                <h2>{{ detailTitle }}</h2>
-                <p>{{ detailSubtitle }}</p>
+                <div class="full-detail-title-line">
+                  <h2>{{ detailTitle }}</h2>
+                  <p v-if="detailLocationPrecision">{{ detailLocationPrecision }}</p>
+                </div>
               </div>
               <button type="button" :aria-label="ui.closeFullDetail" @click.stop="closeFullDetail">
                 ×
@@ -7066,17 +7633,20 @@ function escapeHtml(value: string) {
             </header>
 
             <div v-if="selectedDetail" class="full-detail-content">
-              <section class="detail-callout-section">
-                <p class="detail-callout">
-                  {{ isClusterDetail ? compactDetailCallout : detailSubtitle }}
-                </p>
+              <section
+                v-if="!canShowPndlComparisonSection && fullDetailCallout"
+                class="detail-callout-section"
+              >
+                <p class="detail-callout">{{ fullDetailCallout }}</p>
               </section>
 
               <section v-if="canShowPndlComparisonSection" class="pndl-chart-section">
                 <div class="section-title-row">
-                  <div>
+                  <div class="pndl-section-heading">
                     <h3>{{ ui.pndlComparison }}</h3>
-                    <span>{{ pndlChartTitle }} · {{ selectedBiomarkerLabel }}</span>
+                    <span v-if="effectiveFilterContext" class="pndl-context-inline">
+                      {{ effectiveFilterContext }}
+                    </span>
                   </div>
                   <div v-if="pndlComparisons.length > 1" class="pndl-modebar">
                     <button
@@ -7095,67 +7665,99 @@ function escapeHtml(value: string) {
                 </p>
                 <div v-if="canRenderPndlChart" class="pndl-column-wrap">
                   <div class="pndl-column-axis">
-                    <span>{{ formatCompact(pndlChartMax) }}</span>
-                    <i>PNDL</i>
-                    <span>{{ pndlChartBottomLabel }}</span>
+                    <div class="pndl-column-axis-title">
+                      <i>PNDL</i>
+                      <small>{{ ui.heatLegendUnit }}</small>
+                      <em v-if="pndlChartUsesLogScale">{{ ui.pndlLogScale }}</em>
+                    </div>
+                    <span
+                      v-for="tick in pndlChartTicks"
+                      :key="`axis-${tick.ratio}`"
+                      :style="{ bottom: `${tick.ratio * 100}%` }"
+                    >
+                      {{ formatCompact(tick.value) }}
+                    </span>
                   </div>
-                  <div
-                    ref="pndlChartScrollRef"
-                    class="pndl-column-chart"
-                    :style="pndlChartColumnStyle"
-                    @scroll="hidePndlColumnTooltip"
-                  >
-                    <article
-                      v-for="item in pndlChartDisplayRows"
-                      :key="`${item.level}-${item.geoKey}`"
-                      class="pndl-column-item"
-                      :class="{
-                        selected: isPndlChartItemSelected(item),
-                        'no-pndl': !hasPositivePndlValue(item.pndlMedianMgD1000inh),
-                      }"
-                      :data-chart-key="pndlRankingKey(item)"
-                      @mouseenter="showPndlColumnTooltip(item, $event)"
-                      @mousemove="showPndlColumnTooltip(item, $event)"
-                      @mouseleave="hidePndlColumnTooltip"
-                    >
-                      <div class="pndl-column-barbox">
-                        <i
-                          class="pndl-column-bar"
-                          :style="{ height: `${pndlChartPercent(item.pndlMedianMgD1000inh)}%` }"
-                        ></i>
-                      </div>
-                      <strong>{{ localizedPndlItemDisplayName(item) }}</strong>
-                      <span>{{ pndlChartValueLabel(item.pndlMedianMgD1000inh) }}</span>
-                    </article>
+                  <div class="pndl-column-plot">
+                    <div class="pndl-column-grid" aria-hidden="true">
+                      <i
+                        v-for="tick in pndlChartTicks"
+                        :key="`grid-${tick.ratio}`"
+                        :style="{ bottom: `${tick.ratio * 100}%` }"
+                      ></i>
+                    </div>
                     <div
-                      v-if="pndlColumnTooltipState.visible"
-                      class="detail-chart-tooltip pndl-column-tooltip"
-                      :style="{
-                        left: `${pndlColumnTooltipState.x}px`,
-                        top: `${pndlColumnTooltipState.y}px`,
-                      }"
+                      ref="pndlChartScrollRef"
+                      class="pndl-column-chart"
+                      :style="pndlChartColumnStyle"
+                      @scroll="hidePndlColumnTooltip"
                     >
-                      <strong>{{ pndlColumnTooltipState.title }}</strong>
-                      <div class="detail-chart-tooltip-primary">
-                        <span>{{ pndlColumnTooltipState.label }}</span>
-                        <b>{{ pndlColumnTooltipState.value }}</b>
-                      </div>
-                      <div class="detail-chart-tooltip-metrics">
-                        <span v-for="metric in pndlColumnTooltipState.metrics" :key="metric.label">
-                          <small>{{ metric.label }}</small>
-                          <b>{{ metric.value }}</b>
-                        </span>
+                      <article
+                        v-for="item in pndlChartDisplayRows"
+                        :key="`${item.level}-${item.geoKey}`"
+                        class="pndl-column-item"
+                        :class="{
+                          selected: isPndlChartItemSelected(item),
+                          'no-pndl': !hasPositivePndlValue(item.pndlMedianMgD1000inh),
+                        }"
+                        :data-chart-key="pndlRankingKey(item)"
+                        @mouseenter="showPndlColumnTooltip(item, $event)"
+                        @mousemove="showPndlColumnTooltip(item, $event)"
+                        @mouseleave="hidePndlColumnTooltip"
+                      >
+                        <div class="pndl-column-barbox">
+                          <span
+                            class="pndl-column-value"
+                            :style="{
+                              bottom: `calc(${pndlChartPercent(item.pndlMedianMgD1000inh)}% + 7px)`,
+                            }"
+                          >
+                            {{ pndlChartValueLabel(item.pndlMedianMgD1000inh) }}
+                          </span>
+                          <i
+                            class="pndl-column-bar"
+                            :style="{ height: `${pndlChartPercent(item.pndlMedianMgD1000inh)}%` }"
+                          ></i>
+                        </div>
+                        <strong>{{ localizedPndlItemDisplayName(item) }}</strong>
+                      </article>
+                      <div
+                        v-if="pndlColumnTooltipState.visible"
+                        class="detail-chart-tooltip pndl-column-tooltip"
+                        :style="{
+                          left: `${pndlColumnTooltipState.x}px`,
+                          top: `${pndlColumnTooltipState.y}px`,
+                        }"
+                      >
+                        <strong>{{ pndlColumnTooltipState.title }}</strong>
+                        <div class="detail-chart-tooltip-primary">
+                          <span>{{ pndlColumnTooltipState.label }}</span>
+                          <b>{{ pndlColumnTooltipState.value }}</b>
+                        </div>
+                        <div class="detail-chart-tooltip-metrics">
+                          <span v-for="metric in pndlColumnTooltipState.metrics" :key="metric.label">
+                            <small>{{ metric.label }}</small>
+                            <b>{{ metric.value }}</b>
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
-                <p v-else class="pndl-status-card">{{ ui.pndlChartNoData }}</p>
+                <p v-else class="pndl-status-card">{{ pndlChartStatusText }}</p>
               </section>
 
-              <section v-if="!isClusterDetail || !selectedDetail.locations?.length">
+              <section
+                v-if="!isClusterDetail || !selectedDetail.locations?.length"
+                class="overview-summary-section"
+              >
                 <h3>{{ isClusterDetail ? ui.clusterOverview : ui.summaryOverview }}</h3>
-                <div class="detail-summary-grid">
-                  <article v-for="card in fullDetailSummaryCards" :key="card.label">
+                <div class="detail-summary-grid overview">
+                  <article
+                    v-for="card in fullDetailSummaryCards"
+                    :key="card.label"
+                    :class="overviewSummaryCardClass(card)"
+                  >
                     <span>{{ localizedSummaryCardLabel(card) }}</span>
                     <strong>{{ card.value }}</strong>
                     <small v-if="card.note">{{ localizedSummaryCardNote(card) }}</small>
@@ -7224,9 +7826,9 @@ function escapeHtml(value: string) {
                         @mousemove="showTrendPointTooltip(series, point, $event)"
                         @mouseleave="hideTrendPointTooltip"
                       >
-                        <circle class="trend-point-hit" :cx="point.x" :cy="point.y" r="14"></circle>
-                        <circle :cx="point.x" :cy="point.y" r="5"></circle>
-                        <text :x="point.x" :y="point.y - 12">{{ point.label }}</text>
+                        <circle class="trend-point-hit" :cx="point.x" :cy="point.y" r="11"></circle>
+                        <circle :cx="point.x" :cy="point.y" r="3.8"></circle>
+                        <text :x="point.x" :y="point.y - 10">{{ point.label }}</text>
                         <text :x="point.x" y="236">{{ point.year }}</text>
                       </g>
                     </svg>
@@ -7271,7 +7873,7 @@ function escapeHtml(value: string) {
 
               <details v-if="canRenderPndlChart" class="pndl-ranking-section">
                 <summary>
-                  <div>
+                  <div class="pndl-ranking-summary">
                     <h3>{{ ui.pndlRanking }}</h3>
                     <span>{{ pndlChartTitle }}</span>
                   </div>
@@ -8026,7 +8628,7 @@ function escapeHtml(value: string) {
   position: relative;
   display: grid;
   grid-template-columns: 1fr;
-  gap: 10px;
+  gap: 9px;
   padding: 13px;
   border: 1px solid rgba(100, 121, 133, 0.16);
   border-radius: 8px;
@@ -8042,8 +8644,7 @@ function escapeHtml(value: string) {
 .filter-head {
   min-width: 0;
   display: grid;
-  gap: 3px;
-  padding-bottom: 4px;
+  padding-bottom: 8px;
   border-bottom: 1px solid rgba(91, 117, 132, 0.1);
 }
 
@@ -8051,16 +8652,6 @@ function escapeHtml(value: string) {
   color: #173247;
   font-size: 14px;
   font-weight: 950;
-}
-
-.filter-head small {
-  overflow: hidden;
-  color: #6a7d88;
-  font-size: 11px;
-  font-weight: 800;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .filter-shell.collapsed .floating-filters {
@@ -8106,34 +8697,11 @@ function escapeHtml(value: string) {
   transform: translateX(-2px) rotate(135deg);
 }
 
-.floating-filters label {
-  min-width: 0;
-  display: grid;
-  gap: 5px;
-}
-
-.floating-filters span,
 .detail-drawer header span,
 .detail-metrics dt {
   color: #607384;
   font-size: 12px;
   font-weight: 900;
-}
-
-.floating-filters select {
-  width: 100%;
-  min-width: 0;
-  height: 40px;
-  border: 1px solid rgba(91, 117, 132, 0.22);
-  border-radius: 8px;
-  color: #173247;
-  background: #ffffff;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 800;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .filter-actions {
@@ -8430,6 +8998,36 @@ function escapeHtml(value: string) {
   gap: 4px;
 }
 
+.detail-drawer header > div:first-child > span {
+  color: #355d79;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.detail-region-title-line {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.detail-region-title-line h2 {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.detail-region-title-line small {
+  flex: 0 0 auto;
+  padding-left: 8px;
+  border-left: 1px solid #cbd6dd;
+  color: #657b8b;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
 .detail-drawer header h2,
 .detail-drawer header p {
   margin: 0;
@@ -8519,6 +9117,30 @@ function escapeHtml(value: string) {
   gap: 10px;
 }
 
+.overview-summary-section {
+  gap: 8px !important;
+}
+
+.overview-summary-section > h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.overview-summary-section > h3::before {
+  width: 3px;
+  height: 16px;
+  background: var(--academic-accent, #1e5b86);
+  content: '';
+}
+
+.detail-summary-grid.overview {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .detail-summary-grid.compact {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0;
@@ -8537,6 +9159,40 @@ function escapeHtml(value: string) {
   background: linear-gradient(180deg, rgba(245, 248, 252, 0.95), rgba(255, 255, 255, 0.95));
 }
 
+.detail-summary-grid.overview article {
+  position: relative;
+  display: grid;
+  align-content: center;
+  min-height: 90px;
+  padding: 12px 14px 11px;
+  overflow: hidden;
+  border-color: #d6e0e7;
+  border-radius: 2px;
+  background: #ffffff;
+}
+
+.detail-summary-grid.overview article::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: #7f9db5;
+  content: '';
+}
+
+.detail-summary-grid.overview article.metric-sites::before,
+.detail-summary-grid.overview article.metric-literature::before,
+.detail-summary-grid.overview article.metric-records::before {
+  background: #396f98;
+}
+
+.detail-summary-grid.overview article.metric-biomarkers::before,
+.detail-summary-grid.overview article.metric-years::before,
+.detail-summary-grid.overview article.metric-cities::before {
+  background: #7895aa;
+}
+
 .detail-summary-grid span,
 .detail-summary-grid small {
   display: block;
@@ -8550,6 +9206,29 @@ function escapeHtml(value: string) {
   margin-top: 4px;
   color: #173247;
   font-size: 18px;
+}
+
+.detail-summary-grid.overview span {
+  color: #5d7080;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.detail-summary-grid.overview strong {
+  margin-top: 6px;
+  color: #173247;
+  font-size: 23px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.detail-summary-grid.overview small {
+  margin-top: 6px;
+  color: #708292;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.35;
 }
 
 .detail-summary-grid.compact article {
@@ -8585,34 +9264,53 @@ function escapeHtml(value: string) {
 
 .section-title-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.section-title-row span {
+.pndl-section-heading {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.section-title-row .pndl-context-inline {
+  min-width: 0;
   display: block;
-  margin-top: 4px;
+  margin: 0;
+  padding-left: 10px;
+  overflow: hidden;
+  border-left: 1px solid #d7dfe4;
   color: #637789;
-  font-size: 12px;
-  font-weight: 900;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pndl-modebar {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 7px;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid #b9c8d4;
+  border-radius: 5px;
+  background: #f5f7f8;
 }
 
 .pndl-modebar button {
-  height: 30px;
-  padding: 0 12px;
-  border: 1px solid rgba(91, 117, 132, 0.2);
-  border-radius: 7px;
-  color: #516579;
-  background: #ffffff;
-  font-weight: 900;
+  height: 28px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: #294c68;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
   transition:
     color 0.16s ease,
@@ -8622,9 +9320,9 @@ function escapeHtml(value: string) {
 
 .pndl-modebar button.active,
 .pndl-modebar button:hover {
-  color: #2f4bb8;
-  border-color: rgba(69, 91, 205, 0.5);
-  background: rgba(90, 115, 221, 0.08);
+  color: #ffffff;
+  border-color: #174f7c;
+  background: #174f7c;
 }
 
 .pndl-chart-section {
@@ -8643,10 +9341,10 @@ function escapeHtml(value: string) {
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  min-height: 360px;
+  min-height: 350px;
   display: grid;
-  grid-template-columns: 54px minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 0;
   padding: 18px 18px 14px;
   overflow: hidden;
   border: 1px solid rgba(91, 117, 132, 0.14);
@@ -8655,20 +9353,79 @@ function escapeHtml(value: string) {
 }
 
 .pndl-column-axis {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  align-items: center;
-  justify-items: end;
-  color: #647789;
+  position: relative;
+  z-index: 2;
+  box-sizing: border-box;
+  height: 224px;
+  margin-top: 46px;
+  border-right: 1px solid #6f8494;
+  color: #385267;
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
-.pndl-column-axis i {
-  writing-mode: vertical-rl;
-  color: #344f9d;
+.pndl-column-axis-title {
+  position: absolute;
+  top: -42px;
+  right: -1px;
+  width: 80px;
+  display: grid;
+  justify-items: end;
+  gap: 1px;
+  color: #234963;
+  line-height: 1.15;
+  text-align: right;
+}
+
+.pndl-column-axis-title i {
   font-style: normal;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.pndl-column-axis-title small,
+.pndl-column-axis-title em {
+  color: #5c7282;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.pndl-column-axis > span {
+  position: absolute;
+  right: 8px;
+  transform: translateY(50%);
+  color: #385267;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pndl-column-plot {
+  position: relative;
+  min-width: 0;
+  min-height: 314px;
+}
+
+.pndl-column-grid {
+  position: absolute;
+  top: 46px;
+  right: 0;
+  left: 0;
+  z-index: 0;
+  height: 224px;
+  pointer-events: none;
+}
+
+.pndl-column-grid i {
+  position: absolute;
+  right: 0;
+  left: 0;
+  border-top: 1px solid #d9e1e6;
+}
+
+.pndl-column-grid i:last-child {
+  border-top-color: #6f8494;
 }
 
 .pndl-column-chart {
@@ -8678,6 +9435,7 @@ function escapeHtml(value: string) {
   width: 100%;
   min-width: 0;
   max-width: 100%;
+  z-index: 1;
   contain: layout paint;
   display: grid;
   grid-template-columns: repeat(var(--pndl-column-count), minmax(96px, 1fr));
@@ -8687,7 +9445,7 @@ function escapeHtml(value: string) {
   overflow-y: hidden;
   padding: 46px 4px 2px;
   scroll-padding-inline: 48px;
-  scrollbar-color: rgba(154, 52, 18, 0.38) transparent;
+  scrollbar-color: rgba(54, 91, 119, 0.32) transparent;
   scrollbar-width: thin;
   overscroll-behavior-inline: contain;
 }
@@ -8702,18 +9460,18 @@ function escapeHtml(value: string) {
 
 .pndl-column-chart::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: rgba(154, 52, 18, 0.38);
+  background: rgba(54, 91, 119, 0.32);
 }
 
 .pndl-column-item {
   position: relative;
   min-width: 0;
-  min-height: 286px;
+  min-height: 268px;
   display: grid;
-  grid-template-rows: minmax(220px, 1fr) auto auto;
+  grid-template-rows: 224px auto;
   gap: 8px;
   align-items: end;
-  color: #526778;
+  color: #29485f;
   text-align: center;
   font-size: 12px;
   font-weight: 850;
@@ -8727,11 +9485,11 @@ function escapeHtml(value: string) {
   display: grid;
   gap: 8px;
   padding: 11px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid #cbd6dd;
   border-radius: 8px;
-  color: #f8fbfd;
-  background: rgba(19, 43, 58, 0.97);
-  box-shadow: 0 14px 34px rgba(19, 46, 63, 0.26);
+  color: #4f6473;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 6px 18px rgba(24, 50, 68, 0.14);
   font-size: 11px;
   line-height: 1.35;
   pointer-events: none;
@@ -8742,7 +9500,7 @@ function escapeHtml(value: string) {
 
 .detail-chart-tooltip > strong {
   overflow: hidden;
-  color: #ffffff;
+  color: #183244;
   font-size: 13px;
   font-weight: 900;
   text-overflow: ellipsis;
@@ -8756,8 +9514,8 @@ function escapeHtml(value: string) {
   gap: 12px;
   padding: 7px 8px;
   border-radius: 6px;
-  color: #49606e;
-  background: #ffffff;
+  color: #526778;
+  background: #eef3f6;
 }
 
 .detail-chart-tooltip-primary span,
@@ -8770,7 +9528,7 @@ function escapeHtml(value: string) {
 .detail-chart-tooltip-primary b {
   min-width: 0;
   overflow: hidden;
-  color: #9a3412;
+  color: #174f7c;
   font-size: 12px;
   font-weight: 950;
   text-align: right;
@@ -8790,12 +9548,12 @@ function escapeHtml(value: string) {
   gap: 2px;
   padding: 5px 6px;
   border-radius: 5px;
-  color: rgba(232, 240, 244, 0.74);
-  background: rgba(255, 255, 255, 0.08);
+  color: #6c7d89;
+  background: #f4f7f8;
 }
 
 .detail-chart-tooltip-metrics b {
-  color: #ffffff;
+  color: #183244;
   font-size: 11px;
   font-weight: 900;
 }
@@ -8815,26 +9573,35 @@ function escapeHtml(value: string) {
   display: flex;
   align-items: end;
   justify-content: center;
-  border-bottom: 1px solid rgba(91, 117, 132, 0.16);
+  z-index: 2;
 }
 
-.pndl-column-item.selected .pndl-column-barbox {
-  border-bottom: 2px solid #c2410c;
+.pndl-column-value {
+  position: absolute;
+  right: 0;
+  left: 0;
+  z-index: 3;
+  color: #294f6d;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .pndl-column-bar {
   width: min(86%, 140px);
   min-height: 4px;
   border-radius: 8px 8px 3px 3px;
-  background: linear-gradient(180deg, rgba(87, 111, 207, 0.82), rgba(111, 131, 201, 0.42));
-  box-shadow: inset 0 0 0 1px rgba(52, 79, 157, 0.24);
+  background: #5f86bd;
+  box-shadow: inset 0 0 0 1px rgba(31, 78, 132, 0.22);
 }
 
 .pndl-column-item.selected .pndl-column-bar {
-  background: linear-gradient(180deg, #fbbf24 0%, #f97316 55%, #dc2626 100%);
+  background: #174f8a;
   box-shadow:
-    inset 0 0 0 1px rgba(133, 54, 11, 0.28),
-    0 0 0 3px rgba(249, 115, 22, 0.18);
+    inset 0 0 0 1px rgba(13, 54, 99, 0.36),
+    0 0 0 2px rgba(23, 79, 138, 0.1);
 }
 
 .pndl-column-item.no-pndl .pndl-column-bar {
@@ -8849,25 +9616,25 @@ function escapeHtml(value: string) {
 
 .pndl-column-item.no-pndl.selected .pndl-column-bar {
   box-shadow:
-    inset 0 0 0 1px rgba(154, 52, 18, 0.34),
-    0 0 0 3px rgba(249, 115, 22, 0.13);
+    inset 0 0 0 1px rgba(47, 103, 136, 0.34),
+    0 0 0 2px rgba(47, 103, 136, 0.12);
 }
 
 .pndl-column-item.selected strong,
 .pndl-column-item.selected span {
-  color: #9a3412;
+  color: #174f8a;
 }
 
 .pndl-column-item strong {
   overflow: hidden;
   max-width: 100%;
-  color: #173247;
+  color: #203f57;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .pndl-column-item span {
-  color: #344f9d;
+  color: #315f91;
   font-size: 11px;
   font-weight: 950;
 }
@@ -9044,6 +9811,35 @@ function escapeHtml(value: string) {
   list-style: none;
 }
 
+.pndl-ranking-summary {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.pndl-ranking-summary h3,
+.pndl-ranking-summary span {
+  margin: 0;
+}
+
+.pndl-ranking-summary span {
+  min-width: 0;
+  overflow: hidden;
+  color: #647789;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+}
+
+.pndl-ranking-summary span::before {
+  content: '·';
+  margin-right: 8px;
+  color: #9aa8b2;
+}
+
 .pndl-ranking-section summary::-webkit-details-marker,
 .source-record-section summary::-webkit-details-marker,
 .detail-note-section summary::-webkit-details-marker {
@@ -9155,7 +9951,7 @@ function escapeHtml(value: string) {
   stroke: #3d5dcb;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 4;
+  stroke-width: 2.4;
 }
 
 .trend-point {
@@ -9165,13 +9961,13 @@ function escapeHtml(value: string) {
 .trend-point circle:not(.trend-point-hit) {
   fill: #ffffff;
   stroke: #3d5dcb;
-  stroke-width: 3;
+  stroke-width: 2;
 }
 
 .trend-point:hover circle:not(.trend-point-hit) {
-  fill: #fff7d6;
-  stroke: #c2410c;
-  stroke-width: 4;
+  fill: #eef4f7;
+  stroke: #174f7c;
+  stroke-width: 2.8;
 }
 
 .trend-point .trend-point-hit {
@@ -9181,7 +9977,7 @@ function escapeHtml(value: string) {
 
 .trend-point text {
   fill: #526778;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 900;
   text-anchor: middle;
   paint-order: stroke;
@@ -9189,20 +9985,70 @@ function escapeHtml(value: string) {
   stroke-width: 3px;
 }
 
-.detail-loading-card {
+.detail-loading-state {
+  min-height: clamp(170px, 34vh, 280px);
   display: grid;
-  gap: 6px;
-  padding: 14px;
-  border: 1px solid rgba(91, 117, 132, 0.14);
-  border-radius: 8px;
-  color: #607386;
-  background: #f8fafc;
-  font-weight: 850;
+  place-items: center;
 }
 
-.detail-loading-card strong {
-  color: #173247;
-  font-size: 15px;
+.detail-loading-spinner {
+  width: 30px;
+  height: 30px;
+  box-sizing: border-box;
+  display: block;
+  border: 3px solid rgba(49, 119, 171, 0.18);
+  border-top-color: #3177ab;
+  border-radius: 50%;
+  animation: detailSpinner 0.78s linear infinite;
+}
+
+.detail-loaded-content {
+  display: grid;
+  gap: 12px;
+}
+
+.detail-content-enter-active,
+.detail-content-leave-active {
+  transition:
+    opacity 0.24s ease,
+    transform 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.detail-content-enter-from {
+  opacity: 0;
+  transform: translateY(7px);
+}
+
+.detail-loading-state.detail-content-enter-active {
+  transition: none;
+}
+
+.detail-loading-state.detail-content-enter-from {
+  opacity: 1;
+  transform: none;
+}
+
+.detail-content-leave-to {
+  opacity: 0;
+  transform: translateY(-3px);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes detailSpinner {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .region-explorer-section {
@@ -9213,7 +10059,8 @@ function escapeHtml(value: string) {
 .region-explorer-section h3 {
   margin: 0;
   color: #173247;
-  font-size: 15px;
+  font-size: 17px;
+  font-weight: 700;
 }
 
 .region-biomarker-list {
@@ -9351,12 +10198,9 @@ function escapeHtml(value: string) {
 }
 
 .full-detail-backdrop {
-  position: fixed;
-  top: var(--map-header-offset);
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 40;
+  position: absolute;
+  inset: 0;
+  z-index: 60;
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -9427,7 +10271,7 @@ function escapeHtml(value: string) {
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
-  padding: 12px 18px 11px;
+  padding: 8px 16px 7px;
   border-bottom: 1px solid rgba(91, 117, 132, 0.14);
   background: linear-gradient(90deg, rgba(232, 248, 249, 0.74), rgba(255, 255, 255, 0.86));
 }
@@ -9436,9 +10280,30 @@ function escapeHtml(value: string) {
   min-width: 0;
 }
 
+.full-detail-title-line {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.full-detail-title-line > p {
+  min-width: 0;
+  margin-top: 0;
+  padding-left: 10px;
+  overflow: hidden;
+  border-left: 1px solid #c8d4dc;
+  color: #536b7d;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .full-detail-panel header span {
   color: #0f8b8d;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.08em;
 }
@@ -9450,10 +10315,10 @@ function escapeHtml(value: string) {
 
 .full-detail-panel header h2 {
   max-width: min(880px, 72vw);
-  margin-top: 3px;
+  margin-top: 1px;
   overflow: hidden;
   color: #173247;
-  font-size: 21px;
+  font-size: 19px;
   line-height: 1.22;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -9473,8 +10338,8 @@ function escapeHtml(value: string) {
 
 .full-detail-panel header button {
   flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border: 1px solid rgba(91, 117, 132, 0.22);
   border-radius: 8px;
   color: #173247;
@@ -9486,6 +10351,8 @@ function escapeHtml(value: string) {
 
 .full-detail-content {
   display: grid;
+  align-content: start;
+  grid-auto-rows: max-content;
   gap: 18px;
   min-width: 0;
   padding: 18px 22px 24px;
@@ -9780,7 +10647,7 @@ function escapeHtml(value: string) {
 
 :deep(.map-tooltip-extra) {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
   padding: 7px 10px;
   color: #475569;
@@ -9790,6 +10657,7 @@ function escapeHtml(value: string) {
 
 :deep(.map-tooltip-extra b) {
   color: #173247;
+  white-space: nowrap;
 }
 
 :deep(.map-tooltip-heat) {
@@ -9905,6 +10773,27 @@ function escapeHtml(value: string) {
   .map-stage::before {
     animation: none !important;
   }
+
+  .detail-drawer,
+  .detail-content-enter-active,
+  .detail-content-leave-active {
+    transition: none;
+  }
+
+  .detail-loading-spinner {
+    animation: none;
+  }
+
+  .detail-content-enter-from,
+  .detail-content-leave-to {
+    transform: none;
+  }
+}
+
+@media (max-width: 1500px) {
+  .detail-summary-grid.overview {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 1180px) {
@@ -9955,7 +10844,7 @@ function escapeHtml(value: string) {
   }
 
   .map-stage {
-    height: calc(100vh - 106px);
+    height: 100%;
     margin: 0;
     border-right: 0;
     border-left: 0;
@@ -10035,7 +10924,7 @@ function escapeHtml(value: string) {
   }
 
   .full-detail-panel header {
-    padding: 12px 14px 10px;
+    padding: 8px 12px 7px;
   }
 
   .full-detail-content {
@@ -10043,6 +10932,10 @@ function escapeHtml(value: string) {
   }
 
   .detail-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detail-summary-grid.overview {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -10293,13 +11186,6 @@ function escapeHtml(value: string) {
   font-weight: 700;
 }
 
-.filter-head small,
-.floating-filters span,
-.floating-filters label {
-  color: var(--academic-muted);
-  font-weight: 600;
-}
-
 .filter-toggle {
   right: -18px;
   width: 26px;
@@ -10316,14 +11202,12 @@ function escapeHtml(value: string) {
   transform: none;
 }
 
-.floating-filters select,
 .floating-filters .filter-reset-button,
 .floating-filters .filter-refresh-button {
   border-radius: var(--academic-radius);
   font-weight: 600;
 }
 
-.floating-filters select,
 .floating-filters .filter-reset-button {
   border-color: var(--academic-border);
   color: var(--academic-ink);
@@ -10445,7 +11329,6 @@ function escapeHtml(value: string) {
 }
 
 .detail-actions button,
-.pndl-modebar button,
 .full-detail-panel header button {
   border-color: var(--academic-border);
   border-radius: var(--academic-radius);
@@ -10456,7 +11339,6 @@ function escapeHtml(value: string) {
 }
 
 .detail-actions button:hover,
-.pndl-modebar button:hover,
 .full-detail-panel header button:hover {
   border-color: #9eacb6;
   background: var(--academic-surface-muted);
@@ -10464,7 +11346,6 @@ function escapeHtml(value: string) {
 }
 
 .detail-callout,
-.detail-loading-card,
 .detail-summary-grid.compact,
 .detail-summary-grid article,
 .region-explorer-section,
@@ -10527,13 +11408,13 @@ function escapeHtml(value: string) {
 
 .pndl-column-bar {
   border-radius: 1px 1px 0 0;
-  background: #6b80b8;
-  box-shadow: inset 0 0 0 1px rgba(45, 62, 112, 0.24);
+  background: #5f86bd;
+  box-shadow: inset 0 0 0 1px rgba(31, 78, 132, 0.22);
 }
 
 .pndl-column-item.selected .pndl-column-bar {
-  background: #d75a2b;
-  box-shadow: inset 0 0 0 1px rgba(116, 45, 18, 0.3);
+  background: #174f8a;
+  box-shadow: inset 0 0 0 1px rgba(13, 54, 99, 0.36);
 }
 
 .pndl-ranking-row.head,
@@ -10586,9 +11467,9 @@ function escapeHtml(value: string) {
 
 .pndl-modebar button.active,
 .pndl-modebar button:hover {
-  color: var(--academic-accent-dark);
+  color: #ffffff;
   border-color: var(--academic-accent);
-  background: #edf3f7;
+  background: var(--academic-accent);
 }
 
 .full-detail-content {
@@ -10637,6 +11518,28 @@ function escapeHtml(value: string) {
 }
 
 @media (max-width: 860px) {
+  .pndl-chart-section .section-title-row,
+  .pndl-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .pndl-section-heading {
+    gap: 4px;
+  }
+
+  .section-title-row .pndl-context-inline {
+    padding-left: 0;
+    border-left: 0;
+    line-height: 1.5;
+    white-space: normal;
+  }
+
+  .pndl-modebar {
+    align-self: flex-start;
+    justify-content: flex-start;
+  }
+
   .map-stage.compact-detail-open .filter-shell {
     opacity: 0;
     pointer-events: none;
@@ -10667,6 +11570,17 @@ function escapeHtml(value: string) {
 }
 
 @media (max-width: 560px) {
+  .pndl-modebar {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .pndl-modebar button {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-inline: 6px;
+  }
+
   .map-stage {
     height: 100%;
   }

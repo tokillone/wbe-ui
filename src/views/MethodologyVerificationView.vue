@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
+import BrandMark from '../components/BrandMark.vue'
 import { fetchMethodologyData } from '../services/methodology'
 import type {
   MethodologyData,
@@ -476,7 +477,7 @@ onBeforeUnmount(() => {
   >
     <header class="methodology-header">
       <RouterLink class="brand" to="/" aria-label="返回污水信息因子数据库首页">
-        <span class="brand-mark" aria-hidden="true"><i></i><b></b><em></em></span>
+        <BrandMark :size="40" />
         <span>
           <strong>污水信息因子数据库</strong>
           <small>Wastewater Biomarker Evidence</small>

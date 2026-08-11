@@ -1,24 +1,52 @@
 <script setup lang="ts">
+import { pinyin } from 'pinyin-pro'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+
+import BrandMark from '../components/BrandMark.vue'
 
 const isPrototypeReady = ref(false)
 const prototypeError = ref('')
 const reloadKey = ref(0)
 const prototypeFrame = ref<HTMLIFrameElement | null>(null)
-const summary = ref<{
-  rowCount?: number
-  scoreVersion?: string
-  targetFineGroupCount?: number
-  sourceModifiedAt?: string
-} | null>(null)
+const headerVisible = ref(true)
+const drawerOpen = ref(false)
+let lastHeaderScrollTop = 0
+let headerScrollTravel = 0
+let headerScrollDirection = 0
+type PinyinAliases = { full: string; initials: string }
+type PriorityWindow = Window & { __wbePinyin?: (value: string) => PinyinAliases }
+const priorityWindow = window as PriorityWindow
 const publicBase = import.meta.env.BASE_URL.endsWith('/')
   ? import.meta.env.BASE_URL
   : `${import.meta.env.BASE_URL}/`
 const prototypeUrl = computed(
   () => `${publicBase}core-marker-priority/index.html?reload=${reloadKey.value}`,
 )
-const fineGroupCount = computed(() => summary.value?.targetFineGroupCount)
-const dataDate = computed(() => summary.value?.sourceModifiedAt?.split(' ')[0])
+const priorityPageStyle = computed<Record<string, string>>(() => ({
+  '--priority-header-opacity': drawerOpen.value || headerVisible.value ? '1' : '0',
+}))
+
+function updateHeaderVisibility(scrollTop: number) {
+  if (scrollTop <= 8) {
+    headerVisible.value = true
+    lastHeaderScrollTop = scrollTop
+    headerScrollTravel = 0
+    headerScrollDirection = 0
+    return
+  }
+  const delta = scrollTop - lastHeaderScrollTop
+  lastHeaderScrollTop = scrollTop
+  if (Math.abs(delta) < 1) return
+  const direction = delta > 0 ? 1 : -1
+  if (direction !== headerScrollDirection) {
+    headerScrollDirection = direction
+    headerScrollTravel = 0
+  }
+  headerScrollTravel += Math.abs(delta)
+  if (headerScrollTravel < 12) return
+  headerVisible.value = direction < 0
+  headerScrollTravel = 0
+}
 
 function handlePrototypeLoad() {
   isPrototypeReady.value = true
@@ -26,12 +54,21 @@ function handlePrototypeLoad() {
 
 function handlePrototypeError() {
   isPrototypeReady.value = false
+  headerVisible.value = true
+  drawerOpen.value = false
+  headerScrollTravel = 0
+  headerScrollDirection = 0
   prototypeError.value = '分析页面加载失败，请检查网络后重试。'
 }
 
 function retryPrototype() {
   prototypeError.value = ''
   isPrototypeReady.value = false
+  headerVisible.value = true
+  drawerOpen.value = false
+  lastHeaderScrollTop = 0
+  headerScrollTravel = 0
+  headerScrollDirection = 0
   reloadKey.value += 1
 }
 
@@ -45,26 +82,43 @@ function handlePrototypeMessage(event: MessageEvent) {
     return
   }
   if (event.data.type === 'core-marker-priority:ready') {
-    summary.value = event.data.summary ?? null
     prototypeError.value = ''
   } else if (event.data.type === 'core-marker-priority:error') {
     prototypeError.value = String(event.data.message || '核心标记物数据加载失败，请重试。')
+  } else if (event.data.type === 'core-marker-priority:scroll') {
+    const scrollTop = Number(event.data.scrollTop)
+    if (Number.isFinite(scrollTop)) updateHeaderVisibility(Math.max(0, scrollTop))
+  } else if (event.data.type === 'core-marker-priority:drawer') {
+    drawerOpen.value = event.data.open === true
   }
 }
 
-onMounted(() => window.addEventListener('message', handlePrototypeMessage))
-onBeforeUnmount(() => window.removeEventListener('message', handlePrototypeMessage))
+function createPinyinAliases(value: string): PinyinAliases {
+  const options = { toneType: 'none', type: 'array' } as const
+  return {
+    full: pinyin(value, options).join('').toLowerCase(),
+    initials: pinyin(value, { ...options, pattern: 'first' }).join('').toLowerCase(),
+  }
+}
+
+onMounted(() => {
+  priorityWindow.__wbePinyin = createPinyinAliases
+  window.addEventListener('message', handlePrototypeMessage)
+})
+onBeforeUnmount(() => {
+  delete priorityWindow.__wbePinyin
+  window.removeEventListener('message', handlePrototypeMessage)
+})
 </script>
 
 <template>
-  <main class="priority-page">
-    <header class="platform-header">
+  <main class="priority-page" :style="priorityPageStyle">
+    <header
+      class="platform-header"
+      :class="{ 'is-hidden': !(drawerOpen || headerVisible) }"
+    >
       <RouterLink class="brand" to="/" aria-label="返回污水信息因子数据库首页">
-        <span class="brand-logo" aria-hidden="true">
-          <span class="brand-drop"></span>
-          <span class="brand-bars"><i></i><i></i><i></i></span>
-          <span class="brand-line"><i></i><i></i></span>
-        </span>
+        <BrandMark :size="44" />
         <span class="brand-copy">
           <strong>污水信息因子数据库</strong>
           <small>Wastewater Biomarker Evidence</small>
@@ -72,8 +126,8 @@ onBeforeUnmount(() => window.removeEventListener('message', handlePrototypeMessa
       </RouterLink>
 
       <div class="module-heading">
-        <span>分析模块</span>
         <strong>核心标记物优先级识别</strong>
+        <small>按照分类逐级筛选，并查看候选标记物排名</small>
       </div>
 
       <nav class="module-nav" aria-label="模块导航">
@@ -85,19 +139,6 @@ onBeforeUnmount(() => window.removeEventListener('message', handlePrototypeMessa
         </RouterLink>
       </nav>
     </header>
-
-    <section class="module-status" aria-label="模块状态">
-      <div>
-        <span class="status-dot" aria-hidden="true"></span>
-        <strong>优先级证据分析</strong>
-        <span>四级分类分别进行组内评分与相对优先级识别</span>
-      </div>
-      <div class="status-metrics" aria-label="数据概览">
-        <span><b>{{ summary?.rowCount ?? '—' }}</b> 核心标记物</span>
-        <span><b>{{ fineGroupCount ?? '—' }}</b> 目标物质细类组</span>
-        <span>{{ dataDate ? `数据更新 ${dataDate}` : '数据源：后端 API' }}</span>
-      </div>
-    </section>
 
     <section class="prototype-shell" aria-label="核心标记物优先级分析工作区">
       <div v-if="!isPrototypeReady && !prototypeError" class="loading-state" role="status">
@@ -143,17 +184,18 @@ onBeforeUnmount(() => window.removeEventListener('message', handlePrototypeMessa
 }
 
 .priority-page {
+  position: relative;
   height: 100vh;
   height: 100dvh;
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
   overflow: hidden;
   background: #eef3f6;
 }
 
 .platform-header {
-  position: relative;
+  position: absolute;
+  inset: 0 0 auto;
   z-index: 2;
+  width: 100%;
   min-height: 72px;
   display: grid;
   grid-template-columns: minmax(250px, auto) minmax(240px, 1fr) auto;
@@ -163,6 +205,16 @@ onBeforeUnmount(() => window.removeEventListener('message', handlePrototypeMessa
   border-bottom: 1px solid rgba(96, 124, 143, 0.24);
   background: #ffffff;
   box-shadow: 0 8px 28px rgba(21, 52, 72, 0.08);
+  opacity: var(--priority-header-opacity, 1);
+  transition:
+    opacity 0.45s ease,
+    box-shadow 0.45s ease;
+  will-change: opacity;
+}
+
+.platform-header.is-hidden {
+  pointer-events: none;
+  box-shadow: none;
 }
 
 .brand {
@@ -286,16 +338,20 @@ onBeforeUnmount(() => window.removeEventListener('message', handlePrototypeMessa
   gap: 2px;
 }
 
-.module-heading span {
-  color: #0b7868;
-  font-size: 11px;
-  font-weight: 900;
-}
-
 .module-heading strong {
   overflow: hidden;
   color: #173247;
   font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.module-heading small {
+  overflow: hidden;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -338,51 +394,9 @@ onBeforeUnmount(() => window.removeEventListener('message', handlePrototypeMessa
   background: #173247;
 }
 
-.module-status {
-  position: relative;
-  z-index: 1;
-  min-height: 42px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 8px clamp(18px, 3.4vw, 54px);
-  border-bottom: 1px solid #ccd6df;
-  background: #f7fafb;
-  color: #607684;
-  font-size: 12px;
-}
-
-.module-status > div,
-.status-metrics {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.module-status strong,
-.status-metrics b {
-  color: #173247;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: #0b7868;
-  box-shadow: 0 0 0 3px rgba(11, 120, 104, 0.12);
-}
-
-.status-metrics span {
-  padding-left: 10px;
-  border-left: 1px solid #d3dce4;
-  white-space: nowrap;
-}
-
 .prototype-shell {
   position: relative;
+  height: 100%;
   min-height: 0;
   overflow: hidden;
   background: #f3f5f7;
@@ -475,7 +489,7 @@ onBeforeUnmount(() => window.removeEventListener('message', handlePrototypeMessa
   .platform-header {
     min-height: 64px;
     grid-template-columns: minmax(0, 1fr) auto;
-    padding: 10px 14px;
+    padding: 9px 14px;
   }
 
   .brand-logo {
@@ -484,9 +498,7 @@ onBeforeUnmount(() => window.removeEventListener('message', handlePrototypeMessa
   }
 
   .brand-copy small,
-  .module-heading,
-  .module-status > div > span:last-child,
-  .status-metrics span:nth-child(n + 2) {
+  .module-heading {
     display: none;
   }
 
@@ -495,10 +507,6 @@ onBeforeUnmount(() => window.removeEventListener('message', handlePrototypeMessa
     padding: 0 10px;
   }
 
-  .module-status {
-    min-height: 38px;
-    padding: 7px 14px;
-  }
 }
 
 @media (max-width: 430px) {
@@ -517,6 +525,7 @@ onBeforeUnmount(() => window.removeEventListener('message', handlePrototypeMessa
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .platform-header,
   .prototype-frame,
   .module-nav a {
     transition: none;

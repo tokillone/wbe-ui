@@ -5,6 +5,7 @@ import { init, use, type ECharts } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
+import BrandMark from '../components/BrandMark.vue'
 import { ApiTimeoutError } from '../services/api'
 import { fetchIcd11SankeyCategories, fetchIcd11SankeyGraph } from '../services/icd11Sankey'
 import type {
@@ -187,12 +188,12 @@ const LONG_CHART_MIN_NODES = 60
 const UPSTREAM_CONTEXT_ENTRY_MIN = 780
 const UPSTREAM_CONTEXT_ENTRY_VIEWPORT_RATIO = 1.05
 const HEADER_HEIGHT = 70
-const HEADER_FADE_DISTANCE = 190
+const HEADER_SCROLL_THRESHOLD = 12
 const HOVER_INTENT_DELAY = 85
 const HOVER_RESTORE_DELAY = 110
-const SANKEY_NODE_COLOR = '#668C8E'
-const SANKEY_NODE_HOVER_COLOR = '#4F777A'
-const SANKEY_NODE_LOCKED_COLOR = '#315F62'
+const SANKEY_NODE_COLOR = '#4B78A8'
+const SANKEY_NODE_HOVER_COLOR = '#356A9C'
+const SANKEY_NODE_LOCKED_COLOR = '#245F8E'
 const PIE_COLORS = [
   '#4C78A8',
   '#66A182',
@@ -209,7 +210,7 @@ const TOP_RELATION_PIE_ITEMS = 7
 const MAX_FILTER_CACHE_ENTRIES = 24
 const MAX_HIGHLIGHT_CACHE_ENTRIES = 12
 const MAX_CHART_HEIGHT = 4_200
-const MAX_CHART_DEVICE_PIXEL_RATIO = 1.5
+const MAX_CHART_DEVICE_PIXEL_RATIO = 2
 
 use([SankeyChart, PieChart, TooltipComponent, CanvasRenderer])
 
@@ -242,7 +243,7 @@ const lockedEdge = ref<Icd11SankeyLink | null>(null)
 const lockedPathId = ref('')
 const currentFocus = ref('')
 const detail = ref<DetailState>({ kind: 'category' })
-const headerScrollProgress = ref(0)
+const headerVisible = ref(true)
 const pieModalOpen = ref(false)
 const activePieId = ref('')
 
@@ -255,6 +256,9 @@ let graphController: AbortController | null = null
 let hoverPreviewTimer: number | null = null
 let hoverRestoreTimer: number | null = null
 let activePreviewKey = ''
+let lastHeaderScrollTop = 0
+let headerScrollTravel = 0
+let headerScrollDirection = 0
 const displaySummaryCache = new WeakMap<Icd11SankeyGraph, Map<string, DisplayPathSummary>>()
 const filteredGraphCache = new WeakMap<Icd11SankeyGraph, Map<string, Icd11SankeyGraph>>()
 const chartGraphCache = new WeakMap<Icd11SankeyGraph, ChartGraph>()
@@ -294,8 +298,7 @@ const selectedCategoryLabel = computed(
   () => graph.value?.category || currentCategory.value || 'ICD11 桑基图',
 )
 const headerStyle = computed(() => ({
-  '--header-offset': `${(-76 * headerScrollProgress.value).toFixed(1)}px`,
-  '--header-opacity': (1 - headerScrollProgress.value * 0.95).toFixed(3),
+  '--header-opacity': headerVisible.value ? '1' : '0',
 }))
 const chartPanelStyle = computed(() => ({
   '--series-left': `${SERIES_LEFT}px`,
@@ -612,9 +615,9 @@ function render(focusName: string | null = null) {
               borderWidth: 1,
             },
             label: {
-              color: '#102a3d',
-              textBorderColor: 'rgba(255,255,255,0.95)',
-              textBorderWidth: 2,
+              color: '#173247',
+              textBorderColor: 'transparent',
+              textBorderWidth: 0,
             },
             lineStyle: { opacity: 0.74 },
           },
@@ -623,16 +626,16 @@ function render(focusName: string | null = null) {
               opacity: 0.18,
             },
             label: {
-              color: 'rgba(23, 50, 71, 0.26)',
-              textBorderColor: 'rgba(255,255,255,0.5)',
-              textBorderWidth: 1,
+              color: 'rgba(34, 56, 75, 0.34)',
+              textBorderColor: 'transparent',
+              textBorderWidth: 0,
             },
             lineStyle: { opacity: 0.04 },
           },
           label: {
-            color: '#20242a',
+            color: '#22384B',
             fontSize: sankeyLabelFontSize(baseGraph),
-            fontFamily: 'Arial, Noto Sans CJK SC, Source Han Sans CN, Microsoft YaHei, sans-serif',
+            fontFamily: 'Inter, PingFang SC, Microsoft YaHei, Helvetica Neue, Arial, sans-serif',
           },
           lineStyle: {
             color: 'source',
@@ -895,9 +898,9 @@ function chartNode(node: Icd11SankeyNode, active: boolean, highlighted: boolean)
         borderWidth: 1,
       },
       label: {
-        color: active ? '#102a3d' : 'rgba(23, 50, 71, 0.56)',
-        textBorderColor: 'rgba(255,255,255,0.95)',
-        textBorderWidth: active ? 2 : 1,
+        color: active ? '#173247' : 'rgba(34, 56, 75, 0.56)',
+        textBorderColor: 'transparent',
+        textBorderWidth: 0,
       },
     },
     blur: {
@@ -905,9 +908,9 @@ function chartNode(node: Icd11SankeyNode, active: boolean, highlighted: boolean)
         opacity: active ? 0.2 : 0.12,
       },
       label: {
-        color: active ? 'rgba(23, 50, 71, 0.34)' : 'rgba(23, 50, 71, 0.24)',
-        textBorderColor: 'rgba(255,255,255,0.5)',
-        textBorderWidth: 1,
+        color: active ? 'rgba(34, 56, 75, 0.36)' : 'rgba(34, 56, 75, 0.24)',
+        textBorderColor: 'transparent',
+        textBorderWidth: 0,
       },
     },
     label: {
@@ -915,23 +918,19 @@ function chartNode(node: Icd11SankeyNode, active: boolean, highlighted: boolean)
       position,
       formatter: label.text,
       color: highlighted
-        ? '#0b3441'
+        ? '#12344A'
         : active
           ? isRelatedContext
-            ? 'rgba(23, 50, 71, 0.68)'
-            : '#173247'
-          : 'rgba(23, 50, 71, 0.58)',
+            ? 'rgba(34, 56, 75, 0.72)'
+            : '#22384B'
+          : 'rgba(34, 56, 75, 0.56)',
       width: label.width,
       lineHeight: label.lineHeight,
       overflow: 'truncate',
       align: position === 'right' ? 'left' : 'right',
       fontWeight: highlighted ? 700 : active ? 600 : 500,
-      textBorderColor: highlighted
-        ? 'rgba(255,255,255,0.98)'
-        : active
-          ? 'rgba(255,255,255,0.92)'
-          : 'rgba(255,255,255,0.58)',
-      textBorderWidth: highlighted ? 2 : 1,
+      textBorderColor: 'transparent',
+      textBorderWidth: 0,
     },
   }
 }
@@ -969,12 +968,12 @@ function chartLink(link: Icd11SankeyLink, active: boolean, highlighted: boolean)
 
 function nodeLabel(node: Icd11SankeyNode) {
   const config = [
-    { width: 126, lineHeight: 17 },
-    { width: 126, lineHeight: 17 },
-    { width: 126, lineHeight: 17 },
-    { width: 118, lineHeight: 17 },
-    { width: 134, lineHeight: 17 },
-  ][node.depth] ?? { width: 132, lineHeight: 18 }
+    { width: 126, lineHeight: 18 },
+    { width: 126, lineHeight: 18 },
+    { width: 126, lineHeight: 18 },
+    { width: 118, lineHeight: 18 },
+    { width: 134, lineHeight: 18 },
+  ][node.depth] ?? { width: 132, lineHeight: 19 }
   return {
     ...config,
     text: singleLineLabel(node.displayName),
@@ -988,10 +987,10 @@ function singleLineLabel(value: string) {
 }
 
 function sankeyLabelFontSize(baseGraph: Icd11SankeyGraph) {
-  if (baseGraph.stats.maxNodes > 120 || baseGraph.paths.length > 200) return 10
-  if (baseGraph.stats.maxNodes > 48 || baseGraph.paths.length > 90) return 11
-  if (baseGraph.stats.maxNodes > 20) return 12
-  return 13
+  if (baseGraph.stats.maxNodes > 120 || baseGraph.paths.length > 200) return 11
+  if (baseGraph.stats.maxNodes > 48 || baseGraph.paths.length > 90) return 12
+  if (baseGraph.stats.maxNodes > 20) return 13
+  return 14
 }
 
 async function handleChartClick(params: unknown) {
@@ -1261,6 +1260,22 @@ function relationShareBarStyle(item: RelationPieDatum): Record<string, string> {
   }
 }
 
+function relationPieChartShellStyle(
+  section: RelationPieSection,
+  large: boolean,
+): Record<string, string> {
+  const itemCount = Math.max(2, section.items.length)
+  const rowHeight = large ? 18 : 15
+  const rowGap = large ? 5 : 3
+  const legendPadding = large ? 14 : 10
+  const legendHeight = itemCount * rowHeight + (itemCount - 1) * rowGap + legendPadding
+  const minimumHeight = large ? 430 : 300
+  const chartClearance = large ? 260 : 250
+  return {
+    '--relation-pie-shell-height': `${Math.max(minimumHeight, chartClearance + legendHeight)}px`,
+  }
+}
+
 function handleRelationItemMouseOver(section: RelationPieSection, item: RelationPieDatum) {
   if (!item.pathIds.length) return
   schedulePreviewHighlight(
@@ -1342,6 +1357,8 @@ function renderPieChartInstance(
     return null
   }
   const nextChart = instance ?? init(element, null, { renderer: 'canvas' })
+  const compactLayout = element.clientWidth < 360
+  const compactLargeLayout = large && element.clientWidth < 520
   bindRelationPieEvents(nextChart)
   nextChart.setOption(
     {
@@ -1375,8 +1392,20 @@ function renderPieChartInstance(
       series: [
         {
           type: 'pie',
-          radius: large ? ['50%', '74%'] : ['52%', '76%'],
-          center: ['50%', '50%'],
+          radius: large
+            ? compactLargeLayout
+              ? ['37%', '55%']
+              : ['46%', '72%']
+            : compactLayout
+              ? ['36%', '53%']
+              : ['39%', '64%'],
+          center: large
+            ? compactLargeLayout
+              ? ['50%', '40%']
+              : ['40%', '46%']
+            : compactLayout
+              ? ['50%', '34%']
+              : ['50%', '35%'],
           minAngle: 6,
           avoidLabelOverlap: true,
           selectedOffset: large ? 8 : 5,
@@ -1387,10 +1416,35 @@ function renderPieChartInstance(
             shadowColor: 'transparent',
           },
           label: {
-            show: false,
+            show: true,
+            position: 'outside',
+            alignTo: 'labelLine',
+            bleedMargin: 4,
+            distanceToLabelLine: 3,
+            color: '#4C5967',
+            fontFamily:
+              "Inter, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif",
+            fontSize: large && !compactLargeLayout ? 12 : 11,
+            fontWeight: 650,
+            lineHeight: large && !compactLargeLayout ? 18 : 16,
+            textBorderColor: 'transparent',
+            textBorderWidth: 0,
+            formatter(params: { data?: RelationPieDatum }) {
+              const data = params.data
+              if (!data) return ''
+              return `${formatNumber(data.value)} · ${formatPercent(data.share)}`
+            },
           },
           labelLine: {
-            show: false,
+            show: true,
+            length: large && !compactLargeLayout ? 12 : 4,
+            length2: large && !compactLargeLayout ? 8 : 4,
+            smooth: false,
+            lineStyle: {
+              color: '#8A96A3',
+              width: 1,
+              opacity: 0.82,
+            },
           },
           emphasis: {
             focus: 'self',
@@ -1587,12 +1641,9 @@ function summarizeDisplayPaths(baseGraph: Icd11SankeyGraph): DisplayPathSummary 
 }
 
 function displayTransformKey() {
-  return [
-    selectedLevel1.value,
-    level1Scope.value,
-    displayMode.value,
-    String(minWeight.value),
-  ].join('\u001f')
+  return [selectedLevel1.value, level1Scope.value, displayMode.value, String(minWeight.value)].join(
+    '\u001f',
+  )
 }
 
 function setBoundedWeakCacheEntry<K extends object, V>(
@@ -1704,6 +1755,10 @@ function applyChartLayout() {
   chart?.resize()
   for (const chartInstance of pieCharts.values()) chartInstance.resize()
   modalPieChart?.resize()
+  window.requestAnimationFrame(() => {
+    renderRelationPieCharts()
+    renderModalRelationPieChart()
+  })
   chart?.setOption({
     series: [
       {
@@ -1718,7 +1773,27 @@ function applyChartLayout() {
 
 function handleWindowScroll() {
   const scrollTop = Math.max(window.scrollY, document.documentElement.scrollTop, 0)
-  headerScrollProgress.value = Math.min(1, scrollTop / HEADER_FADE_DISTANCE)
+  if (scrollTop <= 8) {
+    headerVisible.value = true
+    lastHeaderScrollTop = scrollTop
+    headerScrollTravel = 0
+    headerScrollDirection = 0
+  } else {
+    const delta = scrollTop - lastHeaderScrollTop
+    lastHeaderScrollTop = scrollTop
+    if (Math.abs(delta) >= 1) {
+      const direction = delta > 0 ? 1 : -1
+      if (direction !== headerScrollDirection) {
+        headerScrollDirection = direction
+        headerScrollTravel = 0
+      }
+      headerScrollTravel += Math.abs(delta)
+      if (headerScrollTravel >= HEADER_SCROLL_THRESHOLD) {
+        headerVisible.value = direction < 0
+        headerScrollTravel = 0
+      }
+    }
+  }
   updateUpstreamContextVisibility()
 }
 
@@ -1824,15 +1899,11 @@ function exportPng() {
   <main class="sankey-shell">
     <header
       class="site-header sankey-map-header"
-      :class="{ 'is-hidden': headerScrollProgress > 0.92 }"
+      :class="{ 'is-hidden': !headerVisible }"
       :style="headerStyle"
     >
       <RouterLink class="brand" to="/" aria-label="污水信息因子数据库首页">
-        <span class="brand-logo" aria-hidden="true">
-          <span class="brand-drop"></span>
-          <span class="brand-bars"><i></i><i></i><i></i></span>
-          <span class="brand-line"><i></i><i></i></span>
-        </span>
+        <BrandMark :size="40" />
         <span>
           <strong>污水信息因子数据库</strong>
           <small>Wastewater Biomarker Evidence</small>
@@ -1958,19 +2029,11 @@ function exportPng() {
           <span class="loading-spinner" aria-hidden="true"></span>
           <span>正在加载 ICD11 桑基图数据…</span>
         </div>
-        <div
-          v-else-if="loadState === 'timeout'"
-          class="state-message error-state"
-          role="alert"
-        >
+        <div v-else-if="loadState === 'timeout'" class="state-message error-state" role="alert">
           <span>{{ errorMessage }}</span>
           <button type="button" @click="retryLoad">重新加载</button>
         </div>
-        <div
-          v-else-if="loadState === 'error'"
-          class="state-message error-state"
-          role="alert"
-        >
+        <div v-else-if="loadState === 'error'" class="state-message error-state" role="alert">
           <span>{{ errorMessage || 'ICD11 桑基图接口请求失败' }}</span>
           <button type="button" @click="retryLoad">重试</button>
         </div>
@@ -2056,7 +2119,8 @@ function exportPng() {
               <div>
                 <dt>颜色与带宽</dt>
                 <dd>
-                  节点统一为青灰色；流带按 Level2 动态着色，优先区分当前 Level1。带宽代表涉及文献数权重。
+                  节点统一为青灰色；流带按 Level2 动态着色，优先区分当前
+                  Level1。带宽代表涉及文献数权重。
                 </dd>
               </div>
               <div>
@@ -2229,7 +2293,10 @@ function exportPng() {
               </dl>
             </div>
             <template v-else>
-              <div class="drug-share-chart-shell">
+              <div
+                class="drug-share-chart-shell"
+                :style="relationPieChartShellStyle(section, false)"
+              >
                 <div
                   :ref="(element) => setPieChartRef(section.id, element)"
                   class="drug-share-chart"
@@ -2241,26 +2308,26 @@ function exportPng() {
                   <em v-if="section.isCollapsed">Top {{ TOP_RELATION_PIE_ITEMS }} + 其他</em>
                   <em v-else>{{ formatNumber(section.totalWeight) }} 权重</em>
                 </div>
+                <ul class="relation-pie-legend" aria-label="颜色图例">
+                  <li
+                    v-for="item in section.items"
+                    :key="item.name"
+                    :class="{ 'other-relation-item': item.isOther }"
+                    :title="item.name"
+                    tabindex="0"
+                    @mouseenter="handleRelationItemMouseOver(section, item)"
+                    @mouseleave="scheduleRestoreHighlight"
+                    @focus="handleRelationItemMouseOver(section, item)"
+                    @blur="scheduleRestoreHighlight"
+                  >
+                    <i :style="{ backgroundColor: item.itemStyle.color }" aria-hidden="true"></i>
+                    <span>{{ item.name }}</span>
+                    <span class="visually-hidden">
+                      权重 {{ formatNumber(item.value) }}，占比 {{ formatPercent(item.share) }}
+                    </span>
+                  </li>
+                </ul>
               </div>
-              <ul class="drug-share-list relation-share-list">
-                <li
-                  v-for="item in section.items"
-                  :key="item.name"
-                  :class="{ 'other-relation-item': item.isOther }"
-                  :style="relationShareBarStyle(item)"
-                  @mouseenter="handleRelationItemMouseOver(section, item)"
-                  @mouseleave="scheduleRestoreHighlight"
-                >
-                  <i :style="{ backgroundColor: item.itemStyle.color }"></i>
-                  <b>
-                    {{ item.name }}
-                    <small v-if="item.isOther"
-                      >包含 {{ formatNumber(item.hiddenItemCount) }} 项</small
-                    >
-                  </b>
-                  <span>{{ formatNumber(item.value) }} · {{ formatPercent(item.share) }}</span>
-                </li>
-              </ul>
             </template>
           </section>
         </template>
@@ -2287,7 +2354,10 @@ function exportPng() {
           <button type="button" aria-label="关闭放大查看" @click="closePieModal">关闭</button>
         </header>
         <div class="pie-modal-body">
-          <div class="pie-modal-chart-shell">
+          <div
+            class="pie-modal-chart-shell"
+            :style="relationPieChartShellStyle(activePieSection, true)"
+          >
             <div
               ref="modalPieChartEl"
               class="pie-modal-chart"
@@ -2299,18 +2369,26 @@ function exportPng() {
               <em v-if="activePieSection.isCollapsed">Top {{ TOP_RELATION_PIE_ITEMS }} + 其他</em>
               <em v-else>{{ formatNumber(activePieSection.totalWeight) }} 权重</em>
             </div>
+            <ul class="relation-pie-legend pie-modal-legend" aria-label="颜色图例">
+              <li
+                v-for="item in activePieSection.items"
+                :key="item.name"
+                :class="{ 'other-relation-item': item.isOther }"
+                :title="item.name"
+                tabindex="0"
+                @mouseenter="handleRelationItemMouseOver(activePieSection, item)"
+                @mouseleave="scheduleRestoreHighlight"
+                @focus="handleRelationItemMouseOver(activePieSection, item)"
+                @blur="scheduleRestoreHighlight"
+              >
+                <i :style="{ backgroundColor: item.itemStyle.color }" aria-hidden="true"></i>
+                <span>{{ item.name }}</span>
+                <span class="visually-hidden">
+                  权重 {{ formatNumber(item.value) }}，占比 {{ formatPercent(item.share) }}
+                </span>
+              </li>
+            </ul>
           </div>
-          <ul class="pie-modal-list">
-            <li v-for="item in activePieSection.items" :key="item.name">
-              <i :style="{ backgroundColor: item.itemStyle.color }"></i>
-              <b>
-                {{ item.name }}
-                <small v-if="item.isOther">包含 {{ formatNumber(item.hiddenItemCount) }} 项</small>
-              </b>
-              <span>权重 {{ formatNumber(item.value) }}</span>
-              <strong>{{ formatPercent(item.share) }}</strong>
-            </li>
-          </ul>
         </div>
       </section>
     </div>
@@ -3799,17 +3877,21 @@ function exportPng() {
     #ffffff;
   box-shadow: 0 10px 30px rgba(21, 52, 72, 0.08);
   opacity: var(--header-opacity, 1);
-  transform: translateY(var(--header-offset, 0));
   transition:
-    opacity 0.42s ease,
-    transform 0.42s ease,
-    box-shadow 0.42s ease;
-  will-change: opacity, transform;
+    opacity 0.45s ease,
+    box-shadow 0.45s ease;
+  will-change: opacity;
 }
 
 .sankey-map-header.is-hidden {
   pointer-events: none;
   box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sankey-map-header.site-header {
+    transition: none;
+  }
 }
 
 .sankey-controls {
@@ -4080,13 +4162,82 @@ function exportPng() {
 .drug-share-center,
 .pie-modal-center {
   position: absolute;
-  inset: 50% auto auto 50%;
   display: grid;
   place-items: center;
   min-width: 76px;
   transform: translate(-50%, -50%);
   pointer-events: none;
   text-align: center;
+}
+
+.drug-share-center {
+  inset: 35% auto auto 50%;
+}
+
+.pie-modal-center {
+  inset: 46% auto auto 40%;
+}
+
+.relation-pie-legend {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 2;
+  display: grid;
+  width: min(124px, 38%);
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: 3px;
+  margin: 0;
+  padding: 5px 6px;
+  border: 1px solid #cfdae5;
+  border-radius: 4px;
+  background: #edf3f8;
+  list-style: none;
+}
+
+.relation-pie-legend li {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 8px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-height: 15px;
+  color: #4c5967;
+  cursor: default;
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.relation-pie-legend li:focus-visible {
+  border-radius: 2px;
+  outline: 1px solid #5b83b0;
+  outline-offset: 2px;
+}
+
+.relation-pie-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+}
+
+.relation-pie-legend li.other-relation-item i {
+  border-radius: 50%;
+}
+
+.relation-pie-legend li > span:not(.visually-hidden) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .drug-share-center strong,
@@ -4382,20 +4533,19 @@ function exportPng() {
 }
 
 .pie-modal-body {
-  display: grid;
-  grid-template-columns: minmax(320px, 1fr) minmax(240px, 320px);
-  gap: 18px;
+  display: block;
   padding: 18px 20px 20px;
 }
 
 .pie-modal-chart-shell {
-  min-height: 390px;
+  min-height: var(--relation-pie-shell-height, 430px);
+  height: var(--relation-pie-shell-height, 430px);
   border-radius: 10px;
 }
 
 .pie-modal-chart {
   width: 100%;
-  height: 390px;
+  height: 100%;
 }
 
 .pie-modal-center strong {
@@ -4404,6 +4554,26 @@ function exportPng() {
 
 .pie-modal-center span {
   font-size: 12px;
+}
+
+.pie-modal-legend {
+  right: 16px;
+  bottom: 16px;
+  width: 180px;
+  row-gap: 5px;
+  padding: 7px 8px;
+}
+
+.pie-modal-legend li {
+  grid-template-columns: 10px minmax(0, 1fr);
+  gap: 7px;
+  min-height: 18px;
+  font-size: 12px;
+}
+
+.pie-modal-legend i {
+  width: 10px;
+  height: 10px;
 }
 
 .pie-modal-list {
@@ -5125,23 +5295,27 @@ function exportPng() {
   }
 }
 
-/* Academic research database visual system. */
+/* Visual language shared with the core-marker analysis module. */
 .sankey-shell {
-  --sankey-ink: #17262d;
-  --sankey-muted: #5d6a70;
-  --sankey-border: #cbd2d4;
+  --sankey-ink: #17212b;
+  --sankey-muted: #667382;
+  --sankey-border: #d7dee6;
+  --sankey-line-strong: #aeb9c6;
+  --sankey-blue: #2566d4;
+  --sankey-blue-soft: #eaf1ff;
+  --sankey-teal: #16845b;
   color: var(--sankey-ink);
-  background: #f5f7f6;
-  font-family: Arial, 'Noto Sans CJK SC', 'Source Han Sans CN', 'Microsoft YaHei', sans-serif;
+  background: #eef3f6;
+  font-family: Inter, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
 }
 
 .sankey-map-header.site-header {
-  min-height: 64px;
-  padding-top: 7px;
-  padding-bottom: 7px;
-  border-bottom: 1px solid var(--sankey-border);
+  min-height: 72px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(96, 124, 143, 0.24);
   background: #ffffff;
-  box-shadow: none;
+  box-shadow: 0 8px 28px rgba(21, 52, 72, 0.08);
   backdrop-filter: none;
 }
 
@@ -5155,19 +5329,19 @@ function exportPng() {
 .brand strong,
 .page-title,
 .module-switch-link strong {
-  font-weight: 700;
+  font-weight: 800;
 }
 
 .brand small {
-  color: #657177;
+  color: #697d8a;
   font-weight: 400;
 }
 
 .page-title {
-  padding-left: 10px;
-  border-left-width: 2px;
-  border-left-color: #3f777a;
-  color: #17262d;
+  padding-left: 11px;
+  border-left-width: 3px;
+  border-left-color: var(--sankey-teal);
+  color: #173247;
   font-size: 20px;
 }
 
@@ -5175,39 +5349,40 @@ function exportPng() {
 .location-search > button,
 .module-switch-link {
   border: 1px solid var(--sankey-border);
-  border-radius: 2px;
+  border-radius: 6px;
   background: #ffffff;
   box-shadow: none;
 }
 
 .location-search input {
   height: 38px;
-  color: #17262d;
+  color: var(--sankey-ink);
   font-weight: 400;
 }
 
 .location-search input:focus,
 .location-search > button:focus-visible,
 .module-switch-link:focus-visible {
-  border-color: #3f777a;
-  outline: 2px solid rgba(63, 119, 122, 0.2);
+  border-color: #5f84b3;
+  outline: 2px solid rgba(37, 102, 212, 0.12);
   outline-offset: 1px;
   box-shadow: none;
 }
 
 .module-switch-link {
   min-height: 38px;
-  color: #23343c;
+  color: #385466;
+  background: #f8fbfc;
 }
 
 .module-switch-link span {
-  color: #69757a;
-  font-weight: 500;
+  color: #697d8a;
+  font-weight: 600;
 }
 
 .module-switch-link:hover {
-  border-color: #829497;
-  background: #f7f9f8;
+  border-color: rgba(14, 143, 119, 0.48);
+  background: #eef8f6;
   box-shadow: none;
 }
 
@@ -5223,8 +5398,8 @@ function exportPng() {
   padding-top: 8px;
   padding-bottom: 7px;
   border-bottom: 1px solid var(--sankey-border);
-  background: #fcfdfd;
-  box-shadow: none;
+  background: #ffffff;
+  box-shadow: 0 4px 14px rgba(21, 52, 72, 0.04);
 }
 
 .sankey-controls .control-field,
@@ -5239,9 +5414,9 @@ function exportPng() {
 .sankey-controls .control-field > span,
 .scope-field legend {
   min-height: 13px;
-  color: #5d6a70;
+  color: #637487;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1.15;
 }
 
@@ -5250,9 +5425,9 @@ function exportPng() {
 .sankey-controls button,
 .top-toggle,
 .scope-segmented {
-  border: 1px solid var(--sankey-border);
-  border-radius: 2px;
-  color: #17262d;
+  border: 1px solid #b8c3ce;
+  border-radius: 6px;
+  color: var(--sankey-ink);
   background: #ffffff;
   box-shadow: none;
 }
@@ -5260,40 +5435,40 @@ function exportPng() {
 .control-field select,
 .control-field input,
 .sankey-controls button {
-  font-weight: 500;
+  font-weight: 650;
 }
 
 .scope-segmented {
-  padding: 1px;
-  background: #eef1f1;
+  padding: 2px;
+  background: #f3f6f8;
 }
 
 .scope-segmented span {
-  border-radius: 1px;
-  color: #5d6a70;
-  font-weight: 500;
+  border-radius: 4px;
+  color: #566575;
+  font-weight: 650;
 }
 
 .scope-segmented input:checked + span {
-  color: #214f52;
-  background: #ffffff;
+  color: var(--sankey-blue);
+  background: var(--sankey-blue-soft);
   box-shadow: none;
-  outline: 1px solid #aebabc;
+  outline: 1px solid rgba(37, 102, 212, 0.24);
 }
 
 .control-field select:focus,
 .control-field input:focus,
 .sankey-controls button:focus-visible,
 .scope-segmented input:focus-visible + span {
-  border-color: #3f777a;
-  outline: 2px solid rgba(63, 119, 122, 0.2);
+  border-color: #5f84b3;
+  outline: 2px solid rgba(37, 102, 212, 0.14);
   outline-offset: 1px;
   box-shadow: none;
 }
 
 .sankey-controls .control-button {
   min-width: 78px;
-  font-weight: 600;
+  font-weight: 700;
   white-space: nowrap;
   transition:
     color 0.15s ease,
@@ -5315,13 +5490,13 @@ function exportPng() {
   justify-content: flex-end;
   gap: 6px;
   padding-left: 12px;
-  border-left: 1px solid #dce1e2;
+  border-left: 1px solid var(--sankey-border);
 }
 
 .sankey-controls .reset-button,
 .sankey-controls .clear-lock-button {
-  border-color: #aeb9bc;
-  color: #33464e;
+  border-color: var(--sankey-line-strong);
+  color: #3e566b;
   background: #ffffff;
 }
 
@@ -5329,39 +5504,52 @@ function exportPng() {
 .sankey-controls .reset-button:focus-visible,
 .sankey-controls .clear-lock-button:hover,
 .sankey-controls .clear-lock-button:focus-visible {
-  border-color: #667b80;
-  color: #17262d;
-  background: #f1f4f3;
+  border-color: #6f879c;
+  color: #203a51;
+  background: #f3f6f8;
   box-shadow: none;
   transform: none;
+}
+
+.sankey-shell:has(.lock-bar.has-lock) .clear-lock-button {
+  border-color: rgba(22, 132, 91, 0.55);
+  color: #116c4d;
+}
+
+.sankey-shell:has(.lock-bar.has-lock) .clear-lock-button:hover,
+.sankey-shell:has(.lock-bar.has-lock) .clear-lock-button:focus-visible {
+  border-color: var(--sankey-teal);
+  color: #0d5d42;
+  background: #eef8f4;
 }
 
 .sankey-controls .export-button,
 .sankey-controls .export-button:hover,
 .sankey-controls .export-button:focus-visible {
-  border-color: #315f62 !important;
+  border-color: var(--sankey-blue) !important;
   color: #ffffff !important;
-  background: #315f62 !important;
+  background: var(--sankey-blue) !important;
   box-shadow: none;
   transform: none;
 }
 
 .sankey-controls .export-button:hover,
 .sankey-controls .export-button:focus-visible {
-  background: #244d50 !important;
+  border-color: #1f56b5 !important;
+  background: #1f56b5 !important;
 }
 
 .sankey-main {
   gap: 12px;
-  background: #f5f7f6;
+  background: #eef3f6;
 }
 
 .chart-panel,
 .side-panel {
   border: 1px solid var(--sankey-border);
-  border-radius: 2px;
+  border-radius: 6px;
   background: #ffffff;
-  box-shadow: none;
+  box-shadow: 0 8px 24px rgba(21, 52, 72, 0.06);
 }
 
 .chart-panel::before,
@@ -5370,14 +5558,21 @@ function exportPng() {
 }
 
 .chart-panel {
-  background: #fcfdfd;
+  background: #ffffff;
 }
 
 .side-panel,
 .side-panel.has-selection {
   border-color: var(--sankey-border);
   background: #ffffff;
-  box-shadow: none;
+  box-shadow: 0 8px 24px rgba(21, 52, 72, 0.06);
+}
+
+.side-panel.has-selection {
+  border-color: rgba(22, 132, 91, 0.42);
+  box-shadow:
+    0 8px 24px rgba(21, 52, 72, 0.06),
+    0 0 0 1px rgba(22, 132, 91, 0.08);
 }
 
 .lock-bar,
@@ -5391,14 +5586,14 @@ function exportPng() {
 }
 
 .lock-bar.has-lock {
-  border-left-color: #3f777a;
-  background: #f1f6f5;
+  border-left-color: var(--sankey-teal);
+  background: #eef8f4;
 }
 
 .lock-bar strong,
 .lock-bar.has-lock strong {
-  color: #23343c;
-  font-weight: 700;
+  color: #173247;
+  font-weight: 750;
 }
 
 .filter-summary {
@@ -5424,26 +5619,32 @@ function exportPng() {
   background: #ffffff;
 }
 
+.stage-axis-track {
+  min-height: 32px;
+}
+
 .stage-axis-track span {
-  min-height: 25px;
-  padding: 3px 5px;
+  min-height: 30px;
+  padding: 5px;
   border: 0;
   border-radius: 0;
-  color: #23343c;
+  color: #344657;
   background: transparent;
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 750;
+  line-height: 1.2;
   text-shadow: none;
 }
 
 .sankey-chart,
 .sankey-chart-shell {
-  background: #fcfdfd;
+  background: #ffffff;
 }
 
 .level1-column-rail {
-  border-color: #e1e5e6;
-  border-radius: 2px;
-  background: #f7f9f8;
+  border-color: #e3e9ee;
+  border-radius: 4px;
+  background: #f8fafc;
 }
 
 .overview-header {
@@ -5454,8 +5655,8 @@ function exportPng() {
 .side-panel h3,
 .side-panel strong,
 .side-panel b {
-  color: #23343c;
-  font-weight: 700;
+  color: #173247;
+  font-weight: 750;
 }
 
 .detail-block {
@@ -5466,7 +5667,7 @@ function exportPng() {
 .path-row span,
 .path-note,
 .top-list li {
-  color: #5d6a70;
+  color: var(--sankey-muted);
   font-weight: 400;
 }
 
@@ -5476,7 +5677,7 @@ function exportPng() {
   gap: 1px;
   padding: 1px;
   border: 1px solid var(--sankey-border);
-  border-radius: 2px;
+  border-radius: 5px;
   background: var(--sankey-border);
 }
 
@@ -5486,20 +5687,20 @@ function exportPng() {
   padding: 7px 8px;
   border: 0;
   border-radius: 0;
-  color: #5d6a70;
+  color: var(--sankey-muted);
   background: #ffffff;
   font-weight: 400;
   text-align: left;
 }
 
 .stats-summary b {
-  color: #5d6a70;
-  font-weight: 500;
+  color: var(--sankey-muted);
+  font-weight: 600;
 }
 
 .stats-summary strong {
-  color: #17262d;
-  font-weight: 700;
+  color: #173247;
+  font-weight: 800;
 }
 
 .upstream-context,
@@ -5514,7 +5715,7 @@ function exportPng() {
 .pie-modal-list li,
 .compact-detail .detail-kv div {
   border: 1px solid var(--sankey-border);
-  border-radius: 2px;
+  border-radius: 5px;
   background: #ffffff;
   box-shadow: none;
 }
@@ -5551,22 +5752,22 @@ function exportPng() {
 }
 
 .single-path-steps span {
-  border: 1px solid #bad0ce;
-  border-radius: 2px;
-  color: #315f62;
-  background: #eef5f4;
-  font-weight: 600;
+  border: 1px solid #b9cceb;
+  border-radius: 4px;
+  color: #24558d;
+  background: #eef4ff;
+  font-weight: 650;
 }
 
 .path-row button,
 .drug-share-heading button,
 .pie-modal header button {
-  border: 1px solid #9cadb0;
-  border-radius: 2px;
-  color: #315f62;
+  border: 1px solid #8aa9cf;
+  border-radius: 5px;
+  color: #24558d;
   background: #ffffff;
   box-shadow: none;
-  font-weight: 600;
+  font-weight: 700;
   transition:
     color 0.15s ease,
     border-color 0.15s ease,
@@ -5579,9 +5780,9 @@ function exportPng() {
 .drug-share-heading button:focus-visible,
 .pie-modal header button:hover,
 .pie-modal header button:focus-visible {
-  border-color: #3f777a;
-  color: #244d50;
-  background: #f1f6f5;
+  border-color: var(--sankey-blue);
+  color: #1f56b5;
+  background: #eef4ff;
   box-shadow: none;
   transform: none;
 }
@@ -5610,14 +5811,14 @@ function exportPng() {
 }
 
 .pie-modal {
-  border: 1px solid #aeb9bc;
-  border-radius: 3px;
+  border: 1px solid var(--sankey-line-strong);
+  border-radius: 6px;
   background: #ffffff;
-  box-shadow: 0 8px 24px rgba(18, 32, 39, 0.16);
+  box-shadow: 0 18px 48px rgba(21, 52, 72, 0.18);
 }
 
 .pie-modal-chart-shell {
-  border-radius: 2px;
+  border-radius: 5px;
 }
 
 .drug-share-center span,
@@ -5636,8 +5837,8 @@ function exportPng() {
 }
 
 :global(.sankey-tip) {
-  color: #23343c;
-  font-family: Arial, 'Noto Sans CJK SC', 'Source Han Sans CN', 'Microsoft YaHei', sans-serif;
+  color: #27333f;
+  font-family: Inter, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
 }
 
 :global(.sankey-tip__eyebrow),
@@ -5667,7 +5868,33 @@ function exportPng() {
 :global(.sankey-tip__metrics > div),
 :global(.sankey-tip__note),
 :global(.sankey-tip__node-main > span) {
-  border-radius: 2px;
+  border-radius: 4px;
+}
+
+.state-message button {
+  border: 1px solid var(--sankey-blue);
+  border-radius: 5px;
+  color: #ffffff;
+  background: var(--sankey-blue);
+  font-weight: 700;
+}
+
+.state-message button:hover,
+.state-message button:focus-visible {
+  border-color: #1f56b5;
+  color: #ffffff;
+  background: #1f56b5;
+  outline: 2px solid rgba(37, 102, 212, 0.14);
+  outline-offset: 2px;
+}
+
+.sankey-controls :disabled,
+.location-search :disabled {
+  border-color: #d7dee6 !important;
+  color: #8a96a3 !important;
+  background: #f3f5f7 !important;
+  box-shadow: none !important;
+  opacity: 0.72;
 }
 
 /* Research-sidebar information hierarchy. */
@@ -5692,7 +5919,7 @@ function exportPng() {
 }
 
 .stats-summary span:nth-child(-n + 3) {
-  background: #f6f8f7;
+  background: #f8fafc;
 }
 
 .stats-summary b {
@@ -5726,7 +5953,7 @@ function exportPng() {
   grid-template-columns: 86px minmax(0, 1fr);
   gap: 10px;
   padding: 7px 0;
-  border-bottom: 1px solid #edf0f0;
+  border-bottom: 1px solid #edf1f4;
 }
 
 .legend-list div:last-child {
@@ -5741,12 +5968,12 @@ function exportPng() {
 }
 
 .legend-list dt {
-  color: #33464e;
-  font-weight: 600;
+  color: #344657;
+  font-weight: 700;
 }
 
 .legend-list dd {
-  color: #5d6a70;
+  color: var(--sankey-muted);
   font-weight: 400;
 }
 
@@ -5759,7 +5986,7 @@ function exportPng() {
   gap: 7px;
   min-height: 34px;
   padding: 6px 0;
-  border-bottom: 1px solid #edf0f0;
+  border-bottom: 1px solid #edf1f4;
   font-size: 12px;
 }
 
@@ -5775,12 +6002,12 @@ function exportPng() {
 }
 
 .top-list b {
-  color: #2b3d45;
-  font-weight: 600;
+  color: #344657;
+  font-weight: 700;
 }
 
 .top-list li > span:last-child {
-  color: #5d6a70;
+  color: var(--sankey-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -5816,7 +6043,7 @@ function exportPng() {
   border: 0;
   border-right: 1px solid #dce1e2;
   border-radius: 0;
-  background: #fafbfb;
+  background: #f8fafc;
 }
 
 .compact-detail .node-summary-block .detail-kv div:last-child {
@@ -5824,14 +6051,14 @@ function exportPng() {
 }
 
 .compact-detail .node-summary-block .detail-kv dt {
-  color: #68777d;
+  color: var(--sankey-muted);
   font-size: 10px;
   font-weight: 500;
   white-space: nowrap;
 }
 
 .compact-detail .node-summary-block .detail-kv dd {
-  color: #23343c;
+  color: #344657;
   font-size: 12px;
   font-weight: 700;
   line-height: 1.2;
@@ -5850,13 +6077,13 @@ function exportPng() {
 }
 
 .drug-share-chart-shell {
-  height: 210px;
+  height: var(--relation-pie-shell-height, 300px);
   margin: 10px 0 0;
   border: 0;
   border-top: 1px solid #e1e5e6;
   border-bottom: 1px solid #e1e5e6;
   border-radius: 0;
-  background: #fafcfc;
+  background: #f8fafc;
 }
 
 .drug-share-list {
@@ -5880,7 +6107,7 @@ function exportPng() {
 .relation-share-list li:hover,
 .relation-share-list li:focus-within {
   border-color: #e1e5e6;
-  background: #f6f8f7;
+  background: #f5f8fb;
 }
 
 .drug-share-list i {
@@ -5889,12 +6116,12 @@ function exportPng() {
 }
 
 .drug-share-list b {
-  color: #2b3d45;
-  font-weight: 600;
+  color: #344657;
+  font-weight: 700;
 }
 
 .drug-share-list span {
-  color: #5d6a70;
+  color: var(--sankey-muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -5904,7 +6131,7 @@ function exportPng() {
   border-top: 1px solid #e1e5e6;
   border-bottom: 1px solid #e1e5e6;
   border-radius: 0;
-  background: #fafcfc;
+  background: #f8fafc;
 }
 
 .single-relation-card dl div {
@@ -5916,9 +6143,72 @@ function exportPng() {
 }
 
 @media (max-width: 720px) {
-  .stage-axis-track span,
+  .relation-pie-legend {
+    right: 7px;
+    bottom: 7px;
+    width: min(124px, 42%);
+    row-gap: 2px;
+    padding: 4px 5px;
+  }
+
+  .relation-pie-legend li {
+    grid-template-columns: 7px minmax(0, 1fr);
+    gap: 5px;
+    min-height: 12px;
+    font-size: 9px;
+  }
+
+  .relation-pie-legend i {
+    width: 7px;
+    height: 7px;
+  }
+
+  .pie-modal-backdrop {
+    padding: 12px;
+  }
+
+  .pie-modal-body {
+    padding: 12px;
+  }
+
+  .pie-modal-chart-shell {
+    min-height: var(--relation-pie-shell-height, 430px);
+    height: var(--relation-pie-shell-height, 430px);
+  }
+
+  .pie-modal-chart {
+    min-height: 0;
+    height: 100%;
+  }
+
+  .pie-modal-legend {
+    right: 10px;
+    bottom: 10px;
+    width: min(132px, 42%);
+  }
+
+  .drug-share-center {
+    inset: 34% auto auto 50%;
+  }
+
+  .pie-modal-center {
+    inset: 40% auto auto 50%;
+  }
+
+  .stage-axis-track {
+    min-height: 30px;
+  }
+
+  .stage-axis-track span {
+    min-height: 28px;
+    padding: 4px 3px;
+    border-radius: 5px;
+    font-size: 12px;
+    line-height: 1.15;
+  }
+
   .upstream-context {
-    border-radius: 2px;
+    border-radius: 5px;
   }
 
   .stats-summary {
@@ -5944,7 +6234,7 @@ function exportPng() {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     padding-top: 7px;
     padding-left: 0;
-    border-top: 1px solid #dce1e2;
+    border-top: 1px solid var(--sankey-border);
     border-left: 0;
   }
 }
@@ -5963,7 +6253,7 @@ function exportPng() {
     justify-self: end;
     padding-top: 7px;
     padding-left: 0;
-    border-top: 1px solid #dce1e2;
+    border-top: 1px solid var(--sankey-border);
     border-left: 0;
   }
 }

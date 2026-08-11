@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
+import BrandMark from '../components/BrandMark.vue'
 import {
   bulkUpdateUserPermissions,
   fetchUsers,
@@ -12,27 +13,46 @@ import {
 } from '../services/admin'
 import { fetchCurrentUser, logout as requestLogout, type UserResponse } from '../services/auth'
 import {
+  acceptSourceReview,
   approveUpload,
+  downloadReviewPackageFile,
+  downloadReviewPackageTemplate,
   downloadUploadFile,
   downloadUploadTemplate,
+  fetchUploadBatch,
+  fetchReviewPackages,
   fetchUploadRows,
   fetchUploads,
   rejectUpload,
   syncUpload,
   uploadPreview,
+  uploadReviewPackage,
   type DataUploadBatch,
   type DataUploadBatchPage,
   type DataUploadPreview,
+  type DataUploadReviewDecision,
+  type DataUploadReviewPackage,
   type DataUploadRowsPage,
 } from '../services/dataUploads'
 import { clearSession, getStoredSession, isAdmin, updateStoredUser } from '../services/session'
 
 type WorkspaceSection = 'upload' | 'batches' | 'users'
 type PermissionFilter = 'all' | 'true' | 'false'
-type BatchStatusFilter = 'all' | 'PENDING_REVIEW' | 'APPROVED' | 'VALIDATION_FAILED' | 'SYNCED' | 'REJECTED'
+type BatchStatusFilter =
+  | 'all'
+  | 'PENDING_REVIEW'
+  | 'REVISION_REQUIRED'
+  | 'ENRICHMENT_REQUIRED'
+  | 'PENDING_APPROVAL'
+  | 'APPROVED'
+  | 'SYNC_FAILED'
+  | 'VALIDATION_FAILED'
+  | 'SYNCED'
+  | 'REJECTED'
 type BatchScopeFilter = 'all' | 'mine' | 'pendingReview' | 'approved'
 type BatchUploaderTypeFilter = 'all' | 'viewer' | 'manager'
 type RowStatusFilter = 'all' | 'ERROR' | 'WARNING' | 'VALID' | 'SYNCED' | 'SKIPPED'
+type RowViewFilter = 'submission' | 'reviewPackage'
 
 const PREVIEW_COLUMNS: Record<string, string[]> = {
   数据表: ['文献编号', '目标类别', '目标物质类别', '药物', '生物标记物名称', '污水厂名称', 'PNDL_value', 'PNDL_unit', 'DOI'],
@@ -52,6 +72,8 @@ const PREVIEW_COLUMNS: Record<string, string[]> = {
     '点位说明',
     '同一污水厂确认依据',
   ],
+  采样方法统一审计: ['文献编号', '数据表采样方法（原文摘录）', '标准采样方法', '采样主类', '复核状态', '原文证据'],
+  核心标记物优先级识别: ['序号', '目标类别_主类', '目标物质类别_主类', '生物标记物名称', '原始记录数', '目标类别内综合得分', '异常检查'],
 }
 
 const FIELD_GROUPS = [
@@ -62,7 +84,10 @@ const FIELD_GROUPS = [
 ]
 
 const STATUS_LABELS: Record<string, string> = {
-  PENDING_REVIEW: '待审核',
+  PENDING_REVIEW: '待初审',
+  REVISION_REQUIRED: '退回修改',
+  ENRICHMENT_REQUIRED: '待整理',
+  PENDING_APPROVAL: '待终审',
   APPROVED: '已通过',
   VALIDATION_FAILED: '需修正',
   SYNCED: '已入库',
@@ -76,8 +101,12 @@ const STATUS_LABELS: Record<string, string> = {
 
 const BATCH_STATUS_FILTERS = [
   { value: 'all', label: '全部状态' },
-  { value: 'PENDING_REVIEW', label: '待审核' },
+  { value: 'PENDING_REVIEW', label: '待初审' },
+  { value: 'REVISION_REQUIRED', label: '退回修改' },
+  { value: 'ENRICHMENT_REQUIRED', label: '待整理' },
+  { value: 'PENDING_APPROVAL', label: '待终审' },
   { value: 'APPROVED', label: '已通过待同步' },
+  { value: 'SYNC_FAILED', label: '同步失败待重试' },
   { value: 'VALIDATION_FAILED', label: '需修正' },
   { value: 'SYNCED', label: '已入库' },
   { value: 'REJECTED', label: '已驳回' },
@@ -187,6 +216,7 @@ const activeSection = ref<WorkspaceSection>('upload')
 const selectedFile = ref<File | null>(null)
 const isDragging = ref(false)
 const isUploading = ref(false)
+const isUploadingReviewPackage = ref(false)
 const isSyncing = ref(false)
 const isLoadingBatches = ref(false)
 const isLoadingRows = ref(false)
@@ -196,6 +226,8 @@ const preview = ref<DataUploadPreview | null>(null)
 const activePreviewSheet = ref('数据表')
 const selectedBatch = ref<DataUploadBatch | null>(null)
 const selectedRowsPage = ref<DataUploadRowsPage | null>(null)
+const reviewPackages = ref<DataUploadReviewPackage[]>([])
+const selectedReviewPackageFile = ref<File | null>(null)
 const batchPage = ref<DataUploadBatchPage>({ ...emptyBatchPage })
 const userPage = ref<AdminUserPage>({ ...emptyUserPage })
 const selectedUserIds = ref<Set<number>>(new Set())
@@ -205,6 +237,18 @@ const reviewNote = ref('')
 const message = ref('')
 const messageType = ref<'success' | 'error'>('success')
 const rowStatusFilter = ref<RowStatusFilter>('all')
+const rowViewFilter = ref<RowViewFilter>('submission')
+const reviewDecision = reactive<DataUploadReviewDecision>({
+  sourceCoverageConfirmed: false,
+  traceabilityConfirmed: false,
+  valuesAndUnitsConfirmed: false,
+  siteLinkageConfirmed: false,
+  icd11Confirmed: false,
+  methodologyConfirmed: false,
+  coreMarkerConfirmed: false,
+  productionDiffConfirmed: false,
+  note: '',
+})
 const batchFilters = reactive({
   keyword: '',
   status: 'all' as BatchStatusFilter,
@@ -238,6 +282,9 @@ const currentUserCanDownload = computed(
 )
 const canSeeBatchModule = computed(() => canUploadData.value || canReviewUploads.value || canSyncData.value)
 const selectedFileLabel = computed(() => selectedFile.value?.name ?? '拖拽或选择 WBE Excel 文件')
+const selectedReviewPackageLabel = computed(
+  () => selectedReviewPackageFile.value?.name ?? '选择包含六张工作表的完整整理包',
+)
 const activePreviewRows = computed(() => preview.value?.previewRowsBySheet?.[activePreviewSheet.value] ?? [])
 const activePreviewColumns = computed(() => PREVIEW_COLUMNS[activePreviewSheet.value] ?? [])
 const visibleHeaderErrors = computed(() => preview.value?.headerErrors.slice(0, PREVIEW_ISSUE_LIMIT) ?? [])
@@ -251,18 +298,37 @@ const hiddenBatchWarningCount = computed(() =>
 const previewBlockingMessage = computed(() => {
   if (!preview.value) return ''
   if (preview.value.batch.status === 'VALIDATION_FAILED') {
-    return '该文件未通过完整工作簿校验，不能同步入库。请确认四张业务工作表及其表头、跨表文献引用、点位关联和 ICD11 映射层级均正确。'
+    return '提交文件未通过校验。请检查“数据表”的表头和问题行，修正后重新提交。'
   }
   if (preview.value.batch.errorRows > 0) {
     return '存在阻断错误的行，不能同步入库。请查看行预览中的问题字段，修正后重新上传。'
   }
-  if (preview.value.batch.status === 'REJECTED') {
-    return '该批次已被驳回，不能继续同步；如需入库请重新上传修正后的文件。'
+  if (preview.value.batch.status === 'REVISION_REQUIRED') {
+    return '该提交已退回修改，请根据审核原因重新整理后提交新批次。'
   }
   if (preview.value.batch.status === 'PENDING_REVIEW') {
-    return '该批次已提交审核，审核通过后才可同步入库。'
+    return '提交已进入初审。初审通过后由后台人员制作完整整理包并终审。'
   }
   return ''
+})
+
+const REVIEW_CHECKLIST = [
+  { key: 'sourceCoverageConfirmed', label: '完整整理包包含原始提交的全部数据行' },
+  { key: 'traceabilityConfirmed', label: '文献编号、DOI和来源信息可以追溯' },
+  { key: 'valuesAndUnitsConfirmed', label: '关键数值、单位及阻断错误已经核对' },
+  { key: 'siteLinkageConfirmed', label: '点位关联和跨文献合并依据已经核对' },
+  { key: 'icd11Confirmed', label: 'ICD11映射层级和不入图原因已经核对' },
+  { key: 'methodologyConfirmed', label: '采样方法标准化和原文证据已经核对' },
+  { key: 'coreMarkerConfirmed', label: '核心标记物结果和异常检查已经核对' },
+  { key: 'productionDiffConfirmed', label: '已查看并接受与当前生产数据的差异' },
+] as const
+
+const reviewChecklistComplete = computed(() =>
+  REVIEW_CHECKLIST.every((item) => reviewDecision[item.key]),
+)
+const currentReviewPackage = computed(() => {
+  const packageId = selectedBatch.value?.currentPackageId
+  return reviewPackages.value.find((item) => item.packageId === packageId) ?? null
 })
 
 const workspaceSections = computed(() => {
@@ -339,10 +405,8 @@ async function refreshCurrentUser() {
 function applyDefaultBatchView() {
   if (canUploadData.value || batchFilters.status !== 'all') return
   if (canReviewUploads.value) {
-    batchFilters.status = 'PENDING_REVIEW'
     batchFilters.scope = 'pendingReview'
   } else if (canSyncData.value) {
-    batchFilters.status = 'APPROVED'
     batchFilters.scope = 'approved'
   }
 }
@@ -443,6 +507,15 @@ async function handleDownloadTemplate() {
   }
 }
 
+async function handleDownloadReviewPackageTemplate() {
+  try {
+    await downloadReviewPackageTemplate()
+    setMessage('success', '完整整理包模板已开始下载')
+  } catch (error) {
+    setMessage('error', error instanceof Error ? error.message : '完整整理包模板下载失败')
+  }
+}
+
 async function handlePreview() {
   if (!selectedFile.value) {
     setMessage('error', '请先选择 .xlsx 文件')
@@ -504,8 +577,18 @@ async function loadBatchPage(page = batchPage.value.page) {
 async function loadRows(batch: DataUploadBatch, page = 1) {
   try {
     isLoadingRows.value = true
+    if (selectedBatch.value?.uploadId !== batch.uploadId) {
+      resetReviewDecision()
+      rowStatusFilter.value = 'all'
+      rowViewFilter.value = batch.currentPackageId ? 'reviewPackage' : 'submission'
+    }
     selectedBatch.value = batch
-    selectedRowsPage.value = await fetchUploadRows(batch.uploadId, page, 20, rowStatusFilter.value)
+    const [rows, packages] = await Promise.all([
+      fetchUploadRows(batch.uploadId, page, 20, rowStatusFilter.value, rowViewFilter.value),
+      fetchReviewPackages(batch.uploadId),
+    ])
+    selectedRowsPage.value = rows
+    reviewPackages.value = packages
   } catch (error) {
     setMessage('error', error instanceof Error ? error.message : '行预览加载失败')
   } finally {
@@ -528,32 +611,45 @@ async function changeRowStatusFilter() {
   await loadRows(selectedBatch.value, 1)
 }
 
+async function changeRowViewFilter() {
+  if (!selectedBatch.value) return
+  await loadRows(selectedBatch.value, 1)
+}
+
 function closeBatchDrawer() {
   selectedBatch.value = null
   selectedRowsPage.value = null
+  reviewPackages.value = []
+  selectedReviewPackageFile.value = null
   reviewNote.value = ''
   rowStatusFilter.value = 'all'
+  rowViewFilter.value = 'submission'
+  resetReviewDecision()
 }
 
 function canApproveBatch(batch: DataUploadBatch) {
-  return batch.status === 'PENDING_REVIEW' && canReviewUploads.value
+  return batch.status === 'PENDING_APPROVAL' && canReviewUploads.value
 }
 
 function canSyncBatch(batch: DataUploadBatch) {
-  return batch.status === 'APPROVED' && canSyncData.value
+  return ['APPROVED', 'SYNC_FAILED'].includes(batch.status) && canSyncData.value
 }
 
 async function handleApproveBatch(batch: DataUploadBatch) {
   if (!canApproveBatch(batch)) return
-  if (!window.confirm(`确定审核通过「${batch.fileName}」吗？通过后将进入待同步队列。`)) return
+  if (!reviewChecklistComplete.value) {
+    setMessage('error', '请先完成全部八项终审检查')
+    return
+  }
+  if (!window.confirm(`确定终审通过「${batch.fileName}」的最新完整整理包吗？`)) return
   try {
-    const approvedBatch = await approveUpload(batch.uploadId)
+    const approvedBatch = await approveUpload(batch.uploadId, { ...reviewDecision })
     if (preview.value?.batch.uploadId === batch.uploadId) {
       preview.value = { ...preview.value, batch: approvedBatch }
     }
     selectedBatch.value = approvedBatch
     await loadBatches()
-    setMessage('success', '批次已审核通过，等待同步入库')
+    setMessage('success', '完整整理包已终审通过，等待同步入库')
   } catch (error) {
     setMessage('error', error instanceof Error ? error.message : '审核通过失败')
   }
@@ -586,16 +682,95 @@ async function handleBatchSync(batch: DataUploadBatch) {
 }
 
 async function handleRejectBatch(batch: DataUploadBatch) {
-  if (!canReviewUploads.value || batch.status !== 'PENDING_REVIEW') return
-  if (!window.confirm(`确定驳回「${batch.fileName}」吗？`)) return
+  if (
+    !canReviewUploads.value ||
+    !['PENDING_REVIEW', 'ENRICHMENT_REQUIRED', 'PENDING_APPROVAL'].includes(batch.status)
+  ) return
+  if (!reviewNote.value.trim()) {
+    setMessage('error', '退回修改时必须填写具体原因')
+    return
+  }
+  if (!window.confirm(`确定退回「${batch.fileName}」并要求修改吗？`)) return
   try {
     const rejectedBatch = await rejectUpload(batch.uploadId, reviewNote.value)
     selectedBatch.value = rejectedBatch
     await loadBatches()
     reviewNote.value = ''
-    setMessage('success', '批次已驳回')
+    setMessage('success', '提交已退回修改')
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '驳回失败')
+    setMessage('error', error instanceof Error ? error.message : '退回失败')
+  }
+}
+
+function resetReviewDecision() {
+  for (const item of REVIEW_CHECKLIST) {
+    reviewDecision[item.key] = false
+  }
+  reviewDecision.note = ''
+}
+
+async function handleAcceptSourceReview(batch: DataUploadBatch) {
+  if (!canReviewUploads.value || batch.status !== 'PENDING_REVIEW') return
+  if (!window.confirm(`确认「${batch.fileName}」原始数据可以进入后台整理阶段吗？`)) return
+  try {
+    const updated = await acceptSourceReview(batch.uploadId, reviewNote.value)
+    selectedBatch.value = updated
+    reviewNote.value = ''
+    await loadBatches()
+    setMessage('success', '原始提交已通过初审，请上传完整整理包')
+  } catch (error) {
+    setMessage('error', error instanceof Error ? error.message : '初审操作失败')
+  }
+}
+
+function handleReviewPackageFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0] ?? null
+  if (!file) {
+    selectedReviewPackageFile.value = null
+    return
+  }
+  const validationMessage = validateSelectedFile(file)
+  if (validationMessage) {
+    selectedReviewPackageFile.value = null
+    setMessage('error', validationMessage)
+    return
+  }
+  selectedReviewPackageFile.value = file
+}
+
+async function handleUploadReviewPackage(batch: DataUploadBatch) {
+  if (!selectedReviewPackageFile.value) {
+    setMessage('error', '请先选择完整整理包')
+    return
+  }
+  try {
+    isUploadingReviewPackage.value = true
+    const result = await uploadReviewPackage(batch.uploadId, selectedReviewPackageFile.value)
+    reviewPackages.value = await fetchReviewPackages(batch.uploadId)
+    await loadBatches()
+    const refreshed = await fetchUploadBatch(batch.uploadId)
+    selectedBatch.value = refreshed
+    rowViewFilter.value = refreshed.currentPackageId ? 'reviewPackage' : 'submission'
+    await loadRows(refreshed, 1)
+    selectedReviewPackageFile.value = null
+    if (result.status === 'VALID') {
+      setMessage('success', `完整整理包 V${result.versionNo} 校验通过，等待终审`)
+    } else {
+      setMessage('error', `完整整理包 V${result.versionNo} 未通过校验，请查看错误摘要`)
+    }
+  } catch (error) {
+    setMessage('error', error instanceof Error ? error.message : '完整整理包上传失败')
+  } finally {
+    isUploadingReviewPackage.value = false
+  }
+}
+
+async function downloadPackage(batch: DataUploadBatch, item: DataUploadReviewPackage) {
+  try {
+    await downloadReviewPackageFile(batch.uploadId, item.packageId, item.fileName)
+  } catch (error) {
+    setMessage('error', error instanceof Error ? error.message : '完整整理包下载失败')
   }
 }
 
@@ -696,6 +871,7 @@ function applyRoleDefaults(role: UserResponse['role']) {
 
 async function savePermissionDrawer() {
   if (!editingUser.value) return
+  if (!window.confirm(`确定保存「${editingUser.value.username}」的角色和功能权限吗？`)) return
   try {
     isSavingUser.value = true
     const updated = await updateUserPermissions(editingUser.value.userId, { ...permissionForm })
@@ -779,14 +955,10 @@ async function handleLogout() {
   <main class="entry-shell">
     <header class="entry-header">
       <RouterLink class="brand" to="/" aria-label="返回首页">
-        <span class="brand-logo" aria-hidden="true">
-          <span class="brand-drop"></span>
-          <span class="brand-bars"><i></i><i></i><i></i></span>
-          <span class="brand-line"><i></i><i></i></span>
-        </span>
+        <BrandMark :size="40" />
         <span>
           <strong>污水信息因子数据库</strong>
-          <small>Data Entry Console</small>
+          <small>Wastewater Biomarker Evidence</small>
         </span>
       </RouterLink>
       <div class="header-title">
@@ -824,16 +996,16 @@ async function handleLogout() {
 
         <section v-if="activeSection === 'upload' && canUploadData" class="workspace-panel" aria-label="上传录入">
           <header class="section-head">
-            <h2>上传文件</h2>
-            <p>下载模板或按 WBE 汇总表整理字段，上传后完成字段识别、校验摘要和前 20 行预览。</p>
+            <h2>提交数据</h2>
+            <p>普通上传者只需填写“数据表”。文献、点位、ICD11、采样审计和优先级结果由后台人员在审核阶段整理。</p>
           </header>
 
           <div class="import-grid" aria-label="上传与校验">
             <div class="upload-panel">
               <header class="panel-head">
                 <div>
-                  <span>STEP 1</span>
-                  <h3>上传并校验</h3>
+                  <span>原始提交</span>
+                  <h3>选择数据表文件</h3>
                 </div>
                 <button type="button" class="secondary-action" @click="handleDownloadTemplate">
                   下载模板
@@ -848,7 +1020,7 @@ async function handleLogout() {
               >
                 <input type="file" accept=".xlsx" @change="handleFileChange" />
                 <strong>{{ selectedFileLabel }}</strong>
-                <span>.xlsx / 最大 50MB / 四张业务工作表 / 原始字段无损保留</span>
+                <span>.xlsx，最大 50MB，只要求一张名为“数据表”的工作表</span>
               </label>
               <button type="button" class="primary-action" :disabled="isUploading" @click="handlePreview">
                 {{ isUploading ? '正在解析' : '开始校验' }}
@@ -857,7 +1029,7 @@ async function handleLogout() {
 
             <div class="summary-panel">
               <header>
-                <span>STEP 2</span>
+                <span>校验结果</span>
                 <h3>校验摘要</h3>
               </header>
               <div v-if="preview" class="summary-metrics">
@@ -866,7 +1038,7 @@ async function handleLogout() {
                   <strong>{{ preview.batch.totalRows }}</strong>
                 </article>
                 <article>
-                  <span>可入库</span>
+                  <span>有效行</span>
                   <strong>{{ preview.batch.validRows }}</strong>
                 </article>
                 <article>
@@ -906,7 +1078,7 @@ async function handleLogout() {
                 <p v-if="hiddenBatchWarningCount" class="issue-more">还有 {{ hiddenBatchWarningCount }} 条提示未展开。</p>
               </div>
               <p v-if="preview?.batch.status === 'PENDING_REVIEW'" class="review-note">
-                该批次已进入待审核队列，需由具备审核权限的人员处理；通过后再由同步人员入库。
+                该提交已进入初审队列。初审通过后，后台人员会生成并上传完整整理包。
               </p>
             </div>
           </div>
@@ -914,14 +1086,13 @@ async function handleLogout() {
           <div class="requirements-band" aria-label="上传要求">
             <div class="requirements-copy">
               <span>上传要求</span>
-              <h3>文件必须匹配 WBE 汇总表格式。</h3>
+              <h3>提交文件只保留普通上传者需要负责的内容。</h3>
               <p>
-                仅支持不超过 50MB 的非空 .xlsx 文件；必须同时包含“数据表”“药物疾病ICD11映射”“文献基础信息”“点位关联表”；各表字段需与模板完全一致。
-                普通用户开放上传后，校验通过的批次会进入待审核队列。
+                仅支持不超过 50MB 的非空 .xlsx 文件；必须包含“数据表”，表头采用59字段版本，同时兼容缺少“目标物质细类”的旧版。文件校验通过后进入初审，不会直接替换生产数据。
               </p>
               <div class="template-actions">
                 <button type="button" @click="handleDownloadTemplate">下载 Excel 模板</button>
-                <small>模板包含四张业务工作表，并附字段说明与上传说明。</small>
+                <small>模板包含“数据表”、字段说明和填写说明。</small>
               </div>
             </div>
             <div class="requirements-grid">
@@ -934,7 +1105,7 @@ async function handleLogout() {
 
           <section v-if="preview" class="preview-section" aria-label="上传预览">
             <header class="section-head compact">
-              <span>PREVIEW</span>
+              <span>数据预览</span>
               <h3>{{ activePreviewSheet }} · 前 {{ activePreviewRows.length }} 行</h3>
             </header>
             <div v-if="preview.sheetSummaries?.length" class="preview-sheet-tabs" role="tablist" aria-label="工作表预览">
@@ -1071,11 +1242,8 @@ async function handleLogout() {
                         {{ batch.status === 'PENDING_REVIEW' ? '查看/审核' : '查看' }}
                       </button>
                       <button type="button" :disabled="!currentUserCanDownload" @click="downloadBatch(batch)">下载</button>
-                      <button v-if="canApproveBatch(batch)" type="button" @click="handleApproveBatch(batch)">
-                        审核通过
-                      </button>
                       <button v-if="canSyncBatch(batch)" type="button" @click="handleBatchSync(batch)">
-                        同步
+                        {{ batch.status === 'SYNC_FAILED' ? '重试同步' : '同步' }}
                       </button>
                     </div>
                   </td>
@@ -1139,12 +1307,103 @@ async function handleLogout() {
 
                 <div class="drawer-audit">
                   <p>上传时间：{{ formatDate(selectedBatch.createdAt) }}</p>
-                  <p>审核人：{{ selectedBatch.reviewedByName || '-' }} / {{ formatMaybeDate(selectedBatch.reviewedAt) }}</p>
+                  <p>初审人：{{ selectedBatch.sourceReviewedByName || '-' }} / {{ formatMaybeDate(selectedBatch.sourceReviewedAt) }}</p>
+                  <p>终审人：{{ selectedBatch.reviewedByName || '-' }} / {{ formatMaybeDate(selectedBatch.reviewedAt) }}</p>
                   <p>同步人：{{ selectedBatch.syncedByName || '-' }} / {{ formatMaybeDate(selectedBatch.syncedAt) }}</p>
+                  <p v-if="selectedBatch.sourceReviewNote">初审备注：{{ selectedBatch.sourceReviewNote }}</p>
                   <p v-if="selectedBatch.reviewNote">审核备注：{{ selectedBatch.reviewNote }}</p>
+                  <p v-if="selectedBatch.syncErrorMessage" class="sync-error">
+                    同步失败：{{ selectedBatch.syncErrorMessage }}
+                  </p>
                 </div>
 
+                <section
+                  v-if="canReviewUploads && ['ENRICHMENT_REQUIRED', 'PENDING_APPROVAL'].includes(selectedBatch.status)"
+                  class="review-package-panel"
+                >
+                  <header>
+                    <div>
+                      <strong>完整整理包</strong>
+                      <p>必须包含数据表、文献、点位、ICD11、采样审计和核心标记物六张工作表。</p>
+                    </div>
+                    <button type="button" class="secondary-action" @click="handleDownloadReviewPackageTemplate">
+                      下载空模板
+                    </button>
+                  </header>
+                  <label class="package-file-input">
+                    <input type="file" accept=".xlsx" @change="handleReviewPackageFileChange" />
+                    <span>{{ selectedReviewPackageLabel }}</span>
+                  </label>
+                  <button
+                    type="button"
+                    class="primary-action compact"
+                    :disabled="isUploadingReviewPackage"
+                    @click="handleUploadReviewPackage(selectedBatch)"
+                  >
+                    {{ isUploadingReviewPackage ? '正在校验' : '上传完整整理包' }}
+                  </button>
+                </section>
+
+                <section v-if="reviewPackages.length" class="review-package-history">
+                  <header>
+                    <strong>整理包版本</strong>
+                    <span>历史版本只读保留</span>
+                  </header>
+                  <article v-for="item in reviewPackages" :key="item.packageId">
+                    <div>
+                      <strong>V{{ item.versionNo }} · {{ item.fileName }}</strong>
+                      <span>{{ statusLabel(item.status) }} / {{ item.totalRows }} 行 / {{ formatDate(item.createdAt) }}</span>
+                    </div>
+                    <button type="button" :disabled="!currentUserCanDownload" @click="downloadPackage(selectedBatch, item)">
+                      下载
+                    </button>
+                    <p v-if="item.validationErrors.length">{{ item.validationErrors.join('；') }}</p>
+                  </article>
+                </section>
+
+                <section
+                  v-if="selectedBatch.status === 'PENDING_APPROVAL' && canReviewUploads"
+                  class="review-checklist"
+                >
+                  <header>
+                    <strong>终审检查</strong>
+                    <span>{{ reviewChecklistComplete ? '已完成' : '请逐项确认' }}</span>
+                  </header>
+                  <label v-for="item in REVIEW_CHECKLIST" :key="item.key">
+                    <input v-model="reviewDecision[item.key]" type="checkbox" />
+                    <span>{{ item.label }}</span>
+                  </label>
+                  <textarea
+                    v-model.trim="reviewDecision.note"
+                    maxlength="500"
+                    placeholder="终审备注（可选）"
+                  ></textarea>
+                  <div v-if="currentReviewPackage?.diffSummary?.sheets" class="production-diff">
+                    <strong>生产差异</strong>
+                    <p v-if="currentReviewPackage.diffSummary.riskLevel === 'HIGH'" class="risk">
+                      数据量存在大幅减少，仅系统管理员可以完成终审。
+                    </p>
+                    <p
+                      v-for="(diff, sheetName) in currentReviewPackage.diffSummary.sheets"
+                      :key="sheetName"
+                      :class="{ risk: diff.highRisk }"
+                    >
+                      {{ sheetName }}：{{ diff.currentRows }} → {{ diff.incomingRows }}
+                      <span v-if="diff.highRisk">（减少 {{ diff.decreasePercent }}%，需重点确认）</span>
+                    </p>
+                  </div>
+                </section>
+
                 <div class="drawer-row-toolbar">
+                  <label>
+                    数据版本
+                    <select v-model="rowViewFilter" @change="changeRowViewFilter">
+                      <option value="submission">原始提交</option>
+                      <option value="reviewPackage" :disabled="!selectedBatch.currentPackageId">
+                        当前整理包
+                      </option>
+                    </select>
+                  </label>
                   <label>
                     行状态
                     <select v-model="rowStatusFilter" @change="changeRowStatusFilter">
@@ -1203,27 +1462,40 @@ async function handleLogout() {
 
                 <footer class="drawer-actions">
                   <textarea
-                    v-if="selectedBatch.status === 'PENDING_REVIEW' && canReviewUploads"
+                    v-if="canReviewUploads && ['PENDING_REVIEW', 'ENRICHMENT_REQUIRED', 'PENDING_APPROVAL'].includes(selectedBatch.status)"
                     v-model.trim="reviewNote"
                     maxlength="500"
-                    placeholder="驳回原因（可选，最多 500 字）"
+                    placeholder="退回修改原因（退回时必填，最多500字）"
                   ></textarea>
                   <div>
                     <button
-                      v-if="selectedBatch.status === 'PENDING_REVIEW' && canReviewUploads"
+                      v-if="canReviewUploads && ['PENDING_REVIEW', 'ENRICHMENT_REQUIRED', 'PENDING_APPROVAL'].includes(selectedBatch.status)"
                       type="button"
                       class="danger-action"
                       @click="handleRejectBatch(selectedBatch)"
                     >
-                      驳回
+                      退回修改
+                    </button>
+                    <button
+                      v-if="selectedBatch.status === 'PENDING_REVIEW' && canReviewUploads"
+                      type="button"
+                      class="primary-action compact"
+                      @click="handleAcceptSourceReview(selectedBatch)"
+                    >
+                      通过初审
                     </button>
                     <button
                       v-if="canApproveBatch(selectedBatch)"
                       type="button"
                       class="primary-action compact"
+                      :disabled="currentReviewPackage?.diffSummary.riskLevel === 'HIGH' && !currentUserIsAdmin"
                       @click="handleApproveBatch(selectedBatch)"
                     >
-                      审核通过
+                      {{
+                        currentReviewPackage?.diffSummary.riskLevel === 'HIGH' && !currentUserIsAdmin
+                          ? '等待管理员终审'
+                          : '终审通过'
+                      }}
                     </button>
                     <button
                       v-if="canSyncBatch(selectedBatch)"
@@ -1232,7 +1504,7 @@ async function handleLogout() {
                       :disabled="isSyncing"
                       @click="handleBatchSync(selectedBatch)"
                     >
-                      同步入库
+                      {{ selectedBatch.status === 'SYNC_FAILED' ? '重试同步' : '同步入库' }}
                     </button>
                   </div>
                 </footer>
@@ -2141,6 +2413,8 @@ td {
 }
 
 .status-pill.pending_review,
+.status-pill.enrichment_required,
+.status-pill.pending_approval,
 .status-pill.warning,
 .status-pill.skipped {
   background: #fff4d8;
@@ -2148,6 +2422,7 @@ td {
 }
 
 .status-pill.validation_failed,
+.status-pill.revision_required,
 .status-pill.error,
 .status-pill.sync_failed,
 .status-pill.rejected {
@@ -2571,11 +2846,12 @@ tbody tr:hover {
   top: 0;
   right: 0;
   z-index: 45;
-  display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   width: min(720px, 100%);
   height: 100%;
+  overflow-y: auto;
   padding: 18px;
   background: #ffffff;
   box-shadow: -22px 0 42px rgba(21, 50, 58, 0.18);
@@ -2624,11 +2900,107 @@ tbody tr:hover {
 
 .drawer-metrics article,
 .drawer-audit,
-.drawer-row-toolbar {
+.drawer-row-toolbar,
+.review-package-panel,
+.review-package-history,
+.review-checklist {
   padding: 10px;
   border: 1px solid #d8e2e5;
   border-radius: 8px;
-  background: #f8fbfb;
+  background: #ffffff;
+}
+
+.review-package-panel,
+.review-package-history,
+.review-checklist {
+  display: grid;
+  gap: 10px;
+}
+
+.review-package-panel header,
+.review-package-history header,
+.review-checklist header,
+.review-package-history article {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.review-package-panel header span,
+.review-package-history header span,
+.review-checklist header span,
+.review-package-history article span {
+  color: #607780;
+  font-size: 12px;
+}
+
+.package-file-input {
+  display: block;
+  padding: 9px 10px;
+  overflow: hidden;
+  border: 1px dashed #a8bec4;
+  border-radius: 6px;
+  color: #405e67;
+  cursor: pointer;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.package-file-input input {
+  display: none;
+}
+
+.review-package-history article {
+  padding-top: 9px;
+  border-top: 1px solid #e2eaec;
+}
+
+.review-package-history article > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.review-package-history article p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #96372e;
+  font-size: 12px;
+}
+
+.review-checklist > label {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  color: #294952;
+  font-size: 13px;
+}
+
+.review-checklist textarea {
+  min-height: 62px;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid #c9d8dc;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.production-diff {
+  padding: 9px 10px;
+  border-left: 3px solid #73959d;
+  background: #f5f8f9;
+}
+
+.production-diff p {
+  margin: 4px 0 0;
+  color: #4f6870;
+  font-size: 12px;
+}
+
+.production-diff p.risk {
+  color: #96372e;
+  font-weight: 700;
 }
 
 .drawer-metrics span,
@@ -2657,6 +3029,12 @@ tbody tr:hover {
   margin: 0;
 }
 
+.drawer-audit .sync-error {
+  grid-column: 1 / -1;
+  color: #96372e;
+  font-weight: 700;
+}
+
 .drawer-row-toolbar label {
   display: inline-flex;
   gap: 8px;
@@ -2680,7 +3058,8 @@ tbody tr:hover {
 }
 
 .drawer-row-table {
-  min-height: 0;
+  min-height: 240px;
+  max-height: 48vh;
   overflow: auto;
   border: 1px solid #d8e2e5;
   border-radius: 8px;

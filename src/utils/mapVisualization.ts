@@ -4,6 +4,73 @@ export type MapDisplayLevel = 'country' | 'admin1' | 'city'
 
 export type MapHierarchyRow = {
   level: MapDisplayLevel
+  geoKey?: string
+  parentGeoKey?: string | null
+}
+
+const ALL_FILTER_VALUE_PATTERN = /^(all|全部|全部年份|全部类别|全部小类|全部生物标记物|全部目标物质类别)$/i
+
+export function isAllFilterContextValue(value: string | null | undefined) {
+  return ALL_FILTER_VALUE_PATTERN.test(String(value ?? '').trim())
+}
+
+export function detailFilterContext(options: {
+  hasSpecificBiomarker: boolean
+  biomarkerLabel?: string | null
+  year?: string | null
+  fallbackParts?: Array<string | null | undefined>
+}) {
+  const year = isAllFilterContextValue(options.year) ? '' : String(options.year ?? '').trim()
+  if (options.hasSpecificBiomarker) {
+    return [options.biomarkerLabel, year]
+      .map((value) => String(value ?? '').trim())
+      .filter((value) => value && !isAllFilterContextValue(value))
+      .join(' · ')
+  }
+  return [...(options.fallbackParts ?? []), year]
+    .map((value) => String(value ?? '').trim())
+    .filter((value) => value && !isAllFilterContextValue(value))
+    .join(' / ')
+}
+
+export function isUnassignedGeoKey(level: string, geoKey: string) {
+  return (level === 'admin1' || level === 'city') && geoKey.endsWith('|__unassigned__')
+}
+
+export function isUnassignedAdmin1GeoKey(level: string, geoKey: string) {
+  return level === 'admin1' && isUnassignedGeoKey(level, geoKey)
+}
+
+export function excludeUnassignedCityRows<
+  T extends { level: string; geoKey?: string; key?: string },
+>(rows: T[]) {
+  return rows.filter((row) => {
+    const geoKey = String(row.geoKey ?? row.key ?? '')
+    return !isUnassignedGeoKey(row.level, geoKey) || row.level !== 'city'
+  })
+}
+
+export function countryLabelStyleForArea(area: number) {
+  if (area >= 180) return { size: 13, sort: 0 }
+  if (area >= 45) return { size: 12, sort: 1 }
+  if (area >= 8) return { size: 10.5, sort: 2 }
+  return { size: 9, sort: 3 }
+}
+
+export function pndlComparisonsForRegion<T extends { key: string; scopeLevel: string }>(
+  comparisons: T[],
+  level: string | null | undefined,
+  geoKey: string | null | undefined,
+) {
+  const normalizedLevel = String(level ?? '')
+  const normalizedGeoKey = String(geoKey ?? '')
+  if (!isUnassignedGeoKey(normalizedLevel, normalizedGeoKey)) return comparisons
+  const comparisonScope = normalizedLevel === 'city' ? 'admin1' : 'country'
+  const parentComparison = comparisons.find(
+    (comparison) =>
+      comparison.scopeLevel === comparisonScope || comparison.key === comparisonScope,
+  )
+  return parentComparison ? [parentComparison] : []
 }
 
 const NON_MAINLAND_CHINA_GEO_SEGMENTS = new Set([
@@ -112,14 +179,48 @@ export function selectRowsForDisplayLevel<T extends MapHierarchyRow>(
   return [...grouped.entries()].flatMap(([country, countryRows]) => {
     const countryLevelRows = countryRows.filter((row) => row.level === 'country')
     const adminRows = countryRows.filter((row) => row.level === 'admin1')
-    if (level === 'admin1') return adminRows.length ? adminRows : countryLevelRows
+    const assignedAdminRows = adminRows.filter((row) => !isUnassignedRow(row))
+    const unassignedAdminRows = adminRows.filter(isUnassignedRow)
+    if (level === 'admin1') {
+      return assignedAdminRows.length
+        ? assignedAdminRows
+        : unassignedAdminRows.length
+          ? unassignedAdminRows
+          : countryLevelRows
+    }
 
     if (country === 'china') {
       const cityRows = countryRows.filter((row) => row.level === 'city')
-      return cityRows.length ? cityRows : adminRows.length ? adminRows : countryLevelRows
+      if (!assignedAdminRows.length) {
+        const assignedCityRows = cityRows.filter((row) => !isUnassignedRow(row))
+        return assignedCityRows
+      }
+      return assignedAdminRows.flatMap((adminRow) => {
+        const adminKey = hierarchyGeoKey(adminRow)
+        const childRows = cityRows.filter((row) => hierarchyParentGeoKey(row) === adminKey)
+        return childRows.filter((row) => !isUnassignedRow(row))
+      })
     }
-    return adminRows.length ? adminRows : countryLevelRows
+    return assignedAdminRows.length
+      ? assignedAdminRows
+      : unassignedAdminRows.length
+        ? unassignedAdminRows
+        : countryLevelRows
   })
+}
+
+function hierarchyGeoKey(row: MapHierarchyRow) {
+  return String(row.geoKey ?? (row as MapHierarchyRow & { key?: string }).key ?? '')
+}
+
+function hierarchyParentGeoKey(row: MapHierarchyRow) {
+  if (row.parentGeoKey) return String(row.parentGeoKey)
+  const parts = hierarchyGeoKey(row).split('|')
+  return parts.length > 1 ? parts.slice(0, -1).join('|') : ''
+}
+
+function isUnassignedRow(row: MapHierarchyRow) {
+  return isUnassignedGeoKey(row.level, hierarchyGeoKey(row))
 }
 
 export function temperatureBandIndex(value: number, min: number, max: number, bandCount: number) {
@@ -193,6 +294,49 @@ export function compactExplorerSummaryCards(cards: MapSummaryCard[]) {
   return cards
     .filter((card) => COMPACT_EXPLORER_CARD_LABELS.has(compactCardLabel(card.label)))
     .slice(0, 3)
+}
+
+export type BiomarkerExplorerMetricKey = 'records' | 'literature' | 'points'
+
+export function biomarkerExplorerMetricKeys(hasSpecificBiomarker: boolean) {
+  return (hasSpecificBiomarker
+    ? ['records']
+    : ['records', 'literature', 'points']) as BiomarkerExplorerMetricKey[]
+}
+
+export type PndlAxisTick = {
+  ratio: number
+  value: number
+}
+
+export function pndlChartScalePercent(
+  value: number | null | undefined,
+  max: number,
+  min: number,
+  useLogScale: boolean,
+) {
+  const numericValue = Number(value ?? 0)
+  if (!Number.isFinite(numericValue) || numericValue <= 0 || max <= 0) return 0
+  if (useLogScale && min > 0) {
+    const denominator = Math.log10(max / min + 1)
+    if (denominator <= 0) return 0
+    const numerator = Math.log10(numericValue / min + 1)
+    return Math.max(0, Math.min(100, (numerator / denominator) * 100))
+  }
+  return Math.max(0, Math.min(100, (numericValue / max) * 100))
+}
+
+export function pndlChartAxisTicks(max: number, min: number, useLogScale: boolean) {
+  const ratios = [1, 0.75, 0.5, 0.25, 0]
+  if (!Number.isFinite(max) || max <= 0) {
+    return ratios.map((ratio) => ({ ratio, value: 0 }))
+  }
+  const denominator = useLogScale && min > 0 ? Math.log10(max / min + 1) : 0
+  return ratios.map((ratio): PndlAxisTick => {
+    const value =
+      denominator > 0 ? min * (10 ** (ratio * denominator) - 1) : max * ratio
+    return { ratio, value: Math.max(0, value) }
+  })
 }
 
 export function canExploreBiomarker(

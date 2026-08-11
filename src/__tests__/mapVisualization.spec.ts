@@ -3,15 +3,24 @@ import { describe, expect, it } from 'vitest'
 import { normalizeMapDetailResponse, normalizeMapStatsResponse } from '../services/map'
 import type { MapDetailResponse, MapRegionStat, MapStatsResponse } from '../types/map'
 import {
+  biomarkerExplorerMetricKeys,
   canExploreBiomarker,
   compactExplorerSummaryCards,
   compactHeatFootprintPadding,
+  countryLabelStyleForArea,
+  detailFilterContext,
   displayLevelForZoom,
+  excludeUnassignedCityRows,
   excludeGeometryFromFilter,
   firstActiveRegionCandidate,
   heatRegionLevelForDisplayLevel,
   isMainlandChinaCity,
+  isUnassignedAdmin1GeoKey,
+  isUnassignedGeoKey,
   overviewSummaryCards,
+  pndlChartAxisTicks,
+  pndlChartScalePercent,
+  pndlComparisonsForRegion,
   regionFillOpacityExpression,
   resolveStableHeatRange,
   selectRowsForDisplayLevel,
@@ -35,6 +44,47 @@ const legacyChinaRegion: MapRegionStat = {
 }
 
 describe('map visualization hierarchy', () => {
+  it('recognizes reserved unassigned buckets at admin1 and city levels', () => {
+    expect(isUnassignedAdmin1GeoKey('admin1', 'usa|__unassigned__')).toBe(true)
+    expect(isUnassignedAdmin1GeoKey('country', 'usa|__unassigned__')).toBe(false)
+    expect(isUnassignedAdmin1GeoKey('admin1', 'usa|california')).toBe(false)
+    expect(isUnassignedGeoKey('city', 'china|qinghai|__unassigned__')).toBe(true)
+    expect(isUnassignedGeoKey('country', 'china|__unassigned__')).toBe(false)
+  })
+
+  it('gives larger countries higher-priority labels', () => {
+    expect(countryLabelStyleForArea(180)).toEqual({ size: 13, sort: 0 })
+    expect(countryLabelStyleForArea(45)).toEqual({ size: 12, sort: 1 })
+    expect(countryLabelStyleForArea(8)).toEqual({ size: 10.5, sort: 2 })
+    expect(countryLabelStyleForArea(7.99)).toEqual({ size: 9, sort: 3 })
+  })
+
+  it('uses only the parent-country comparison for an unassigned admin1 bucket', () => {
+    const comparisons = [
+      { key: 'admin1', scopeLevel: 'admin1' },
+      { key: 'country', scopeLevel: 'country' },
+    ]
+
+    expect(
+      pndlComparisonsForRegion(comparisons, 'admin1', 'unitedsofamerica|__unassigned__'),
+    ).toEqual([{ key: 'country', scopeLevel: 'country' }])
+    expect(pndlComparisonsForRegion(comparisons, 'admin1', 'unitedsofamerica|newyork')).toEqual(
+      comparisons,
+    )
+  })
+
+  it('uses only the parent admin comparison for an unassigned city bucket', () => {
+    const comparisons = [
+      { key: 'city', scopeLevel: 'city' },
+      { key: 'admin1', scopeLevel: 'admin1' },
+      { key: 'country', scopeLevel: 'country' },
+    ]
+
+    expect(
+      pndlComparisonsForRegion(comparisons, 'city', 'china|qinghai|__unassigned__'),
+    ).toEqual([{ key: 'admin1', scopeLevel: 'admin1' }])
+  })
+
   it('identifies mainland cities without treating Hong Kong, Macao, or Taiwan as mainland', () => {
     expect(isMainlandChinaCity('china|sichuan|chengdu', 'china|sichuan', 'china|sichuan')).toBe(
       true,
@@ -156,6 +206,87 @@ describe('map visualization hierarchy', () => {
     ).toEqual(['canada', 'usa|california', 'china|guangdong|guangzhou'])
   })
 
+  it('hides unassigned admin rows when a country has any assigned admin data', () => {
+    const rows = [
+      { level: 'country' as const, key: 'vietnam', country: 'vietnam' },
+      { level: 'admin1' as const, key: 'vietnam|__unassigned__', country: 'vietnam' },
+      { level: 'country' as const, key: 'spain', country: 'spain' },
+      { level: 'admin1' as const, key: 'spain|madrid', country: 'spain' },
+      { level: 'admin1' as const, key: 'spain|__unassigned__', country: 'spain' },
+    ]
+
+    expect(
+      selectRowsForDisplayLevel(rows, 'admin1', (row) => row.country).map((row) => row.key),
+    ).toEqual(['vietnam|__unassigned__', 'spain|madrid'])
+  })
+
+  it('shows real cities and excludes unassigned city buckets at city level', () => {
+    const rows = [
+      { level: 'country' as const, geoKey: 'china', key: 'china', country: 'china' },
+      {
+        level: 'admin1' as const,
+        geoKey: 'china|qinghai',
+        key: 'china|qinghai',
+        country: 'china',
+      },
+      {
+        level: 'admin1' as const,
+        geoKey: 'china|sichuan',
+        key: 'china|sichuan',
+        country: 'china',
+      },
+      {
+        level: 'city' as const,
+        geoKey: 'china|qinghai|xining',
+        parentGeoKey: 'china|qinghai',
+        key: 'china|qinghai|xining',
+        country: 'china',
+      },
+      {
+        level: 'city' as const,
+        geoKey: 'china|qinghai|__unassigned__',
+        parentGeoKey: 'china|qinghai',
+        key: 'china|qinghai|__unassigned__',
+        country: 'china',
+      },
+      {
+        level: 'city' as const,
+        geoKey: 'china|sichuan|__unassigned__',
+        parentGeoKey: 'china|sichuan',
+        key: 'china|sichuan|__unassigned__',
+        country: 'china',
+      },
+    ]
+
+    expect(
+      selectRowsForDisplayLevel(rows, 'city', (row) => row.country).map((row) => row.key),
+    ).toEqual(['china|qinghai|xining'])
+    expect(excludeUnassignedCityRows(rows).map((row) => row.key)).not.toContain(
+      'china|qinghai|__unassigned__',
+    )
+  })
+
+  it('keeps city views empty when a province only has unassigned city data', () => {
+    const rows = [
+      { level: 'country' as const, geoKey: 'china', key: 'china', country: 'china' },
+      {
+        level: 'admin1' as const,
+        geoKey: 'china|heilongjiang',
+        key: 'china|heilongjiang',
+        country: 'china',
+      },
+      {
+        level: 'city' as const,
+        geoKey: 'china|heilongjiang|__unassigned__',
+        parentGeoKey: 'china|heilongjiang',
+        key: 'china|heilongjiang|__unassigned__',
+        country: 'china',
+      },
+    ]
+
+    expect(selectRowsForDisplayLevel(rows, 'city', (row) => row.country)).toEqual([])
+  })
+
   it('keeps exactly the three compact coverage metrics', () => {
     const cards = compactExplorerSummaryCards([
       { label: '点位数', value: '119' },
@@ -166,6 +297,54 @@ describe('map visualization hierarchy', () => {
     ])
 
     expect(cards.map((card) => card.label)).toEqual(['点位数', '文献数', 'biomarker 数'])
+  })
+
+  it('removes repeated literature and point metrics after selecting a biomarker', () => {
+    expect(biomarkerExplorerMetricKeys(true)).toEqual(['records'])
+    expect(biomarkerExplorerMetricKeys(false)).toEqual(['records', 'literature', 'points'])
+  })
+
+  it('keeps only the selected biomarker and a specific year in detail context', () => {
+    expect(
+      detailFilterContext({
+        hasSpecificBiomarker: true,
+        biomarkerLabel: '磺胺甲噁唑',
+        year: '全部年份',
+        fallbackParts: ['J 系统用抗感染药物', 'J01 系统用抗菌药', '全部小类'],
+      }),
+    ).toBe('磺胺甲噁唑')
+    expect(
+      detailFilterContext({
+        hasSpecificBiomarker: true,
+        biomarkerLabel: '磺胺甲噁唑',
+        year: '2021',
+      }),
+    ).toBe('磺胺甲噁唑 · 2021')
+  })
+
+  it('removes all-value placeholders from non-biomarker detail context', () => {
+    expect(
+      detailFilterContext({
+        hasSpecificBiomarker: false,
+        year: '全部年份',
+        fallbackParts: ['健康状态类', '全部目标物质类别', '全部小类'],
+      }),
+    ).toBe('健康状态类')
+  })
+
+  it('builds linear and logarithmic PNDL ticks from the same bar scale', () => {
+    const linearTicks = pndlChartAxisTicks(100, 20, false)
+    expect(linearTicks.map((tick) => tick.value)).toEqual([100, 75, 50, 25, 0])
+    expect(pndlChartScalePercent(75, 100, 20, false)).toBe(75)
+
+    const logTicks = pndlChartAxisTicks(1000, 1, true)
+    expect(logTicks[0]?.value).toBeCloseTo(1000)
+    expect(logTicks[logTicks.length - 1]?.value).toBe(0)
+    logTicks.forEach((tick) => {
+      expect(pndlChartScalePercent(tick.value, 1000, 1, true)).toBeCloseTo(
+        tick.ratio * 100,
+      )
+    })
   })
 
   it('allows biomarker exploration when coverage exists without PNDL', () => {
