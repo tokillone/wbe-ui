@@ -158,7 +158,7 @@ describe('core marker priority production shell', () => {
     expect(moduleHtml).toContain('function rankingChartSort(a,b)')
     expect(moduleHtml).toContain('function competitionRanks(rows)')
     expect(moduleHtml).toContain('if(index===0||total!==previous)rank=index+1')
-    expect(moduleHtml).toContain('displayRanks=competitionRanks(rows)')
+    expect(moduleHtml).toContain('displayRanks=groupMode?rows.map((_,index)=>index+1):competitionRanks(rows)')
     expect(moduleHtml).toContain('text:String(displayRanks[params.dataIndex]??"—").padStart(2,"0")')
     expect(moduleHtml).toContain('{label:"当前结果排名",value:`${displayRanks[index]??"—"} / ${rows.length}`}')
     expect(moduleDocument).toContain('<div class="break-summary" id="breakSummary" aria-label="分层参考线说明" hidden></div>')
