@@ -5,17 +5,67 @@ import type {
   SamplingMethodMeta,
 } from '../types/methodology'
 
+export const SAMPLING_CLASS_COLORS: Record<string, string> = {
+  '复合采样': '#3568B8',
+  '抓取采样': '#6F94CE',
+  '被动采样': '#2F8F89',
+  '连续/在线采样': '#82BEB8',
+}
+
+export const PRESCRIPTION_COLORS: Record<string, string> = {
+  '处方药': '#3568B8',
+  '非处方药': '#48A29A',
+}
+
 export const METHODOLOGY_COLORS = [
-  '#2868c7',
-  '#0f8f8a',
-  '#d9901f',
-  '#d65f5f',
-  '#7c5cc4',
-  '#3a9d55',
-  '#168aad',
-  '#8792a2',
-  '#b45f33',
+  SAMPLING_CLASS_COLORS['复合采样']!,
+  SAMPLING_CLASS_COLORS['抓取采样']!,
+  SAMPLING_CLASS_COLORS['被动采样']!,
+  SAMPLING_CLASS_COLORS['连续/在线采样']!,
 ]
+
+export const COUNTRY_NAMES_ZH: Record<string, string> = {
+  China: '中国',
+  Australia: '澳大利亚',
+  Spain: '西班牙',
+  'United Kingdom': '英国',
+  Belgium: '比利时',
+  Italy: '意大利',
+  'United States': '美国',
+  Turkey: '土耳其',
+  Netherlands: '荷兰',
+  Norway: '挪威',
+  Vietnam: '越南',
+  Denmark: '丹麦',
+  Switzerland: '瑞士',
+  Greece: '希腊',
+  France: '法国',
+  Germany: '德国',
+  Japan: '日本',
+  India: '印度',
+  Canada: '加拿大',
+  Brazil: '巴西',
+}
+
+export function countryNameZh(name: string) {
+  return COUNTRY_NAMES_ZH[name] ?? name
+}
+
+export function formatAnalysisMethodName(name: string) {
+  return name
+    .replace(/^LC-HRMS\/QTOF$/i, 'LC–HRMS/QTOF')
+    .replace(/^LC-MS\/MS$/i, 'LC–MS/MS')
+    .replace(/^GC-MS$/i, 'GC–MS')
+    .replace(/^HPLC\/UPLC非质谱$/i, 'HPLC/UPLC 非质谱')
+}
+
+export type ReportStatus = '已报告' | '未报告' | '不适用'
+
+export function normalizeReportStatus(value: string): ReportStatus {
+  if (value === '已报告') return '已报告'
+  if (value === '不适用') return '不适用'
+  return '未报告'
+}
 
 export const DEFAULT_METHODOLOGY_FILTERS: MethodologyFilterState = {
   query: '',
@@ -174,9 +224,11 @@ export function buildSamplingGroups(
   return aggregate(chartRows, 'samplingClass', 'docMethods').map((group, groupIndex) => {
     const groupRows = chartRows.filter((row) => row.samplingClass === group.name)
     const fixedColorIndex = optionsOrder.indexOf(group.name)
-    const color = METHODOLOGY_COLORS[
-      (fixedColorIndex >= 0 ? fixedColorIndex : groupIndex) % METHODOLOGY_COLORS.length
-    ]!
+    const color =
+      SAMPLING_CLASS_COLORS[group.name] ??
+      METHODOLOGY_COLORS[
+        (fixedColorIndex >= 0 ? fixedColorIndex : groupIndex) % METHODOLOGY_COLORS.length
+      ]!
     const methodItems = aggregate(groupRows, 'samplingStandard', 'docs')
     const methods: SamplingMethodItem[] = methodItems.map((method, methodIndex) => ({
       ...method,
@@ -257,7 +309,7 @@ export function buildCountryCoverage(rows: MethodologyRecord[]) {
         return {
           name,
           value,
-          color: METHODOLOGY_COLORS[index % METHODOLOGY_COLORS.length]!,
+          color: SAMPLING_CLASS_COLORS[name] ?? METHODOLOGY_COLORS[index % METHODOLOGY_COLORS.length]!,
           ratio: (value / max) * 100,
         }
       }),

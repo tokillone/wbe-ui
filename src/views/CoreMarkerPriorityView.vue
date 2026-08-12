@@ -84,7 +84,7 @@ function handlePrototypeMessage(event: MessageEvent) {
   if (event.data.type === 'core-marker-priority:ready') {
     prototypeError.value = ''
   } else if (event.data.type === 'core-marker-priority:error') {
-    prototypeError.value = String(event.data.message || '核心标记物数据加载失败，请重试。')
+    prototypeError.value = '核心标记物数据加载失败，请稍后重试。'
   } else if (event.data.type === 'core-marker-priority:scroll') {
     const scrollTop = Number(event.data.scrollTop)
     if (Number.isFinite(scrollTop)) updateHeaderVisibility(Math.max(0, scrollTop))

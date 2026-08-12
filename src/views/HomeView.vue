@@ -17,6 +17,7 @@ import {
 } from '../services/auth'
 import { HOME_OVERVIEW_API_ENABLED } from '../config/api'
 import { fetchHomeOverview, HomeOverviewRequestError } from '../services/home'
+import { getUserErrorMessage } from '../services/errors'
 import { clearSession, getStoredSession, saveSession, updateStoredUser } from '../services/session'
 
 type AuthMode = 'login' | 'register' | 'reset'
@@ -1278,7 +1279,7 @@ async function refreshLoginCaptcha() {
     loginCaptcha.value = await fetchCaptcha()
     loginForm.captchaCode = ''
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '图形验证码获取失败')
+    setMessage('error', getUserErrorMessage(error, '图形验证码获取失败，请稍后重试'))
   } finally {
     isLoadingCaptcha.value = false
   }
@@ -1533,7 +1534,7 @@ async function handleSendCode() {
     setMessage(result.success ? 'success' : 'error', result.message || '验证码已发送')
     startCountdown()
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '验证码发送失败')
+    setMessage('error', getUserErrorMessage(error, '验证码发送失败，请稍后重试'))
   } finally {
     isSendingCode.value = false
   }
@@ -1603,10 +1604,10 @@ async function handleSubmit() {
   } catch (error) {
     if (isCaptchaRequiredError(error)) {
       await refreshLoginCaptcha()
-      setMessage('error', error instanceof Error ? error.message : '请完成图形验证码后重试')
+      setMessage('error', getUserErrorMessage(error, '请完成图形验证码后重试'))
       return
     }
-    setMessage('error', error instanceof Error ? error.message : '请求失败，请稍后再试')
+    setMessage('error', getUserErrorMessage(error, '操作未完成，请稍后重试'))
   } finally {
     isSubmitting.value = false
   }

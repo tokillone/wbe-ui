@@ -1,4 +1,5 @@
 import { API_BASE_URL } from '../config/api'
+import { safeServerMessage } from './errors'
 
 interface ApiResponse<T> {
   code?: number
@@ -56,14 +57,18 @@ async function requestHomeOverview<T>(url: string, timeoutMs: number): Promise<P
     if (response.status === 401 || body?.code === 401) {
       throw new HomeOverviewRequestError(
         'unauthorized',
-        body?.message || '登录状态已失效，请重新登录后重试',
+        safeServerMessage(body?.message, 401, '登录状态已失效，请重新登录后重试'),
         401,
       )
     }
     if (!response.ok || (body?.code !== undefined && body.code !== 200)) {
       throw new HomeOverviewRequestError(
         'failed',
-        body?.message || '首页数据服务暂时不可用，请稍后重试',
+        safeServerMessage(
+          body?.message,
+          response.status,
+          '首页数据服务暂时不可用，请稍后重试',
+        ),
         response.status,
       )
     }

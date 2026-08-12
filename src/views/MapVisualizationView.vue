@@ -68,6 +68,7 @@ import {
   visibleLevelsForZoom,
 } from '../utils/mapVisualization'
 import { probePmtilesRange } from '../utils/pmtiles'
+import { getUserErrorMessage } from '../services/errors'
 
 type MapMode = 'globe' | 'flat'
 type DetailMode = 'none' | 'compact' | 'full'
@@ -1511,14 +1512,14 @@ async function loadFilters() {
     filters.value = result
     Object.assign(selection, {
       ...DEFAULT_SELECTION,
-      ...(result.defaultSelection ?? {}),
+      ...result.defaultSelection,
       targetClass: result.defaultSelection?.targetClass ?? 'ALL',
       category: ALL_CATEGORY_LABEL,
       subcategory: ALL_SUBCATEGORY_LABEL,
       biomarkerKey: ALL_BIOMARKER_KEY,
     })
   } catch (error) {
-    filterError.value = error instanceof Error ? error.message : ui.value.filterLoadFailed
+    filterError.value = getUserErrorMessage(error, ui.value.filterLoadFailed)
   } finally {
     isLoadingFilters.value = false
   }
@@ -1625,7 +1626,7 @@ async function initMap() {
     map.on('click', hideTooltipOnEmptyClick)
     updateMapCoordinates()
   } catch (error) {
-    mapError.value = error instanceof Error ? error.message : ui.value.mapInitFailed
+    mapError.value = getUserErrorMessage(error, ui.value.mapInitFailed)
     mapMode.value = 'flat'
   }
 }
@@ -2052,7 +2053,7 @@ function vectorBasemapLayers(layers: unknown[], mode: MapMode) {
         {
           ...layer,
           paint: {
-            ...(layer.paint ?? {}),
+            ...layer.paint,
             'background-color': mode === 'globe' ? GLOBE_BACKGROUND_COLOR : FLAT_BACKGROUND_COLOR,
           },
         },
@@ -2066,7 +2067,7 @@ function vectorBasemapLayers(layers: unknown[], mode: MapMode) {
         return []
       }
       const layout: Record<string, unknown> = {
-        ...(layer.layout ?? {}),
+        ...layer.layout,
         'text-field': vectorLocalizedNameExpression(),
       }
       delete layout['icon-image']
@@ -2077,7 +2078,7 @@ function vectorBasemapLayers(layers: unknown[], mode: MapMode) {
           ...zoomRange,
           layout,
           paint: {
-            ...(layer.paint ?? {}),
+            ...layer.paint,
             'text-color': vectorTextColor(layer.id),
             'text-halo-color': 'rgba(255,255,255,0.94)',
             'text-halo-width': vectorTextHaloWidth(layer.id),
@@ -2140,7 +2141,7 @@ function styleVectorBasemapLayer(layer: {
   layout?: Record<string, unknown>
   paint?: Record<string, unknown>
 }) {
-  const paint = { ...(layer.paint ?? {}) }
+  const paint = { ...layer.paint }
   if (layer.id === 'boundaries_country') {
     paint['line-color'] = '#a4aaad'
     paint['line-width'] = ['interpolate', ['linear'], ['zoom'], 0, 0.32, 5, 0.42, 8, 0.5]
@@ -2162,7 +2163,7 @@ function styleVectorBasemapLayer(layer: {
     paint['fill-opacity'] = ['interpolate', ['linear'], ['zoom'], 0, 0.96, 8, 0.88]
   } else if (layer.id === 'water') {
     paint['fill-color'] = '#eef0f0'
-  } else if (/^water_/.test(layer.id)) {
+  } else if (layer.id.startsWith('water_')) {
     paint['line-color'] = '#dfe2e2'
     paint['line-opacity'] = 0.42
   } else if (/roads_.*casing/.test(layer.id)) {
@@ -2237,7 +2238,7 @@ function addRegionLayer(layer: unknown) {
 function regionLayerBeforeId(layer: unknown) {
   const id = String((layer as { id?: string }).id ?? '')
   const layers = map?.getStyle().layers ?? []
-  if (/-fill$/.test(id)) {
+  if (id.endsWith('-fill')) {
     return (
       layers.find((item) => /^roads_|^pois|^places|^transit|^transport/i.test(item.id))?.id ??
       mapLabelLayerBeforeId()
@@ -4539,7 +4540,7 @@ function singleLanguageLabel(
   if (!normalized) return ''
   const cleanLoosePunctuation = (label: string) =>
     label
-      .replace(/[()（）［］\[\]【】]/g, '')
+      .replace(/[()（）［］[\]【】]/g, '')
       .replace(/[|/·,，;；:：]+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
@@ -5097,7 +5098,7 @@ async function fetchStats() {
     focusGlobeOnDensePoints()
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return
-    filterError.value = error instanceof Error ? error.message : ui.value.statsLoadFailed
+    filterError.value = getUserErrorMessage(error, ui.value.statsLoadFailed)
   } finally {
     isLoadingStats.value = false
   }
@@ -5365,7 +5366,7 @@ async function openFeatureDetail(feature: GeoJsonFeature, mode: DetailMode = 'co
   } catch (error) {
     if (requestId !== detailRequestId) return
     if (error instanceof DOMException && error.name === 'AbortError') return
-    detailError.value = error instanceof Error ? error.message : ui.value.detailLoadFailed
+    detailError.value = getUserErrorMessage(error, ui.value.detailLoadFailed)
     detailMode.value = mode === 'compact' ? 'compact' : 'none'
   } finally {
     if (requestId === detailRequestId) isLoadingDetail.value = false
@@ -5395,7 +5396,7 @@ async function openClusterDetail(feature: GeoJsonFeature, mode: DetailMode = 'co
   } catch (error) {
     if (requestId !== detailRequestId) return
     if (error instanceof DOMException && error.name === 'AbortError') return
-    detailError.value = error instanceof Error ? error.message : ui.value.detailLoadFailed
+    detailError.value = getUserErrorMessage(error, ui.value.detailLoadFailed)
     detailMode.value = 'compact'
   } finally {
     if (requestId === detailRequestId) isLoadingDetail.value = false

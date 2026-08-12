@@ -11,7 +11,6 @@ const brandedViews = [
   'MapVisualizationView.vue',
   'Icd11SankeyView.vue',
   'CoreMarkerPriorityView.vue',
-  'MethodologyVerificationView.vue',
   'DataEntryView.vue',
   'AuthView.vue',
 ]
@@ -30,5 +29,15 @@ describe('shared blue brand mark', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/views', fileName), 'utf8')
     expect(source).toContain("import BrandMark from '../components/BrandMark.vue'")
     expect(source).toContain('<BrandMark')
+  })
+
+  it('MethodologyVerificationView.vue uses the shared component through PageHeader', () => {
+    const viewSource = readFileSync(resolve(process.cwd(), 'src/views/MethodologyVerificationView.vue'), 'utf8')
+    const headerSource = readFileSync(resolve(process.cwd(), 'src/components/methodology/PageHeader.vue'), 'utf8')
+
+    expect(viewSource).toContain("import PageHeader from '../components/methodology/PageHeader.vue'")
+    expect(viewSource).toContain('<PageHeader')
+    expect(headerSource).toContain("import BrandMark from '../BrandMark.vue'")
+    expect(headerSource).toContain('<BrandMark')
   })
 })

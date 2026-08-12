@@ -149,6 +149,6 @@ describe('map network contract', () => {
         },
         ['country'],
       ),
-    ).rejects.toThrow('地图服务暂不可用')
+    ).rejects.toThrow('服务暂时不可用，请稍后重试')
   })
 })

@@ -1,5 +1,6 @@
 import { authHeaders, clearSession } from './session'
 import { API_BASE_URL } from '../config/api'
+import { ApiError, apiErrorFromResponse, apiErrorFromUnknown } from './errors'
 
 interface ApiResponse<T> {
   code: number
@@ -7,15 +8,17 @@ interface ApiResponse<T> {
   data: T
 }
 
-export class ApiTimeoutError extends Error {
+export class ApiTimeoutError extends ApiError {
   constructor(message = '请求超时，请检查网络后重试') {
-    super(message)
+    super(message, { kind: 'timeout' })
     this.name = 'ApiTimeoutError'
   }
 }
 
 export interface ApiRequestOptions extends RequestInit {
   timeoutMs?: number
+  auth?: boolean
+  redirectOnUnauthorized?: boolean
 }
 
 function redirectAfterUnauthorized() {
@@ -26,7 +29,13 @@ function redirectAfterUnauthorized() {
 }
 
 export async function requestApi<T>(endpoint: string, options?: ApiRequestOptions): Promise<T> {
-  const { timeoutMs, signal: callerSignal, ...fetchOptions } = options ?? {}
+  const {
+    timeoutMs,
+    auth = true,
+    redirectOnUnauthorized = true,
+    signal: callerSignal,
+    ...fetchOptions
+  } = options ?? {}
   const timeoutController = timeoutMs && timeoutMs > 0 ? new AbortController() : null
   let didTimeout = false
   const abortFromCaller = () => timeoutController?.abort(callerSignal?.reason)
@@ -50,19 +59,24 @@ export async function requestApi<T>(endpoint: string, options?: ApiRequestOption
       ...fetchOptions,
       signal: timeoutController?.signal ?? callerSignal,
       headers: {
-        ...authHeaders(),
-        ...(options?.headers ?? {}),
+        ...(auth ? authHeaders() : {}),
+        ...options?.headers,
       },
     })
     const result = (await response.json().catch(() => null)) as ApiResponse<T> | null
 
     if (response.status === 401 || result?.code === 401) {
-      redirectAfterUnauthorized()
-      throw new Error(result?.message || '登录状态已失效，请重新登录')
+      if (redirectOnUnauthorized) redirectAfterUnauthorized()
+      throw apiErrorFromResponse(response.status, result?.code, result?.message)
     }
 
     if (!response.ok || result?.code !== 200) {
-      throw new Error(result?.message || '请求失败')
+      throw apiErrorFromResponse(
+        response.status,
+        result?.code,
+        result?.message,
+        '请求未完成，请稍后重试',
+      )
     }
 
     return result.data
@@ -70,7 +84,8 @@ export async function requestApi<T>(endpoint: string, options?: ApiRequestOption
     if (didTimeout) {
       throw new ApiTimeoutError()
     }
-    throw error
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw apiErrorFromUnknown(error, '网络连接异常，请检查网络后重试')
   } finally {
     if (timeoutId !== null) window.clearTimeout(timeoutId)
     callerSignal?.removeEventListener('abort', abortFromCaller)
@@ -78,18 +93,21 @@ export async function requestApi<T>(endpoint: string, options?: ApiRequestOption
 }
 
 export async function fetchBlob(endpoint: string, fallbackMessage: string) {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    headers: authHeaders(),
-  })
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${endpoint}`, { headers: authHeaders() })
+  } catch (error) {
+    throw apiErrorFromUnknown(error, '网络连接异常，请检查网络后重试')
+  }
   const result = response.ok ? null : ((await response.json().catch(() => null)) as ApiResponse<unknown> | null)
 
   if (response.status === 401 || result?.code === 401) {
     redirectAfterUnauthorized()
-    throw new Error(result?.message || '登录状态已失效，请重新登录')
+    throw apiErrorFromResponse(response.status, result?.code, result?.message)
   }
 
   if (!response.ok) {
-    throw new Error(result?.message || fallbackMessage)
+    throw apiErrorFromResponse(response.status, result?.code, result?.message, fallbackMessage)
   }
 
   return response.blob()

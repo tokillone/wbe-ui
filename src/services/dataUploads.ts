@@ -34,6 +34,8 @@ export interface DataUploadBatch {
   currentPackageRows?: number | null
   approvedPackageId?: number | null
   reviewChecklistComplete?: boolean
+  currentRevisionNo?: number
+  publishedReleaseId?: number | null
 }
 
 export interface DataUploadRow {
@@ -87,6 +89,11 @@ export interface DataUploadReviewPackage {
   validationErrors: string[]
   diffSummary: {
     riskLevel?: string
+    submissionRows?: number
+    publishRows?: number
+    excludedRows?: number
+    newRecordGroups?: number
+    existingRowsDeleted?: number
     sheets?: Record<
       string,
       {
@@ -142,9 +149,32 @@ export interface DataUploadSyncResult {
 export function uploadPreview(file: File) {
   const formData = new FormData()
   formData.set('file', file)
-  return requestApi<DataUploadPreview>('/data-uploads/preview', {
+  return requestApi<DataUploadPreview>('/data-uploads', {
     method: 'POST',
     body: formData,
+  })
+}
+
+export function uploadSubmissionRevision(uploadId: number, file: File) {
+  const formData = new FormData()
+  formData.set('file', file)
+  return requestApi<DataUploadPreview>(`/data-uploads/${uploadId}/submission-revisions`, {
+    method: 'POST',
+    body: formData,
+  })
+}
+
+export function publishUpload(uploadId: number) {
+  return requestApi<DataUploadSyncResult>(`/data-uploads/${uploadId}/publish`, {
+    method: 'POST',
+  })
+}
+
+export function returnUpload(uploadId: number, reason: string) {
+  return requestApi<DataUploadBatch>(`/data-uploads/${uploadId}/return`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
   })
 }
 
@@ -224,11 +254,21 @@ export function fetchUploads(params: FetchUploadsParams = {}) {
 }
 
 export async function downloadUploadTemplate() {
-  const blob = await fetchBlob('/data-uploads/template', '模板下载失败')
+  const blob = await fetchBlob('/data-uploads/submission-template', '模板下载失败')
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  link.download = 'WBE数据上传模板.xlsx'
+  link.download = 'WBE原始数据投稿模板.xlsx'
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+export async function downloadReviewDraft(uploadId: number) {
+  const blob = await fetchBlob(`/data-uploads/${uploadId}/review-draft`, '五表审核草稿下载失败')
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `WBE五表审核草稿-${uploadId}.xlsx`
   link.click()
   URL.revokeObjectURL(url)
 }

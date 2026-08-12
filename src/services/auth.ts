@@ -1,4 +1,5 @@
 import { API_BASE_URL } from '../config/api'
+import { ApiError, apiErrorFromResponse, apiErrorFromUnknown } from './errors'
 
 export interface LoginPayload {
   account: string
@@ -61,11 +62,16 @@ interface ApiResponse<T = unknown> {
 
 type AuthRequestBody = LoginPayload | RegisterPayload | ResetPasswordPayload | { email: string }
 
-export class AuthRequestError extends Error {
-  code?: number
+export class AuthRequestError extends ApiError {
+  override readonly code?: number
 
-  constructor(message: string, code?: number) {
-    super(message)
+  constructor(message: string, code?: number, status?: number, cause?: unknown) {
+    super(message, {
+      kind: code === 428 || status === 400 ? 'validation' : 'unknown',
+      code,
+      status,
+      cause,
+    })
     this.name = 'AuthRequestError'
     this.code = code
   }
@@ -75,18 +81,24 @@ async function requestAuth<T = unknown>(
   endpoint: string,
   body: AuthRequestBody,
 ): Promise<ApiResult<T>> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  })
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    })
+  } catch (error) {
+    throw apiErrorFromUnknown(error, '网络连接异常，请检查网络后重试')
+  }
 
   const result = (await response.json().catch(() => null)) as ApiResponse<T> | null
 
-  if (!response.ok) {
-    throw new AuthRequestError(result?.message || '服务暂时不可用，请稍后再试', result?.code)
+  if (!response.ok || result?.code !== 200) {
+    const error = apiErrorFromResponse(response.status, result?.code, result?.message)
+    throw new AuthRequestError(error.message, result?.code, response.status, error)
   }
 
   return {
@@ -107,24 +119,40 @@ export function login(payload: LoginPayload) {
 }
 
 export async function fetchCaptcha() {
-  const response = await fetch(`${API_BASE_URL}/auth/captcha`)
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}/auth/captcha`)
+  } catch (error) {
+    throw apiErrorFromUnknown(error, '图形验证码获取失败，请稍后重试')
+  }
   const result = (await response.json().catch(() => null)) as ApiResponse<CaptchaResponse> | null
   if (!response.ok || result?.code !== 200 || !result.data) {
-    throw new AuthRequestError(result?.message || '图形验证码获取失败', result?.code)
+    const error = apiErrorFromResponse(
+      response.status,
+      result?.code,
+      result?.message,
+      '图形验证码获取失败，请稍后重试',
+    )
+    throw new AuthRequestError(error.message, result?.code, response.status, error)
   }
   return result.data
 }
 
 export async function logout(token: string) {
-  const response = await fetch(`${API_BASE_URL}/auth/logout`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  })
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}/auth/logout`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+  } catch (error) {
+    throw apiErrorFromUnknown(error, '退出登录失败，请稍后重试')
+  }
   const result = (await response.json().catch(() => null)) as ApiResponse | null
-  if (!response.ok) {
-    throw new Error(result?.message || '退出登录失败')
+  if (!response.ok || result?.code !== 200) {
+    throw apiErrorFromResponse(response.status, result?.code, result?.message, '退出登录失败')
   }
   return {
     success: result?.code === 200,
@@ -141,14 +169,24 @@ export function resetPassword(payload: ResetPasswordPayload) {
 }
 
 export async function fetchCurrentUser(token: string) {
-  const response = await fetch(`${API_BASE_URL}/auth/me`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  })
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}/auth/me`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+  } catch (error) {
+    throw apiErrorFromUnknown(error, '暂时无法验证登录状态，请稍后重试')
+  }
   const result = (await response.json().catch(() => null)) as ApiResponse<UserResponse> | null
   if (!response.ok || result?.code !== 200 || !result.data) {
-    throw new Error(result?.message || '登录状态已失效')
+    throw apiErrorFromResponse(
+      response.status,
+      result?.code,
+      result?.message,
+      '登录状态已失效，请重新登录',
+    )
   }
   return result.data
 }

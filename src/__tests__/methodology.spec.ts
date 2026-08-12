@@ -2,7 +2,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { fetchMethodologyData, sanitizeMethodologyData } from '../services/methodology'
 import type { MethodologyRecord } from '../types/methodology'
-import { aggregate, countRows } from '../utils/methodologyVerification'
+import {
+  PRESCRIPTION_COLORS,
+  SAMPLING_CLASS_COLORS,
+  aggregate,
+  buildSamplingAudit,
+  countRows,
+  countryNameZh,
+  formatAnalysisMethodName,
+  normalizeReportStatus,
+} from '../utils/methodologyVerification'
 
 const emptyOptions = {
   targetClass: [],
@@ -91,6 +100,33 @@ describe('methodology statistics contract', () => {
       { name: '处方药', value: 1 },
       { name: '非处方药', value: 1 },
     ])
+  })
+
+  it('keeps the evidence presentation vocabulary and fixed category colors stable', () => {
+    expect(SAMPLING_CLASS_COLORS).toMatchObject({
+      '复合采样': '#3568B8',
+      '抓取采样': '#6F94CE',
+      '被动采样': '#2F8F89',
+      '连续/在线采样': '#82BEB8',
+    })
+    expect(PRESCRIPTION_COLORS).toEqual({ '处方药': '#3568B8', '非处方药': '#48A29A' })
+    expect(countryNameZh('China')).toBe('中国')
+    expect(countryNameZh('Unknown')).toBe('Unknown')
+    expect(formatAnalysisMethodName('LC-MS/MS')).toBe('LC–MS/MS')
+    expect(formatAnalysisMethodName('LC-HRMS/QTOF')).toBe('LC–HRMS/QTOF')
+  })
+
+  it('sorts sampling audit rows by document coverage and normalizes report status', () => {
+    const rows = [
+      baseRecord,
+      { ...baseRecord, doc: 'WBE0002' },
+      { ...baseRecord, doc: 'WBE0003', samplingStandard: '抓取采样', samplingClass: '抓取采样', proportion: '不适用' },
+    ]
+    const audit = buildSamplingAudit(rows, [])
+    expect(audit.map((item) => item.standard)).toEqual(['时间比例复合采样', '抓取采样'])
+    expect(normalizeReportStatus(audit[0]!.proportionStatus)).toBe('已报告')
+    expect(normalizeReportStatus(audit[1]!.proportionStatus)).toBe('不适用')
+    expect(normalizeReportStatus('未标注')).toBe('未报告')
   })
 
   it('removes unavailable methodology values without discarding meaningful records', () => {

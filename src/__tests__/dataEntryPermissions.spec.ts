@@ -185,12 +185,14 @@ describe('data entry permissions', () => {
     await wrapper.find('.row-actions button').trigger('click')
     await flushPromises()
     expect(apiMocks.fetchUploadRows).toHaveBeenCalledWith(10, 1, 20, 'all', 'submission')
-    expect(wrapper.find('.drawer-actions').text()).toContain('通过初审')
-    expect(wrapper.find('.drawer-actions').text()).not.toContain('终审通过')
+    expect(wrapper.find('.review-package-panel').text()).toContain('下载预填草稿')
+    expect(wrapper.find('.review-package-panel').text()).toContain('上传五表审核包')
+    expect(wrapper.find('.drawer-actions').text()).toContain('退回修改')
+    expect(wrapper.find('.drawer-actions').text()).not.toContain('确认入库')
     wrapper.unmount()
   })
 
-  it('opens sync users on the approved queue', async () => {
+  it('keeps legacy sync-only users read-only in the simplified workflow', async () => {
     apiMocks.fetchUploads.mockResolvedValue({
       ...emptyBatchPage,
       items: [batch('APPROVED')],
@@ -206,8 +208,20 @@ describe('data entry permissions', () => {
     expect(wrapper.findAll('.row-actions button').map((button) => button.text())).toEqual([
       '查看',
       '下载',
-      '同步',
     ])
+    wrapper.unmount()
+  })
+
+  it('lets the same reviewer confirm an incrementally validated package', async () => {
+    apiMocks.fetchUploads.mockResolvedValue({
+      ...emptyBatchPage,
+      items: [batch('READY_TO_PUBLISH')],
+      total: 1,
+      totalPages: 1,
+    })
+    const wrapper = await mountFor(user({ canReviewUploads: true }))
+
+    expect(wrapper.findAll('.row-actions button').map((button) => button.text())).toContain('确认入库')
     wrapper.unmount()
   })
 })

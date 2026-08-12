@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, reactive, ref } from 'vue'
 
 import BrandMark from '../components/BrandMark.vue'
 import { login, register, resetPassword, sendVerificationCode } from '../services/auth'
+import { getUserErrorMessage } from '../services/errors'
 
 type AuthMode = 'login' | 'register' | 'reset'
 
@@ -143,7 +144,7 @@ async function handleSendCode() {
     setMessage(result.success ? 'success' : 'error', result.message || '验证码已发送')
     startCountdown()
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '验证码发送失败')
+    setMessage('error', getUserErrorMessage(error, '验证码发送失败，请稍后重试'))
   } finally {
     isSendingCode.value = false
   }
@@ -174,7 +175,7 @@ async function handleSubmit() {
 
     setMessage(result.success ? 'success' : 'error', result.message || '操作成功')
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '请求失败，请稍后再试')
+    setMessage('error', getUserErrorMessage(error, '操作未完成，请稍后重试'))
   } finally {
     isSubmitting.value = false
   }

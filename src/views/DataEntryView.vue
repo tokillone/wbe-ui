@@ -13,28 +13,27 @@ import {
 } from '../services/admin'
 import { fetchCurrentUser, logout as requestLogout, type UserResponse } from '../services/auth'
 import {
-  acceptSourceReview,
-  approveUpload,
+  downloadReviewDraft,
   downloadReviewPackageFile,
-  downloadReviewPackageTemplate,
   downloadUploadFile,
   downloadUploadTemplate,
   fetchUploadBatch,
   fetchReviewPackages,
   fetchUploadRows,
   fetchUploads,
-  rejectUpload,
-  syncUpload,
+  publishUpload,
+  returnUpload,
   uploadPreview,
   uploadReviewPackage,
+  uploadSubmissionRevision,
   type DataUploadBatch,
   type DataUploadBatchPage,
   type DataUploadPreview,
-  type DataUploadReviewDecision,
   type DataUploadReviewPackage,
   type DataUploadRowsPage,
 } from '../services/dataUploads'
 import { clearSession, getStoredSession, isAdmin, updateStoredUser } from '../services/session'
+import { getUserErrorMessage } from '../services/errors'
 
 type WorkspaceSection = 'upload' | 'batches' | 'users'
 type PermissionFilter = 'all' | 'true' | 'false'
@@ -42,57 +41,35 @@ type BatchStatusFilter =
   | 'all'
   | 'PENDING_REVIEW'
   | 'REVISION_REQUIRED'
-  | 'ENRICHMENT_REQUIRED'
-  | 'PENDING_APPROVAL'
-  | 'APPROVED'
-  | 'SYNC_FAILED'
+  | 'READY_TO_PUBLISH'
+  | 'PUBLISHING'
+  | 'PUBLISH_FAILED'
   | 'VALIDATION_FAILED'
-  | 'SYNCED'
-  | 'REJECTED'
+  | 'PUBLISHED'
 type BatchScopeFilter = 'all' | 'mine' | 'pendingReview' | 'approved'
 type BatchUploaderTypeFilter = 'all' | 'viewer' | 'manager'
 type RowStatusFilter = 'all' | 'ERROR' | 'WARNING' | 'VALID' | 'SYNCED' | 'SKIPPED'
 type RowViewFilter = 'submission' | 'reviewPackage'
 
 const PREVIEW_COLUMNS: Record<string, string[]> = {
-  数据表: ['文献编号', '目标类别', '目标物质类别', '药物', '生物标记物名称', '污水厂名称', 'PNDL_value', 'PNDL_unit', 'DOI'],
-  药物疾病ICD11映射: ['目标类别', '药物', 'ICD11_Level1_Name', 'ICD11_Level2_Name', 'ICD11_Level3_Name', '映射层级', '是否进入桑基图'],
-  文献基础信息: ['文献编号', '文献名', 'DOI', 'keywords'],
-  点位关联表: [
-    '文献编号',
-    'DOI',
-    '国家',
-    '省/州',
-    '市',
-    '原始污水厂名称',
-    '规范污水厂名称',
-    'reported_site_key',
-    'confirmed_site_id',
-    '是否计入点位数',
-    '点位说明',
-    '同一污水厂确认依据',
-  ],
-  采样方法统一审计: ['文献编号', '数据表采样方法（原文摘录）', '标准采样方法', '采样主类', '复核状态', '原文证据'],
-  核心标记物优先级识别: ['序号', '目标类别_主类', '目标物质类别_主类', '生物标记物名称', '原始记录数', '目标类别内综合得分', '异常检查'],
+  原始数据: ['投稿行ID', '投稿类型', 'DOI', '文献标题', '来源记录编号', '生物标记物名称原文', '指标类型', '原始数值', '原始单位'],
 }
 
 const FIELD_GROUPS = [
-  { title: '文献与目标物', fields: '文献编号、目标类别、目标物质类别、目标物质子类、药物、生物标记物名称、biomarker、CAS' },
-  { title: '方法与地点', fields: '采样方法、分析方法、MDL/MQL/IDL/IQL、污水厂名称、处理规模、汇水区人数、国家/省/市' },
-  { title: '浓度与负荷', fields: '做图浓度、进水浓度 min/max/average/median、DLs、PNDL、估算 PNDL、做图 PNDL' },
-  { title: '追踪字段', fields: '来源工作簿说明、原表行号说明为可选列，用于重复检查和审计追踪' },
+  { title: '文献来源', fields: '投稿类型、DOI或已有文献编号、标题、年份、期刊/来源、来源文件名或URL' },
+  { title: '原始事实', fields: '来源记录编号、标记物原文、采样与分析方法、点位、采样时间' },
+  { title: '指标数值', fields: '指标类型、统计量、原始数值和单位；保留ND、<LOD、<LOQ等原文' },
+  { title: '证据追踪', fields: '数值来源、计算换算说明、页码/表号/Sheet/图号和原文证据' },
 ]
 
 const STATUS_LABELS: Record<string, string> = {
-  PENDING_REVIEW: '待初审',
+  PENDING_REVIEW: '待审核',
   REVISION_REQUIRED: '退回修改',
-  ENRICHMENT_REQUIRED: '待整理',
-  PENDING_APPROVAL: '待终审',
-  APPROVED: '已通过',
+  READY_TO_PUBLISH: '待确认入库',
+  PUBLISHING: '入库中',
+  PUBLISH_FAILED: '入库失败',
   VALIDATION_FAILED: '需修正',
-  SYNCED: '已入库',
-  SYNC_FAILED: '同步失败',
-  REJECTED: '已驳回',
+  PUBLISHED: '已入库',
   VALID: '通过',
   WARNING: '有警告',
   ERROR: '错误',
@@ -101,15 +78,13 @@ const STATUS_LABELS: Record<string, string> = {
 
 const BATCH_STATUS_FILTERS = [
   { value: 'all', label: '全部状态' },
-  { value: 'PENDING_REVIEW', label: '待初审' },
+  { value: 'PENDING_REVIEW', label: '待审核' },
   { value: 'REVISION_REQUIRED', label: '退回修改' },
-  { value: 'ENRICHMENT_REQUIRED', label: '待整理' },
-  { value: 'PENDING_APPROVAL', label: '待终审' },
-  { value: 'APPROVED', label: '已通过待同步' },
-  { value: 'SYNC_FAILED', label: '同步失败待重试' },
+  { value: 'READY_TO_PUBLISH', label: '待确认入库' },
+  { value: 'PUBLISHING', label: '入库中' },
+  { value: 'PUBLISH_FAILED', label: '入库失败待重试' },
   { value: 'VALIDATION_FAILED', label: '需修正' },
-  { value: 'SYNCED', label: '已入库' },
-  { value: 'REJECTED', label: '已驳回' },
+  { value: 'PUBLISHED', label: '已入库' },
 ]
 
 const BATCH_SCOPE_FILTERS = [
@@ -223,7 +198,7 @@ const isLoadingRows = ref(false)
 const isLoadingUsers = ref(false)
 const isSavingUser = ref(false)
 const preview = ref<DataUploadPreview | null>(null)
-const activePreviewSheet = ref('数据表')
+const activePreviewSheet = ref('原始数据')
 const selectedBatch = ref<DataUploadBatch | null>(null)
 const selectedRowsPage = ref<DataUploadRowsPage | null>(null)
 const reviewPackages = ref<DataUploadReviewPackage[]>([])
@@ -238,17 +213,6 @@ const message = ref('')
 const messageType = ref<'success' | 'error'>('success')
 const rowStatusFilter = ref<RowStatusFilter>('all')
 const rowViewFilter = ref<RowViewFilter>('submission')
-const reviewDecision = reactive<DataUploadReviewDecision>({
-  sourceCoverageConfirmed: false,
-  traceabilityConfirmed: false,
-  valuesAndUnitsConfirmed: false,
-  siteLinkageConfirmed: false,
-  icd11Confirmed: false,
-  methodologyConfirmed: false,
-  coreMarkerConfirmed: false,
-  productionDiffConfirmed: false,
-  note: '',
-})
 const batchFilters = reactive({
   keyword: '',
   status: 'all' as BatchStatusFilter,
@@ -283,7 +247,7 @@ const currentUserCanDownload = computed(
 const canSeeBatchModule = computed(() => canUploadData.value || canReviewUploads.value || canSyncData.value)
 const selectedFileLabel = computed(() => selectedFile.value?.name ?? '拖拽或选择 WBE Excel 文件')
 const selectedReviewPackageLabel = computed(
-  () => selectedReviewPackageFile.value?.name ?? '选择包含六张工作表的完整整理包',
+  () => selectedReviewPackageFile.value?.name ?? '选择包含五张工作表的审核包',
 )
 const activePreviewRows = computed(() => preview.value?.previewRowsBySheet?.[activePreviewSheet.value] ?? [])
 const activePreviewColumns = computed(() => PREVIEW_COLUMNS[activePreviewSheet.value] ?? [])
@@ -298,34 +262,20 @@ const hiddenBatchWarningCount = computed(() =>
 const previewBlockingMessage = computed(() => {
   if (!preview.value) return ''
   if (preview.value.batch.status === 'VALIDATION_FAILED') {
-    return '提交文件未通过校验。请检查“数据表”的表头和问题行，修正后重新提交。'
+    return '提交文件未通过校验。请检查“原始数据”的表头和问题行，修正后重新提交。'
   }
   if (preview.value.batch.errorRows > 0) {
-    return '存在阻断错误的行，不能同步入库。请查看行预览中的问题字段，修正后重新上传。'
+    return '存在阻断错误的行，不能进入审核。请查看行预览中的问题字段，修正后提交新版本。'
   }
   if (preview.value.batch.status === 'REVISION_REQUIRED') {
     return '该提交已退回修改，请根据审核原因重新整理后提交新批次。'
   }
   if (preview.value.batch.status === 'PENDING_REVIEW') {
-    return '提交已进入初审。初审通过后由后台人员制作完整整理包并终审。'
+    return '提交已进入人工审核。审核人员可直接下载系统生成的五表草稿。'
   }
   return ''
 })
 
-const REVIEW_CHECKLIST = [
-  { key: 'sourceCoverageConfirmed', label: '完整整理包包含原始提交的全部数据行' },
-  { key: 'traceabilityConfirmed', label: '文献编号、DOI和来源信息可以追溯' },
-  { key: 'valuesAndUnitsConfirmed', label: '关键数值、单位及阻断错误已经核对' },
-  { key: 'siteLinkageConfirmed', label: '点位关联和跨文献合并依据已经核对' },
-  { key: 'icd11Confirmed', label: 'ICD11映射层级和不入图原因已经核对' },
-  { key: 'methodologyConfirmed', label: '采样方法标准化和原文证据已经核对' },
-  { key: 'coreMarkerConfirmed', label: '核心标记物结果和异常检查已经核对' },
-  { key: 'productionDiffConfirmed', label: '已查看并接受与当前生产数据的差异' },
-] as const
-
-const reviewChecklistComplete = computed(() =>
-  REVIEW_CHECKLIST.every((item) => reviewDecision[item.key]),
-)
 const currentReviewPackage = computed(() => {
   const packageId = selectedBatch.value?.currentPackageId
   return reviewPackages.value.find((item) => item.packageId === packageId) ?? null
@@ -421,7 +371,7 @@ function setActiveSection(section: WorkspaceSection) {
 }
 
 function statusLabel(status: string) {
-  return STATUS_LABELS[status] ?? status
+  return STATUS_LABELS[status] ?? '状态待确认'
 }
 
 function roleLabel(role: UserResponse['role']) {
@@ -503,16 +453,16 @@ async function handleDownloadTemplate() {
     await downloadUploadTemplate()
     setMessage('success', 'Excel 模板已开始下载')
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '模板下载失败')
+    setMessage('error', getUserErrorMessage(error, '模板下载失败，请稍后重试'))
   }
 }
 
-async function handleDownloadReviewPackageTemplate() {
+async function handleDownloadReviewDraft(batch: DataUploadBatch) {
   try {
-    await downloadReviewPackageTemplate()
-    setMessage('success', '完整整理包模板已开始下载')
+    await downloadReviewDraft(batch.uploadId)
+    setMessage('success', '五表审核草稿已开始下载')
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '完整整理包模板下载失败')
+    setMessage('error', getUserErrorMessage(error, '五表审核草稿下载失败，请稍后重试'))
   }
 }
 
@@ -529,7 +479,7 @@ async function handlePreview() {
   try {
     isUploading.value = true
     preview.value = await uploadPreview(selectedFile.value)
-    activePreviewSheet.value = preview.value.sheetSummaries?.[0]?.sheetName ?? '数据表'
+    activePreviewSheet.value = preview.value.sheetSummaries?.[0]?.sheetName ?? '原始数据'
     selectedBatch.value = null
     selectedRowsPage.value = null
     await loadBatches()
@@ -538,13 +488,11 @@ async function handlePreview() {
       setMessage('error', `解析完成，但存在 ${errorRows} 行阻断错误，请修正后重新上传。`)
     } else if (status === 'PENDING_REVIEW') {
       setMessage('success', `解析完成，已提交审核。提示警告 ${warningRows} 行。`)
-    } else if (status === 'APPROVED') {
-      setMessage('success', `解析完成，已通过审核，可由同步人员入库。提示警告 ${warningRows} 行。`)
     } else {
       setMessage('success', `解析完成，当前状态为「${statusLabel(status)}」。提示警告 ${warningRows} 行。`)
     }
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '上传解析失败')
+    setMessage('error', getUserErrorMessage(error, '上传解析失败，请检查文件后重试'))
   } finally {
     isUploading.value = false
   }
@@ -568,7 +516,7 @@ async function loadBatchPage(page = batchPage.value.page) {
     })
     batchPage.value = normalizeBatchPagePayload(response, page, batchPage.value.size)
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '上传批次加载失败')
+    setMessage('error', getUserErrorMessage(error, '上传记录加载失败，请稍后重试'))
   } finally {
     isLoadingBatches.value = false
   }
@@ -578,7 +526,6 @@ async function loadRows(batch: DataUploadBatch, page = 1) {
   try {
     isLoadingRows.value = true
     if (selectedBatch.value?.uploadId !== batch.uploadId) {
-      resetReviewDecision()
       rowStatusFilter.value = 'all'
       rowViewFilter.value = batch.currentPackageId ? 'reviewPackage' : 'submission'
     }
@@ -590,7 +537,7 @@ async function loadRows(batch: DataUploadBatch, page = 1) {
     selectedRowsPage.value = rows
     reviewPackages.value = packages
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '行预览加载失败')
+    setMessage('error', getUserErrorMessage(error, '数据预览加载失败，请稍后重试'))
   } finally {
     isLoadingRows.value = false
   }
@@ -624,43 +571,18 @@ function closeBatchDrawer() {
   reviewNote.value = ''
   rowStatusFilter.value = 'all'
   rowViewFilter.value = 'submission'
-  resetReviewDecision()
-}
-
-function canApproveBatch(batch: DataUploadBatch) {
-  return batch.status === 'PENDING_APPROVAL' && canReviewUploads.value
 }
 
 function canSyncBatch(batch: DataUploadBatch) {
-  return ['APPROVED', 'SYNC_FAILED'].includes(batch.status) && canSyncData.value
-}
-
-async function handleApproveBatch(batch: DataUploadBatch) {
-  if (!canApproveBatch(batch)) return
-  if (!reviewChecklistComplete.value) {
-    setMessage('error', '请先完成全部八项终审检查')
-    return
-  }
-  if (!window.confirm(`确定终审通过「${batch.fileName}」的最新完整整理包吗？`)) return
-  try {
-    const approvedBatch = await approveUpload(batch.uploadId, { ...reviewDecision })
-    if (preview.value?.batch.uploadId === batch.uploadId) {
-      preview.value = { ...preview.value, batch: approvedBatch }
-    }
-    selectedBatch.value = approvedBatch
-    await loadBatches()
-    setMessage('success', '完整整理包已终审通过，等待同步入库')
-  } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '审核通过失败')
-  }
+  return ['READY_TO_PUBLISH', 'PUBLISH_FAILED'].includes(batch.status) && canReviewUploads.value
 }
 
 async function handleBatchSync(batch: DataUploadBatch) {
   if (!canSyncBatch(batch)) return
-  if (!window.confirm(`确定要同步入库「${batch.fileName}」吗？`)) return
+  if (!window.confirm(`确定将「${batch.fileName}」的当前五表审核包增量写入正式库吗？此操作不会删除已有数据。`)) return
   try {
     isSyncing.value = true
-    const result = await syncUpload(batch.uploadId)
+    const result = await publishUpload(batch.uploadId)
     if (preview.value?.batch.uploadId === batch.uploadId) {
       preview.value = { ...preview.value, batch: result.batch }
     }
@@ -673,9 +595,9 @@ async function handleBatchSync(batch: DataUploadBatch) {
       .map(([sheet, count]) => `${sheet} ${count} 行`)
       .join('，')
     const warningText = result.warnings.length ? `；${result.warnings.join('；')}` : ''
-    setMessage('success', `已原子同步 ${result.insertedRows} 行${sheetText ? `（${sheetText}）` : ''}${warningText}`)
+    setMessage('success', `增量入库完成：新增 ${result.insertedRows} 个记录组，跳过重复 ${result.skippedRows} 个${sheetText ? `（${sheetText}）` : ''}${warningText}`)
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '同步失败')
+    setMessage('error', getUserErrorMessage(error, '增量入库未完成，正式数据未改变，请修复后重试'))
   } finally {
     isSyncing.value = false
   }
@@ -684,7 +606,7 @@ async function handleBatchSync(batch: DataUploadBatch) {
 async function handleRejectBatch(batch: DataUploadBatch) {
   if (
     !canReviewUploads.value ||
-    !['PENDING_REVIEW', 'ENRICHMENT_REQUIRED', 'PENDING_APPROVAL'].includes(batch.status)
+    !['PENDING_REVIEW', 'READY_TO_PUBLISH', 'PUBLISH_FAILED'].includes(batch.status)
   ) return
   if (!reviewNote.value.trim()) {
     setMessage('error', '退回修改时必须填写具体原因')
@@ -692,34 +614,13 @@ async function handleRejectBatch(batch: DataUploadBatch) {
   }
   if (!window.confirm(`确定退回「${batch.fileName}」并要求修改吗？`)) return
   try {
-    const rejectedBatch = await rejectUpload(batch.uploadId, reviewNote.value)
+    const rejectedBatch = await returnUpload(batch.uploadId, reviewNote.value)
     selectedBatch.value = rejectedBatch
     await loadBatches()
     reviewNote.value = ''
     setMessage('success', '提交已退回修改')
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '退回失败')
-  }
-}
-
-function resetReviewDecision() {
-  for (const item of REVIEW_CHECKLIST) {
-    reviewDecision[item.key] = false
-  }
-  reviewDecision.note = ''
-}
-
-async function handleAcceptSourceReview(batch: DataUploadBatch) {
-  if (!canReviewUploads.value || batch.status !== 'PENDING_REVIEW') return
-  if (!window.confirm(`确认「${batch.fileName}」原始数据可以进入后台整理阶段吗？`)) return
-  try {
-    const updated = await acceptSourceReview(batch.uploadId, reviewNote.value)
-    selectedBatch.value = updated
-    reviewNote.value = ''
-    await loadBatches()
-    setMessage('success', '原始提交已通过初审，请上传完整整理包')
-  } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '初审操作失败')
+    setMessage('error', getUserErrorMessage(error, '退回操作未完成，请刷新后重试'))
   }
 }
 
@@ -741,7 +642,7 @@ function handleReviewPackageFileChange(event: Event) {
 
 async function handleUploadReviewPackage(batch: DataUploadBatch) {
   if (!selectedReviewPackageFile.value) {
-    setMessage('error', '请先选择完整整理包')
+    setMessage('error', '请先选择五表审核包')
     return
   }
   try {
@@ -755,12 +656,34 @@ async function handleUploadReviewPackage(batch: DataUploadBatch) {
     await loadRows(refreshed, 1)
     selectedReviewPackageFile.value = null
     if (result.status === 'VALID') {
-      setMessage('success', `完整整理包 V${result.versionNo} 校验通过，等待终审`)
+      setMessage('success', `五表审核包 V${result.versionNo} 校验通过，可以确认入库`)
     } else {
-      setMessage('error', `完整整理包 V${result.versionNo} 未通过校验，请查看错误摘要`)
+      setMessage('error', `五表审核包 V${result.versionNo} 未通过校验，请查看错误摘要`)
     }
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '完整整理包上传失败')
+    setMessage('error', getUserErrorMessage(error, '五表审核包上传失败，请检查文件后重试'))
+  } finally {
+    isUploadingReviewPackage.value = false
+  }
+}
+
+async function handleUploadRevision(batch: DataUploadBatch) {
+  if (!selectedReviewPackageFile.value) {
+    setMessage('error', '请先选择保留投稿行ID的修订工作簿')
+    return
+  }
+  try {
+    isUploadingReviewPackage.value = true
+    preview.value = await uploadSubmissionRevision(batch.uploadId, selectedReviewPackageFile.value)
+    const refreshed = await fetchUploadBatch(batch.uploadId)
+    selectedBatch.value = refreshed
+    selectedReviewPackageFile.value = null
+    await loadBatches()
+    await loadRows(refreshed, 1)
+    setMessage(refreshed.status === 'PENDING_REVIEW' ? 'success' : 'error',
+      refreshed.status === 'PENDING_REVIEW' ? '修订版本校验通过，已重新进入审核' : '修订版本仍有校验错误，请查看问题行')
+  } catch (error) {
+    setMessage('error', getUserErrorMessage(error, '修订版本上传失败，请检查投稿行ID和字段'))
   } finally {
     isUploadingReviewPackage.value = false
   }
@@ -770,7 +693,7 @@ async function downloadPackage(batch: DataUploadBatch, item: DataUploadReviewPac
   try {
     await downloadReviewPackageFile(batch.uploadId, item.packageId, item.fileName)
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '完整整理包下载失败')
+    setMessage('error', getUserErrorMessage(error, '完整整理包下载失败，请稍后重试'))
   }
 }
 
@@ -782,7 +705,7 @@ async function downloadBatch(batch: DataUploadBatch) {
   try {
     await downloadUploadFile(batch.uploadId, batch.fileName)
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '文件下载失败')
+    setMessage('error', getUserErrorMessage(error, '文件下载失败，请稍后重试'))
   }
 }
 
@@ -801,7 +724,7 @@ async function loadUsers(page = userPage.value.page) {
       canDownload: permissionFilterValue(userFilters.canDownload),
     })
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '用户列表加载失败')
+    setMessage('error', getUserErrorMessage(error, '用户列表加载失败，请稍后重试'))
   } finally {
     isLoadingUsers.value = false
   }
@@ -886,7 +809,7 @@ async function savePermissionDrawer() {
     closePermissionDrawer()
     setMessage('success', '用户权限已更新')
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '权限更新失败')
+    setMessage('error', getUserErrorMessage(error, '权限更新未完成，请稍后重试'))
   } finally {
     isSavingUser.value = false
   }
@@ -935,7 +858,7 @@ async function applyBulkAction() {
     clearSelectedUsers()
     await loadUsers(userPage.value.page)
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '批量更新失败')
+    setMessage('error', getUserErrorMessage(error, '批量更新未完成，请稍后重试'))
   }
 }
 
@@ -997,7 +920,7 @@ async function handleLogout() {
         <section v-if="activeSection === 'upload' && canUploadData" class="workspace-panel" aria-label="上传录入">
           <header class="section-head">
             <h2>提交数据</h2>
-            <p>普通上传者只需填写“数据表”。文献、点位、ICD11、采样审计和优先级结果由后台人员在审核阶段整理。</p>
+            <p>普通用户只填写一张“原始数据”长表。分类、标准单位、点位、ICD11 和派生结果由审核与系统处理。</p>
           </header>
 
           <div class="import-grid" aria-label="上传与校验">
@@ -1005,7 +928,7 @@ async function handleLogout() {
               <header class="panel-head">
                 <div>
                   <span>原始提交</span>
-                  <h3>选择数据表文件</h3>
+                  <h3>选择原始数据文件</h3>
                 </div>
                 <button type="button" class="secondary-action" @click="handleDownloadTemplate">
                   下载模板
@@ -1020,7 +943,7 @@ async function handleLogout() {
               >
                 <input type="file" accept=".xlsx" @change="handleFileChange" />
                 <strong>{{ selectedFileLabel }}</strong>
-                <span>.xlsx，最大 50MB，只要求一张名为“数据表”的工作表</span>
+                <span>.xlsx，最大 50MB，必须且只能有一张“原始数据”工作表</span>
               </label>
               <button type="button" class="primary-action" :disabled="isUploading" @click="handlePreview">
                 {{ isUploading ? '正在解析' : '开始校验' }}
@@ -1078,7 +1001,7 @@ async function handleLogout() {
                 <p v-if="hiddenBatchWarningCount" class="issue-more">还有 {{ hiddenBatchWarningCount }} 条提示未展开。</p>
               </div>
               <p v-if="preview?.batch.status === 'PENDING_REVIEW'" class="review-note">
-                该提交已进入初审队列。初审通过后，后台人员会生成并上传完整整理包。
+                该提交已进入审核队列。审核人员可以下载系统生成的五表草稿，纠正后上传。
               </p>
             </div>
           </div>
@@ -1088,11 +1011,11 @@ async function handleLogout() {
               <span>上传要求</span>
               <h3>提交文件只保留普通上传者需要负责的内容。</h3>
               <p>
-                仅支持不超过 50MB 的非空 .xlsx 文件；必须包含“数据表”，表头采用59字段版本，同时兼容缺少“目标物质细类”的旧版。文件校验通过后进入初审，不会直接替换生产数据。
+                仅支持不超过 50MB 的无宏 .xlsx 文件；必须使用系统单表模板。系统会生成稳定投稿行ID，文件校验通过后进入人工审核，不会直接修改正式库。
               </p>
               <div class="template-actions">
                 <button type="button" @click="handleDownloadTemplate">下载 Excel 模板</button>
-                <small>模板包含“数据表”、字段说明和填写说明。</small>
+                <small>模板只有“原始数据”一张表；黄色必填、白色可选、灰色为系统字段。</small>
               </div>
             </div>
             <div class="requirements-grid">
@@ -1206,7 +1129,7 @@ async function handleLogout() {
                   <th>上传人</th>
                   <th>行数 / 问题</th>
                   <th>上传时间</th>
-                  <th>审核 / 同步</th>
+                  <th>审核 / 入库</th>
                   <th>操作</th>
                 </tr>
               </thead>
@@ -1234,7 +1157,7 @@ async function handleLogout() {
                   <td>{{ formatDate(batch.createdAt) }}</td>
                   <td>
                     <span class="audit-line">审：{{ batch.reviewedByName || '-' }} / {{ formatMaybeDate(batch.reviewedAt) }}</span>
-                    <span class="audit-line">同：{{ batch.syncedByName || '-' }} / {{ formatMaybeDate(batch.syncedAt) }}</span>
+                    <span class="audit-line">库：{{ batch.syncedByName || '-' }} / {{ formatMaybeDate(batch.syncedAt) }}</span>
                   </td>
                   <td>
                     <div class="row-actions compact-actions">
@@ -1243,7 +1166,7 @@ async function handleLogout() {
                       </button>
                       <button type="button" :disabled="!currentUserCanDownload" @click="downloadBatch(batch)">下载</button>
                       <button v-if="canSyncBatch(batch)" type="button" @click="handleBatchSync(batch)">
-                        {{ batch.status === 'SYNC_FAILED' ? '重试同步' : '同步' }}
+                        {{ batch.status === 'PUBLISH_FAILED' ? '重试入库' : '确认入库' }}
                       </button>
                     </div>
                   </td>
@@ -1307,27 +1230,25 @@ async function handleLogout() {
 
                 <div class="drawer-audit">
                   <p>上传时间：{{ formatDate(selectedBatch.createdAt) }}</p>
-                  <p>初审人：{{ selectedBatch.sourceReviewedByName || '-' }} / {{ formatMaybeDate(selectedBatch.sourceReviewedAt) }}</p>
-                  <p>终审人：{{ selectedBatch.reviewedByName || '-' }} / {{ formatMaybeDate(selectedBatch.reviewedAt) }}</p>
-                  <p>同步人：{{ selectedBatch.syncedByName || '-' }} / {{ formatMaybeDate(selectedBatch.syncedAt) }}</p>
-                  <p v-if="selectedBatch.sourceReviewNote">初审备注：{{ selectedBatch.sourceReviewNote }}</p>
+                  <p>审核人：{{ selectedBatch.reviewedByName || '-' }} / {{ formatMaybeDate(selectedBatch.reviewedAt) }}</p>
+                  <p>入库人：{{ selectedBatch.syncedByName || '-' }} / {{ formatMaybeDate(selectedBatch.syncedAt) }}</p>
                   <p v-if="selectedBatch.reviewNote">审核备注：{{ selectedBatch.reviewNote }}</p>
                   <p v-if="selectedBatch.syncErrorMessage" class="sync-error">
-                    同步失败：{{ selectedBatch.syncErrorMessage }}
+                    增量入库未完成，正式数据未改变；请修复后重试。
                   </p>
                 </div>
 
                 <section
-                  v-if="canReviewUploads && ['ENRICHMENT_REQUIRED', 'PENDING_APPROVAL'].includes(selectedBatch.status)"
+                  v-if="canReviewUploads && ['PENDING_REVIEW', 'READY_TO_PUBLISH', 'PUBLISH_FAILED'].includes(selectedBatch.status)"
                   class="review-package-panel"
                 >
                   <header>
                     <div>
-                      <strong>完整整理包</strong>
-                      <p>必须包含数据表、文献、点位、ICD11、采样审计和核心标记物六张工作表。</p>
+                      <strong>五表审核包</strong>
+                      <p>先下载系统预填草稿，纠正后上传。包含规范数据、文献、点位、采样方法和 ICD11 五张工作表。</p>
                     </div>
-                    <button type="button" class="secondary-action" @click="handleDownloadReviewPackageTemplate">
-                      下载空模板
+                    <button type="button" class="secondary-action" @click="handleDownloadReviewDraft(selectedBatch)">
+                      下载预填草稿
                     </button>
                   </header>
                   <label class="package-file-input">
@@ -1340,13 +1261,13 @@ async function handleLogout() {
                     :disabled="isUploadingReviewPackage"
                     @click="handleUploadReviewPackage(selectedBatch)"
                   >
-                    {{ isUploadingReviewPackage ? '正在校验' : '上传完整整理包' }}
+                    {{ isUploadingReviewPackage ? '正在校验' : '上传五表审核包' }}
                   </button>
                 </section>
 
                 <section v-if="reviewPackages.length" class="review-package-history">
                   <header>
-                    <strong>整理包版本</strong>
+                    <strong>审核包版本</strong>
                     <span>历史版本只读保留</span>
                   </header>
                   <article v-for="item in reviewPackages" :key="item.packageId">
@@ -1361,36 +1282,31 @@ async function handleLogout() {
                   </article>
                 </section>
 
-                <section
-                  v-if="selectedBatch.status === 'PENDING_APPROVAL' && canReviewUploads"
-                  class="review-checklist"
-                >
+                <section v-if="selectedBatch.status === 'REVISION_REQUIRED' && selectedBatch.uploadedBy === currentUser?.userId" class="review-package-panel">
                   <header>
-                    <strong>终审检查</strong>
-                    <span>{{ reviewChecklistComplete ? '已完成' : '请逐项确认' }}</span>
+                    <div>
+                      <strong>提交修订版本</strong>
+                      <p>下载批次原始文件，在保留投稿行ID的前提下修正；新增行的投稿行ID留空。</p>
+                    </div>
+                    <button type="button" class="secondary-action" @click="downloadBatch(selectedBatch)">下载当前版本</button>
                   </header>
-                  <label v-for="item in REVIEW_CHECKLIST" :key="item.key">
-                    <input v-model="reviewDecision[item.key]" type="checkbox" />
-                    <span>{{ item.label }}</span>
+                  <label class="package-file-input">
+                    <input type="file" accept=".xlsx" @change="handleReviewPackageFileChange" />
+                    <span>{{ selectedReviewPackageLabel }}</span>
                   </label>
-                  <textarea
-                    v-model.trim="reviewDecision.note"
-                    maxlength="500"
-                    placeholder="终审备注（可选）"
-                  ></textarea>
-                  <div v-if="currentReviewPackage?.diffSummary?.sheets" class="production-diff">
-                    <strong>生产差异</strong>
-                    <p v-if="currentReviewPackage.diffSummary.riskLevel === 'HIGH'" class="risk">
-                      数据量存在大幅减少，仅系统管理员可以完成终审。
-                    </p>
-                    <p
-                      v-for="(diff, sheetName) in currentReviewPackage.diffSummary.sheets"
-                      :key="sheetName"
-                      :class="{ risk: diff.highRisk }"
-                    >
-                      {{ sheetName }}：{{ diff.currentRows }} → {{ diff.incomingRows }}
-                      <span v-if="diff.highRisk">（减少 {{ diff.decreasePercent }}%，需重点确认）</span>
-                    </p>
+                  <button type="button" class="primary-action compact" :disabled="isUploadingReviewPackage" @click="handleUploadRevision(selectedBatch)">
+                    {{ isUploadingReviewPackage ? '正在校验' : '提交修订版本' }}
+                  </button>
+                </section>
+
+                <section v-if="currentReviewPackage?.diffSummary" class="review-checklist">
+                  <header><strong>增量影响预览</strong><span>不会删除已有记录</span></header>
+                  <div class="production-diff">
+                    <p>投稿行：{{ currentReviewPackage.diffSummary.submissionRows ?? 0 }}</p>
+                    <p>拟发布行：{{ currentReviewPackage.diffSummary.publishRows ?? 0 }}</p>
+                    <p>排除行：{{ currentReviewPackage.diffSummary.excludedRows ?? 0 }}</p>
+                    <p>新增记录组：{{ currentReviewPackage.diffSummary.newRecordGroups ?? 0 }}</p>
+                    <p>删除既有记录：{{ currentReviewPackage.diffSummary.existingRowsDeleted ?? 0 }}</p>
                   </div>
                 </section>
 
@@ -1400,7 +1316,7 @@ async function handleLogout() {
                     <select v-model="rowViewFilter" @change="changeRowViewFilter">
                       <option value="submission">原始提交</option>
                       <option value="reviewPackage" :disabled="!selectedBatch.currentPackageId">
-                        当前整理包
+                        当前审核包
                       </option>
                     </select>
                   </label>
@@ -1436,7 +1352,7 @@ async function handleLogout() {
                             {{ statusLabel(row.status) }}
                           </span>
                         </td>
-                        <td>{{ row.data['药物'] || row.data['生物标记物名称'] || row.data.biomarker || 'NA' }}</td>
+                        <td>{{ row.data['标准药物名称'] || row.data['标准生物标记物名称'] || row.data['生物标记物名称原文'] || 'NA' }}</td>
                         <td>{{ [...row.errors, ...row.warnings].join('；') || '通过' }}</td>
                       </tr>
                     </tbody>
@@ -1462,40 +1378,19 @@ async function handleLogout() {
 
                 <footer class="drawer-actions">
                   <textarea
-                    v-if="canReviewUploads && ['PENDING_REVIEW', 'ENRICHMENT_REQUIRED', 'PENDING_APPROVAL'].includes(selectedBatch.status)"
+                    v-if="canReviewUploads && ['PENDING_REVIEW', 'READY_TO_PUBLISH', 'PUBLISH_FAILED'].includes(selectedBatch.status)"
                     v-model.trim="reviewNote"
                     maxlength="500"
                     placeholder="退回修改原因（退回时必填，最多500字）"
                   ></textarea>
                   <div>
                     <button
-                      v-if="canReviewUploads && ['PENDING_REVIEW', 'ENRICHMENT_REQUIRED', 'PENDING_APPROVAL'].includes(selectedBatch.status)"
+                      v-if="canReviewUploads && ['PENDING_REVIEW', 'READY_TO_PUBLISH', 'PUBLISH_FAILED'].includes(selectedBatch.status)"
                       type="button"
                       class="danger-action"
                       @click="handleRejectBatch(selectedBatch)"
                     >
                       退回修改
-                    </button>
-                    <button
-                      v-if="selectedBatch.status === 'PENDING_REVIEW' && canReviewUploads"
-                      type="button"
-                      class="primary-action compact"
-                      @click="handleAcceptSourceReview(selectedBatch)"
-                    >
-                      通过初审
-                    </button>
-                    <button
-                      v-if="canApproveBatch(selectedBatch)"
-                      type="button"
-                      class="primary-action compact"
-                      :disabled="currentReviewPackage?.diffSummary.riskLevel === 'HIGH' && !currentUserIsAdmin"
-                      @click="handleApproveBatch(selectedBatch)"
-                    >
-                      {{
-                        currentReviewPackage?.diffSummary.riskLevel === 'HIGH' && !currentUserIsAdmin
-                          ? '等待管理员终审'
-                          : '终审通过'
-                      }}
                     </button>
                     <button
                       v-if="canSyncBatch(selectedBatch)"
@@ -1504,7 +1399,7 @@ async function handleLogout() {
                       :disabled="isSyncing"
                       @click="handleBatchSync(selectedBatch)"
                     >
-                      {{ selectedBatch.status === 'SYNC_FAILED' ? '重试同步' : '同步入库' }}
+                      {{ selectedBatch.status === 'PUBLISH_FAILED' ? '重试入库' : '确认入库' }}
                     </button>
                   </div>
                 </footer>

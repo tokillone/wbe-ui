@@ -8,12 +8,7 @@ import type {
   MapStatsResponse,
 } from '../types/map'
 import { API_BASE_URL } from '../config/api'
-
-interface ApiResponse<T> {
-  code: number
-  message: string
-  data: T
-}
+import { requestApi } from './api'
 
 export function buildMapApiUrl(
   endpoint: string,
@@ -36,34 +31,12 @@ async function requestMap<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   const url = buildMapApiUrl(endpoint, params)
-
-  let response: Response
-  try {
-    response = await fetch(url, {
-      headers: { Accept: 'application/json' },
-      signal,
-    })
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw error
-    throw new Error('无法连接后端地图接口，请确认后端服务已启动')
-  }
-  const result = (await response.json().catch(() => null)) as ApiResponse<T> | null
-
-  if (!response.ok) {
-    if (response.status === 404) {
-      throw new Error('地图接口不存在或前端代理未连接')
-    }
-    if (response.status >= 500) {
-      throw new Error(result?.message || '后端地图接口异常，请检查服务日志')
-    }
-    throw new Error(result?.message || `地图请求失败（${response.status}）`)
-  }
-
-  if (result?.code !== 200 || !result.data) {
-    throw new Error(result?.message || '地图数据返回异常，请检查接口响应格式')
-  }
-
-  return result.data
+  return requestApi<T>(url.slice(API_BASE_URL.length), {
+    headers: { Accept: 'application/json' },
+    signal,
+    auth: false,
+    redirectOnUnauthorized: false,
+  })
 }
 
 async function postMap<T>(
@@ -71,40 +44,17 @@ async function postMap<T>(
   body: unknown,
   signal?: AbortSignal,
 ): Promise<T> {
-  const url = buildMapApiUrl(endpoint)
-
-  let response: Response
-  try {
-    response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-      signal,
-    })
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw error
-    throw new Error('无法连接后端地图接口，请确认后端服务已启动')
-  }
-  const result = (await response.json().catch(() => null)) as ApiResponse<T> | null
-
-  if (!response.ok) {
-    if (response.status === 404) {
-      throw new Error('地图接口不存在或前端代理未连接')
-    }
-    if (response.status >= 500) {
-      throw new Error(result?.message || '后端地图接口异常，请检查服务日志')
-    }
-    throw new Error(result?.message || `地图请求失败（${response.status}）`)
-  }
-
-  if (result?.code !== 200 || !result.data) {
-    throw new Error(result?.message || '地图数据返回异常，请检查接口响应格式')
-  }
-
-  return result.data
+  return requestApi<T>(endpoint, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    signal,
+    auth: false,
+    redirectOnUnauthorized: false,
+  })
 }
 
 export function buildSelectionKey(...parts: string[]) {

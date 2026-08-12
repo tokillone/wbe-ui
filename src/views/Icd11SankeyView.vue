@@ -7,6 +7,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import BrandMark from '../components/BrandMark.vue'
 import { ApiTimeoutError } from '../services/api'
+import { getUserErrorMessage } from '../services/errors'
 import { fetchIcd11SankeyCategories, fetchIcd11SankeyGraph } from '../services/icd11Sankey'
 import type {
   Icd11SankeyGraph,
@@ -523,7 +524,7 @@ function setLoadError(error: unknown, fallback: string) {
     return
   }
   loadState.value = 'error'
-  errorMessage.value = error instanceof Error ? error.message : fallback
+  errorMessage.value = getUserErrorMessage(error, fallback)
 }
 
 function retryLoad() {
