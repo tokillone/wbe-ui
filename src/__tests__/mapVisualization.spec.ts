@@ -8,8 +8,10 @@ import {
   compactExplorerSummaryCards,
   compactHeatFootprintPadding,
   countryLabelStyleForArea,
+  declutterScreenSpaceCandidates,
   detailFilterContext,
   displayLevelForZoom,
+  excludeSpecialAdminCityRows,
   excludeUnassignedCityRows,
   excludeGeometryFromFilter,
   firstActiveRegionCandidate,
@@ -21,6 +23,7 @@ import {
   pndlChartAxisTicks,
   pndlChartScalePercent,
   pndlComparisonsForRegion,
+  progressiveDeclutterGap,
   regionFillOpacityExpression,
   resolveStableHeatRange,
   selectRowsForDisplayLevel,
@@ -80,9 +83,9 @@ describe('map visualization hierarchy', () => {
       { key: 'country', scopeLevel: 'country' },
     ]
 
-    expect(
-      pndlComparisonsForRegion(comparisons, 'city', 'china|qinghai|__unassigned__'),
-    ).toEqual([{ key: 'admin1', scopeLevel: 'admin1' }])
+    expect(pndlComparisonsForRegion(comparisons, 'city', 'china|qinghai|__unassigned__')).toEqual([
+      { key: 'admin1', scopeLevel: 'admin1' },
+    ])
   })
 
   it('identifies mainland cities without treating Hong Kong, Macao, or Taiwan as mainland', () => {
@@ -106,19 +109,56 @@ describe('map visualization hierarchy', () => {
   })
 
   it('switches from country to admin1 to city at the configured thresholds', () => {
-    expect(displayLevelForZoom(3.5)).toBe('country')
-    expect(displayLevelForZoom(3.6)).toBe('admin1')
-    expect(displayLevelForZoom(6.2)).toBe('admin1')
-    expect(displayLevelForZoom(6.3)).toBe('city')
+    expect(displayLevelForZoom(3.84)).toBe('country')
+    expect(displayLevelForZoom(3.85)).toBe('admin1')
+    expect(displayLevelForZoom(6.59)).toBe('admin1')
+    expect(displayLevelForZoom(6.6)).toBe('city')
   })
 
   it('keeps exactly one interactive bubble level visible while zooming', () => {
     expect(visibleLevelsForZoom(3.2)).toEqual(['country'])
     expect(visibleLevelsForZoom(3.4)).toEqual(['country'])
-    expect(visibleLevelsForZoom(3.6)).toEqual(['admin1'])
+    expect(visibleLevelsForZoom(3.85)).toEqual(['admin1'])
     expect(visibleLevelsForZoom(5.2)).toEqual(['admin1'])
-    expect(visibleLevelsForZoom(6.1)).toEqual(['admin1'])
-    expect(visibleLevelsForZoom(6.4)).toEqual(['city'])
+    expect(visibleLevelsForZoom(6.59)).toEqual(['admin1'])
+    expect(visibleLevelsForZoom(6.6)).toEqual(['city'])
+  })
+
+  it('reduces declutter spacing progressively as each hierarchy level is enlarged', () => {
+    expect(progressiveDeclutterGap('country', 1.1)).toBe(12)
+    expect(progressiveDeclutterGap('country', 3.85)).toBe(6)
+    expect(progressiveDeclutterGap('admin1', 3.85)).toBe(10)
+    expect(progressiveDeclutterGap('admin1', 6.6)).toBe(5)
+    expect(progressiveDeclutterGap('city', 6.6)).toBe(8)
+    expect(progressiveDeclutterGap('city', 8)).toBe(4)
+  })
+
+  it('keeps a selected search result and drops lower-priority overlapping label units', () => {
+    const visible = declutterScreenSpaceCandidates(
+      [
+        {
+          value: 'belgium',
+          order: 0,
+          pointCount: 30,
+          bounds: { left: 0, top: 0, right: 40, bottom: 40 },
+        },
+        {
+          value: 'netherlands',
+          order: 1,
+          pointCount: 80,
+          bounds: { left: 30, top: 0, right: 80, bottom: 40 },
+        },
+        {
+          value: 'belgium-search',
+          order: 2,
+          forceVisible: true,
+          pointCount: 1,
+          bounds: { left: 2, top: 2, right: 42, bottom: 42 },
+        },
+      ],
+      6,
+    )
+    expect(visible).toEqual(['belgium-search'])
   })
 
   it('aggregates heat fill at the same hierarchy as the visible bubbles', () => {
@@ -170,7 +210,7 @@ describe('map visualization hierarchy', () => {
     expect(resolveStableHeatRange(null, null, [100, 50, 5478])).toEqual({ min: 50, max: 5478 })
   })
 
-  it('limits heat fill to regions with a PNDL value', () => {
+  it('uses a lower neutral opacity for covered regions without a PNDL value', () => {
     const expression = regionFillOpacityExpression(true)
     expect(expression).toEqual([
       'case',
@@ -183,12 +223,21 @@ describe('map visualization hierarchy', () => {
         0.72,
         0.68,
       ],
+      ['==', ['get', 'hasCoverage'], true],
+      [
+        'case',
+        ['==', ['get', 'level'], 'city'],
+        0.34,
+        ['==', ['get', 'level'], 'admin1'],
+        0.38,
+        0.32,
+      ],
       0,
     ])
     expect(regionFillOpacityExpression(false)).toBe(0)
   })
 
-  it('keeps a per-country fallback when the map reaches city zoom', () => {
+  it('keeps data at its last known level without cross-level fallback', () => {
     const rows = [
       { level: 'country' as const, key: 'canada', country: 'canada' },
       { level: 'country' as const, key: 'usa', country: 'usa' },
@@ -200,13 +249,13 @@ describe('map visualization hierarchy', () => {
 
     expect(
       selectRowsForDisplayLevel(rows, 'admin1', (row) => row.country).map((row) => row.key),
-    ).toEqual(['canada', 'usa|california', 'china|guangdong'])
+    ).toEqual(['usa|california', 'china|guangdong'])
     expect(
       selectRowsForDisplayLevel(rows, 'city', (row) => row.country).map((row) => row.key),
-    ).toEqual(['canada', 'usa|california', 'china|guangdong|guangzhou'])
+    ).toEqual(['china|guangdong|guangzhou'])
   })
 
-  it('hides unassigned admin rows when a country has any assigned admin data', () => {
+  it('never promotes unassigned admin rows into the admin1 display level', () => {
     const rows = [
       { level: 'country' as const, key: 'vietnam', country: 'vietnam' },
       { level: 'admin1' as const, key: 'vietnam|__unassigned__', country: 'vietnam' },
@@ -217,7 +266,7 @@ describe('map visualization hierarchy', () => {
 
     expect(
       selectRowsForDisplayLevel(rows, 'admin1', (row) => row.country).map((row) => row.key),
-    ).toEqual(['vietnam|__unassigned__', 'spain|madrid'])
+    ).toEqual(['spain|madrid'])
   })
 
   it('shows real cities and excludes unassigned city buckets at city level', () => {
@@ -287,6 +336,42 @@ describe('map visualization hierarchy', () => {
     expect(selectRowsForDisplayLevel(rows, 'city', (row) => row.country)).toEqual([])
   })
 
+  it('filters legacy Hong Kong and Macao pseudo-city rows from China city views', () => {
+    const rows = [
+      { level: 'admin1' as const, geoKey: 'china|hongkong', country: 'china' },
+      { level: 'admin1' as const, geoKey: 'china|aomen', country: 'china' },
+      {
+        level: 'city' as const,
+        geoKey: 'china|hongkong|hongkong',
+        parentGeoKey: 'china|hongkong',
+        country: 'china',
+      },
+      {
+        level: 'city' as const,
+        geoKey: 'china|aomen|macao',
+        parentGeoKey: 'china|aomen',
+        country: 'china',
+      },
+      {
+        level: 'city' as const,
+        geoKey: 'china|guangdong|zhongshan',
+        parentGeoKey: 'china|guangdong',
+        country: 'china',
+      },
+      { level: 'admin1' as const, geoKey: 'china|guangdong', country: 'china' },
+    ]
+
+    expect(
+      selectRowsForDisplayLevel(rows, 'city', (row) => row.country).map((row) => row.geoKey),
+    ).toEqual(['china|guangdong|zhongshan'])
+    expect(excludeSpecialAdminCityRows(rows).map((row) => row.geoKey)).toEqual([
+      'china|hongkong',
+      'china|aomen',
+      'china|guangdong|zhongshan',
+      'china|guangdong',
+    ])
+  })
+
   it('keeps exactly the three compact coverage metrics', () => {
     const cards = compactExplorerSummaryCards([
       { label: '点位数', value: '119' },
@@ -341,9 +426,7 @@ describe('map visualization hierarchy', () => {
     expect(logTicks[0]?.value).toBeCloseTo(1000)
     expect(logTicks[logTicks.length - 1]?.value).toBe(0)
     logTicks.forEach((tick) => {
-      expect(pndlChartScalePercent(tick.value, 1000, 1, true)).toBeCloseTo(
-        tick.ratio * 100,
-      )
+      expect(pndlChartScalePercent(tick.value, 1000, 1, true)).toBeCloseTo(tick.ratio * 100)
     })
   })
 
@@ -437,5 +520,102 @@ describe('map visualization hierarchy', () => {
 
     expect(response.regions[0]?.pndlMedianMgD1000inh).toBe(244)
     expect(response.points[0]?.pndlMedianMgD1000inh).toBe(244)
+  })
+
+  it('removes stale special-admin pseudo cities from stats and recalculates the summary', () => {
+    const hongKongAdmin = {
+      ...legacyChinaRegion,
+      level: 'admin1' as const,
+      geoKey: 'china|hongkong',
+      displayName: '香港特别行政区',
+      recordCount: 4,
+      doiCount: 1,
+    }
+    const hongKongPseudoCity = {
+      ...hongKongAdmin,
+      level: 'city' as const,
+      geoKey: 'china|hongkong|hongkong',
+      parentGeoKey: 'china|hongkong',
+    }
+    const zhongshan = {
+      ...legacyChinaRegion,
+      level: 'city' as const,
+      geoKey: 'china|guangdong|zhongshan',
+      parentGeoKey: 'china|guangdong',
+      displayName: '中山市',
+      recordCount: 3,
+      doiCount: 1,
+    }
+    const response = normalizeMapStatsResponse({
+      legend: { min: 1, max: 500, unit: 'mg/day/1000 inh', colors: [] },
+      summary: {
+        countryCount: 0,
+        admin1Count: 1,
+        cityCount: 2,
+        pointCount: 3,
+        recordCount: 11,
+        doiCount: 3,
+      },
+      regions: [hongKongAdmin, hongKongPseudoCity, zhongshan],
+      points: [hongKongAdmin, hongKongPseudoCity, zhongshan],
+    } satisfies MapStatsResponse)
+
+    expect(response.regions.map((row) => row.geoKey)).toEqual([
+      'china|hongkong',
+      'china|guangdong|zhongshan',
+    ])
+    expect(response.points.map((row) => row.geoKey)).toEqual([
+      'china|hongkong',
+      'china|guangdong|zhongshan',
+    ])
+    expect(response.summary).toEqual({
+      countryCount: 0,
+      admin1Count: 1,
+      cityCount: 1,
+      pointCount: 2,
+      recordCount: 7,
+      doiCount: 2,
+    })
+  })
+
+  it('removes stale special-admin pseudo cities from detail comparisons and rankings', () => {
+    const hongKongPseudoCity = {
+      rank: 1,
+      level: 'city' as const,
+      geoKey: 'china|hongkong|hongkong',
+      displayName: '香港特别行政区',
+      pndlMedianMgD1000inh: 14452,
+    }
+    const zhongshan = {
+      rank: 2,
+      level: 'city' as const,
+      geoKey: 'china|guangdong|zhongshan',
+      displayName: '中山市',
+      pndlMedianMgD1000inh: null,
+    }
+    const response = normalizeMapDetailResponse({
+      region: { ...legacyChinaRegion, level: 'city', geoKey: hongKongPseudoCity.geoKey },
+      locations: [
+        { ...legacyChinaRegion, level: 'city', geoKey: hongKongPseudoCity.geoKey },
+        { ...legacyChinaRegion, level: 'city', geoKey: zhongshan.geoKey },
+      ],
+      pndlRanking: [hongKongPseudoCity, zhongshan],
+      pndlComparisons: [
+        {
+          key: 'admin1',
+          label: '城市横向比较',
+          scopeLevel: 'admin1',
+          rows: [hongKongPseudoCity, zhongshan],
+        },
+      ],
+      sources: [],
+    } satisfies MapDetailResponse)
+
+    expect(response.region).toBeNull()
+    expect(response.locations?.map((row) => row.geoKey)).toEqual(['china|guangdong|zhongshan'])
+    expect(response.pndlRanking?.map((row) => row.geoKey)).toEqual(['china|guangdong|zhongshan'])
+    expect(response.pndlComparisons?.[0]?.rows.map((row) => row.geoKey)).toEqual([
+      'china|guangdong|zhongshan',
+    ])
   })
 })

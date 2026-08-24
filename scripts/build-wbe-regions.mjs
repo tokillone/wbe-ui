@@ -9,14 +9,20 @@ const geoDir = resolve(rootDir, 'public/geo')
 const tilesDir = resolve(rootDir, 'public/tiles')
 const generatedDir = resolve(tilesDir, 'generated')
 const outputGeojson = resolve(generatedDir, 'wbe_regions.geojson')
+const outputLineGeojson = resolve(generatedDir, 'wbe_region_boundaries.geojson')
+const outputEdgeGeojson = resolve(generatedDir, 'wbe_boundary_edges.geojson')
+const outputLabelGeojson = resolve(generatedDir, 'wbe_region_labels.geojson')
 const outputReport = resolve(generatedDir, 'wbe_regions_report.json')
 const outputMbtiles = resolve(generatedDir, 'wbe-regions.mbtiles')
 const outputPmtiles = resolve(tilesDir, 'wbe-regions.pmtiles')
 const sourceLayer = 'wbe_regions'
+const lineSourceLayer = 'wbe_region_boundaries'
+const edgeSourceLayer = 'wbe_boundary_edges'
+const labelSourceLayer = 'wbe_region_labels'
 const geometryCleaningRules = {
-  country: { minPartArea: 0.35, relativeMinArea: 0.002, maxParts: 18 },
-  admin1: { minPartArea: 0.12, relativeMinArea: 0.006, maxParts: 8 },
-  city: { minPartArea: 0.18, relativeMinArea: 0.035, maxParts: 3 },
+  country: { minPartArea: 0.08, relativeMinArea: 0.001, maxParts: 18 },
+  admin1: { minPartArea: 0.04, relativeMinArea: 0.004, maxParts: 6 },
+  city: { minPartArea: 0, relativeMinArea: 0, maxParts: 1 },
 }
 
 const args = new Set(process.argv.slice(2))
@@ -29,28 +35,38 @@ mkdirSync(generatedDir, { recursive: true })
 
 const sourceSpecs = [
   {
-    path: 'world-countries.geojson',
+    path: 'render/world-countries.geojson',
     level: 'country',
     include: () => true,
     geoKey: (props) => stringProp(props, 'country_key'),
     parentGeoKey: () => '',
   },
   {
-    path: 'world-admin1.geojson',
+    path: 'render/world-admin1.geojson',
     level: 'admin1',
-    include: (props) => stringProp(props, 'country_key') !== 'china',
+    include: (props) =>
+      !new Set(['china', 'hongkongsar', 'macausar', 'macaosar', 'taiwan']).has(
+        stringProp(props, 'country_key').toLowerCase(),
+      ),
     geoKey: (props) => stringProp(props, 'geo_key') || `${stringProp(props, 'country_key')}|${stringProp(props, 'region_key')}`,
     parentGeoKey: (props) => stringProp(props, 'parent_geo_key') || stringProp(props, 'country_key'),
   },
   {
-    path: 'china-provinces.geojson',
+    path: 'render/china-provinces.geojson',
     level: 'admin1',
     include: () => true,
     geoKey: (props) => stringProp(props, 'geo_key') || `${stringProp(props, 'country_key')}|${stringProp(props, 'region_key')}`,
     parentGeoKey: (props) => stringProp(props, 'parent_geo_key') || stringProp(props, 'country_key'),
   },
   {
-    path: 'china-cities.geojson',
+    path: resolve(generatedDir, 'world-cities.geojson'),
+    level: 'city',
+    include: () => true,
+    geoKey: (props) => stringProp(props, 'geo_key'),
+    parentGeoKey: (props) => stringProp(props, 'parent_geo_key'),
+  },
+  {
+    path: 'render/china-cities.geojson',
     level: 'city',
     include: () => true,
     geoKey: (props) => stringProp(props, 'geo_key') || `${stringProp(props, 'country_key')}|${stringProp(props, 'region_key')}`,
@@ -74,7 +90,7 @@ const report = {
 }
 
 for (const spec of sourceSpecs) {
-  const filePath = resolve(geoDir, spec.path)
+  const filePath = spec.path.startsWith('/') ? spec.path : resolve(geoDir, spec.path)
   const collection = readJson(filePath)
   let used = 0
   for (const feature of collection.features ?? []) {
@@ -90,6 +106,7 @@ for (const spec of sourceSpecs) {
     if (!bbox) continue
     const normalized = {
       type: 'Feature',
+      tippecanoe: zoomHint(spec.level),
       properties: {
         region_id: regionId,
         level: spec.level,
@@ -128,7 +145,31 @@ for (const [regionId, group] of featureGroups.entries()) {
 }
 
 features.sort((a, b) => String(a.properties.region_id).localeCompare(String(b.properties.region_id)))
+const selectionLineCollection = {
+  type: 'FeatureCollection',
+  // Per-region outlines are only needed for country/admin-1 selection. City
+  // selection uses a fill so coastlines and detached islands are never outlined.
+  features: features.filter((feature) => feature.properties.level !== 'city').flatMap(featureToLineFeatures),
+}
+const edgeCollection = buildBoundaryEdgeCollection()
+const labelCollection = buildRegionLabelCollection(features)
+report.featureCountByLayer = {
+  [sourceLayer]: features.length,
+  [lineSourceLayer]: selectionLineCollection.features.length,
+  [edgeSourceLayer]: edgeCollection.features.length,
+  [labelSourceLayer]: labelCollection.features.length,
+}
+report.topologyPolicy = {
+  coastlinesExcludedFromAdministrativeEdges: true,
+  uniqueSharedLandEdges: true,
+  cityEdgesPartitionedByCountry: true,
+  cityPrincipalPolygonOnly: true,
+  citySelectionUsesFillWithoutOutline: true,
+}
 writeJson(outputGeojson, { type: 'FeatureCollection', features })
+writeJson(outputLineGeojson, selectionLineCollection)
+writeJson(outputEdgeGeojson, edgeCollection)
+writeJson(outputLabelGeojson, labelCollection)
 writeJson(outputReport, report)
 
 console.log(`Prepared ${features.length} WBE region features at ${relative(outputGeojson)}`)
@@ -149,12 +190,18 @@ if (commandExists('tippecanoe') && commandExists('pmtiles')) {
       '--quiet',
       '--minimum-zoom=0',
       '--maximum-zoom=10',
-      '--layer',
-      sourceLayer,
-      '--drop-densest-as-needed',
-      '--extend-zooms-if-still-dropping',
+      '-L',
+      `${sourceLayer}:${outputGeojson}`,
+      '-L',
+      `${lineSourceLayer}:${outputLineGeojson}`,
+      '-L',
+      `${edgeSourceLayer}:${outputEdgeGeojson}`,
+      '-L',
+      `${labelSourceLayer}:${outputLabelGeojson}`,
+      '--no-feature-limit',
+      '--no-tile-size-limit',
+      '--no-tiny-polygon-reduction',
       '--detect-shared-borders',
-      outputGeojson,
     ],
     'tippecanoe',
   )
@@ -176,12 +223,18 @@ if (commandExists('tippecanoe') && commandExists('pmtiles')) {
       '--quiet',
       '--minimum-zoom=0',
       '--maximum-zoom=10',
-      '--layer',
-      sourceLayer,
-      '--drop-densest-as-needed',
-      '--extend-zooms-if-still-dropping',
+      '-L',
+      `${sourceLayer}:${containerPath(outputGeojson)}`,
+      '-L',
+      `${lineSourceLayer}:${containerPath(outputLineGeojson)}`,
+      '-L',
+      `${edgeSourceLayer}:${containerPath(outputEdgeGeojson)}`,
+      '-L',
+      `${labelSourceLayer}:${containerPath(outputLabelGeojson)}`,
+      '--no-feature-limit',
+      '--no-tile-size-limit',
+      '--no-tiny-polygon-reduction',
       '--detect-shared-borders',
-      containerPath(outputGeojson),
     ],
     'tippecanoe',
   )
@@ -226,12 +279,132 @@ function mergeFeatures(group) {
   const polygons = group.flatMap((feature) => geometryPolygons(feature.geometry))
   return {
     type: 'Feature',
+    tippecanoe: first.tippecanoe,
     properties: { ...first.properties },
     geometry:
       polygons.length === 1
         ? { type: 'Polygon', coordinates: polygons[0] }
         : { type: 'MultiPolygon', coordinates: polygons },
   }
+}
+
+function featureToLineFeatures(feature) {
+  const lines = geometryPolygons(feature.geometry)
+    .flatMap((polygon) => polygon)
+    .flatMap((ring) => (Array.isArray(ring) ? splitAntimeridianLine(ring) : []))
+    .filter((ring) => ring.length >= 2)
+  if (!lines.length) return []
+  return [
+    {
+      type: 'Feature',
+      tippecanoe: feature.tippecanoe,
+      properties: { ...feature.properties },
+      geometry: {
+        type: lines.length === 1 ? 'LineString' : 'MultiLineString',
+        coordinates: lines.length === 1 ? lines[0] : lines,
+      },
+    },
+  ]
+}
+
+function buildBoundaryEdgeCollection() {
+  const edgeSources = [
+    { path: resolve(geoDir, 'render/world-countries-lines.geojson'), level: 'country' },
+    { path: resolve(geoDir, 'render/world-admin1-lines.geojson'), level: 'admin1' },
+    { path: resolve(geoDir, 'render/china-provinces-lines.geojson'), level: 'admin1' },
+    { path: resolve(generatedDir, 'world-city-edges.geojson'), level: 'city' },
+    { path: resolve(geoDir, 'render/china-cities-lines.geojson'), level: 'city' },
+  ]
+  const features = edgeSources.flatMap(({ path, level }) => {
+    if (!existsSync(path)) throw new Error(`Missing topology edge source: ${relative(path)}`)
+    return (readJson(path).features ?? []).flatMap((feature) => {
+      if (!['LineString', 'MultiLineString'].includes(feature.geometry?.type)) return []
+      return [{
+        ...feature,
+        tippecanoe: zoomHint(level),
+        properties: {
+          ...(feature.properties ?? {}),
+          level,
+        },
+      }]
+    })
+  })
+  return { type: 'FeatureCollection', features }
+}
+
+function buildRegionLabelCollection(regionFeatures) {
+  const generatedCityLabels = readJson(resolve(generatedDir, 'world-city-labels.geojson'))
+  const generatedCityIds = new Set()
+  const cityLabels = (generatedCityLabels.features ?? []).flatMap((feature) => {
+    const props = feature.properties ?? {}
+    if (!props.region_id || feature.geometry?.type !== 'Point') return []
+    generatedCityIds.add(String(props.region_id))
+    return [{ ...feature, tippecanoe: zoomHint('city') }]
+  })
+  const remainingLabels = regionFeatures.flatMap((feature) => {
+    if (generatedCityIds.has(String(feature.properties.region_id))) return []
+    const point = representativePoint(feature.geometry)
+    if (!point) return []
+    return [{
+      type: 'Feature',
+      tippecanoe: zoomHint(feature.properties.level),
+      properties: { ...feature.properties },
+      geometry: { type: 'Point', coordinates: point },
+    }]
+  })
+  return { type: 'FeatureCollection', features: [...remainingLabels, ...cityLabels] }
+}
+
+function representativePoint(geometry) {
+  const polygons = geometryPolygons(geometry)
+  const polygon = polygons.sort((left, right) => polygonArea(right) - polygonArea(left))[0]
+  const ring = polygon?.[0]
+  if (!ring?.length) return null
+  const bbox = geometryBbox({ type: 'Polygon', coordinates: polygon })
+  if (!bbox) return null
+  const center = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]
+  if (pointInRing(center, ring)) return center.map(roundCoord)
+  for (const point of ring) {
+    if (Array.isArray(point) && point.length >= 2) return point.slice(0, 2).map(roundCoord)
+  }
+  return null
+}
+
+function pointInRing([x, y], ring) {
+  let inside = false
+  for (let current = 0, previous = ring.length - 1; current < ring.length; previous = current++) {
+    const left = ring[current]
+    const right = ring[previous]
+    const intersects =
+      left[1] > y !== right[1] > y &&
+      x < ((right[0] - left[0]) * (y - left[1])) / (right[1] - left[1]) + left[0]
+    if (intersects) inside = !inside
+  }
+  return inside
+}
+
+function zoomHint(level) {
+  if (level === 'country') return { minzoom: 0, maxzoom: 10 }
+  if (level === 'admin1') return { minzoom: 3, maxzoom: 10 }
+  return { minzoom: 6, maxzoom: 10 }
+}
+
+function splitAntimeridianLine(line) {
+  if (!Array.isArray(line) || line.length < 2) return []
+  const parts = []
+  let part = [line[0]]
+  for (let index = 1; index < line.length; index += 1) {
+    const point = line[index]
+    const previous = line[index - 1]
+    if (Math.abs(Number(point?.[0]) - Number(previous?.[0])) > 180) {
+      if (part.length >= 2) parts.push(part)
+      part = [point]
+      continue
+    }
+    part.push(point)
+  }
+  if (part.length >= 2) parts.push(part)
+  return parts
 }
 
 function cleanMergedFeature(feature) {

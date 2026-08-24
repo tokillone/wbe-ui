@@ -1,6 +1,25 @@
 import type { MapSummaryCard, MapTopBiomarker } from '../types/map'
 
+export { countryLabelStyleForArea } from './mapLabelTypography'
+
 export type MapDisplayLevel = 'country' | 'admin1' | 'city'
+
+export type ScreenSpaceBounds = {
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
+export type ScreenSpaceDeclutterCandidate<T> = {
+  value: T
+  bounds: ScreenSpaceBounds
+  order: number
+  forceVisible?: boolean
+  pointCount?: number
+  recordCount?: number
+  area?: number
+}
 
 export type MapHierarchyRow = {
   level: MapDisplayLevel
@@ -8,7 +27,10 @@ export type MapHierarchyRow = {
   parentGeoKey?: string | null
 }
 
-const ALL_FILTER_VALUE_PATTERN = /^(all|全部|全部年份|全部类别|全部小类|全部生物标记物|全部目标物质类别)$/i
+const SPECIAL_ADMIN_CITY_GEO_KEYS = new Set(['china|hongkong|hongkong', 'china|aomen|macao'])
+
+const ALL_FILTER_VALUE_PATTERN =
+  /^(all|全部|全部年份|全部类别|全部小类|全部生物标记物|全部目标物质类别)$/i
 
 export function isAllFilterContextValue(value: string | null | undefined) {
   return ALL_FILTER_VALUE_PATTERN.test(String(value ?? '').trim())
@@ -50,11 +72,17 @@ export function excludeUnassignedCityRows<
   })
 }
 
-export function countryLabelStyleForArea(area: number) {
-  if (area >= 180) return { size: 13, sort: 0 }
-  if (area >= 45) return { size: 12, sort: 1 }
-  if (area >= 8) return { size: 10.5, sort: 2 }
-  return { size: 9, sort: 3 }
+export function isSpecialAdminCityGeoKey(level: string, geoKey: string | null | undefined) {
+  return level === 'city' && SPECIAL_ADMIN_CITY_GEO_KEYS.has(String(geoKey ?? '').toLowerCase())
+}
+
+export function excludeSpecialAdminCityRows<
+  T extends { level: string; geoKey?: string; key?: string },
+>(rows: T[]) {
+  return rows.filter((row) => {
+    const geoKey = String(row.geoKey ?? row.key ?? '')
+    return !isSpecialAdminCityGeoKey(row.level, geoKey)
+  })
 }
 
 export function pndlComparisonsForRegion<T extends { key: string; scopeLevel: string }>(
@@ -67,8 +95,7 @@ export function pndlComparisonsForRegion<T extends { key: string; scopeLevel: st
   if (!isUnassignedGeoKey(normalizedLevel, normalizedGeoKey)) return comparisons
   const comparisonScope = normalizedLevel === 'city' ? 'admin1' : 'country'
   const parentComparison = comparisons.find(
-    (comparison) =>
-      comparison.scopeLevel === comparisonScope || comparison.key === comparisonScope,
+    (comparison) => comparison.scopeLevel === comparisonScope || comparison.key === comparisonScope,
   )
   return parentComparison ? [parentComparison] : []
 }
@@ -114,12 +141,12 @@ export function excludeGeometryFromFilter(originalFilter: unknown, geometry: unk
 }
 
 export const MAP_LEVEL_ZOOM = {
-  countryActiveEnd: 3.6,
-  adminActiveEnd: 6.3,
-  countryFadeStart: 3.3,
-  countryFadeEnd: 3.6,
-  cityFadeStart: 5.9,
-  cityFadeEnd: 6.3,
+  countryActiveEnd: 3.85,
+  adminActiveEnd: 6.6,
+  countryFadeStart: 3.85,
+  countryFadeEnd: 3.85,
+  cityFadeStart: 6.6,
+  cityFadeEnd: 6.6,
 } as const
 
 export function displayLevelForZoom(zoom: number): MapDisplayLevel {
@@ -130,6 +157,59 @@ export function displayLevelForZoom(zoom: number): MapDisplayLevel {
 
 export function visibleLevelsForZoom(zoom: number): MapDisplayLevel[] {
   return [displayLevelForZoom(zoom)]
+}
+
+export function progressiveDeclutterGap(level: MapDisplayLevel, zoom: number) {
+  const [startZoom, endZoom, startGap, endGap] =
+    level === 'country'
+      ? [1.1, MAP_LEVEL_ZOOM.countryActiveEnd, 12, 6]
+      : level === 'admin1'
+        ? [MAP_LEVEL_ZOOM.countryActiveEnd, MAP_LEVEL_ZOOM.adminActiveEnd, 10, 5]
+        : [MAP_LEVEL_ZOOM.adminActiveEnd, 8, 8, 4]
+  const progress = Math.min(Math.max((zoom - startZoom) / (endZoom - startZoom), 0), 1)
+  return startGap + (endGap - startGap) * progress
+}
+
+export function declutterScreenSpaceCandidates<T>(
+  candidates: ScreenSpaceDeclutterCandidate<T>[],
+  gap: number,
+) {
+  const sorted = [...candidates].sort((left, right) => {
+    if (Boolean(right.forceVisible) !== Boolean(left.forceVisible)) {
+      return Number(Boolean(right.forceVisible)) - Number(Boolean(left.forceVisible))
+    }
+    if ((right.pointCount ?? 0) !== (left.pointCount ?? 0)) {
+      return (right.pointCount ?? 0) - (left.pointCount ?? 0)
+    }
+    if ((right.recordCount ?? 0) !== (left.recordCount ?? 0)) {
+      return (right.recordCount ?? 0) - (left.recordCount ?? 0)
+    }
+    if ((right.area ?? 0) !== (left.area ?? 0)) {
+      return (right.area ?? 0) - (left.area ?? 0)
+    }
+    return left.order - right.order
+  })
+  const accepted: ScreenSpaceDeclutterCandidate<T>[] = []
+  sorted.forEach((candidate) => {
+    const collides = accepted.some((item) =>
+      screenSpaceBoundsIntersect(candidate.bounds, item.bounds, gap),
+    )
+    if (!collides || candidate.forceVisible) accepted.push(candidate)
+  })
+  return accepted.sort((left, right) => left.order - right.order).map((item) => item.value)
+}
+
+function screenSpaceBoundsIntersect(
+  left: ScreenSpaceBounds,
+  right: ScreenSpaceBounds,
+  gap: number,
+) {
+  return !(
+    left.right + gap <= right.left ||
+    right.right + gap <= left.left ||
+    left.bottom + gap <= right.top ||
+    right.bottom + gap <= left.top
+  )
 }
 
 export function heatRegionLevelForDisplayLevel(level: MapDisplayLevel): MapDisplayLevel {
@@ -165,58 +245,21 @@ export function firstActiveRegionCandidate<T>(
 export function selectRowsForDisplayLevel<T extends MapHierarchyRow>(
   rows: T[],
   level: MapDisplayLevel,
-  countryKey: (row: T) => string,
+  _countryKey: (row: T) => string,
 ) {
   if (level === 'country') return rows.filter((row) => row.level === 'country')
 
-  const grouped = new Map<string, T[]>()
-  rows.forEach((row) => {
-    const key = countryKey(row)
-    if (!key) return
-    grouped.set(key, [...(grouped.get(key) ?? []), row])
-  })
-
-  return [...grouped.entries()].flatMap(([country, countryRows]) => {
-    const countryLevelRows = countryRows.filter((row) => row.level === 'country')
-    const adminRows = countryRows.filter((row) => row.level === 'admin1')
-    const assignedAdminRows = adminRows.filter((row) => !isUnassignedRow(row))
-    const unassignedAdminRows = adminRows.filter(isUnassignedRow)
-    if (level === 'admin1') {
-      return assignedAdminRows.length
-        ? assignedAdminRows
-        : unassignedAdminRows.length
-          ? unassignedAdminRows
-          : countryLevelRows
-    }
-
-    if (country === 'china') {
-      const cityRows = countryRows.filter((row) => row.level === 'city')
-      if (!assignedAdminRows.length) {
-        const assignedCityRows = cityRows.filter((row) => !isUnassignedRow(row))
-        return assignedCityRows
-      }
-      return assignedAdminRows.flatMap((adminRow) => {
-        const adminKey = hierarchyGeoKey(adminRow)
-        const childRows = cityRows.filter((row) => hierarchyParentGeoKey(row) === adminKey)
-        return childRows.filter((row) => !isUnassignedRow(row))
-      })
-    }
-    return assignedAdminRows.length
-      ? assignedAdminRows
-      : unassignedAdminRows.length
-        ? unassignedAdminRows
-        : countryLevelRows
+  // Unassigned records belong to their last known parent aggregate. They are
+  // intentionally not promoted into a more detailed visual level: doing so
+  // would fabricate a location and duplicate the parent's fill/bubble.
+  return rows.filter((row) => {
+    if (row.level !== level || isUnassignedRow(row)) return false
+    return level !== 'city' || !isSpecialAdminCityGeoKey(row.level, hierarchyGeoKey(row))
   })
 }
 
 function hierarchyGeoKey(row: MapHierarchyRow) {
   return String(row.geoKey ?? (row as MapHierarchyRow & { key?: string }).key ?? '')
-}
-
-function hierarchyParentGeoKey(row: MapHierarchyRow) {
-  if (row.parentGeoKey) return String(row.parentGeoKey)
-  const parts = hierarchyGeoKey(row).split('|')
-  return parts.length > 1 ? parts.slice(0, -1).join('|') : ''
 }
 
 function isUnassignedRow(row: MapHierarchyRow) {
@@ -271,6 +314,15 @@ export function regionFillOpacityExpression(hasSpecificBiomarker: boolean) {
       0.72,
       0.68,
     ],
+    ['==', ['get', 'hasCoverage'], true],
+    [
+      'case',
+      ['==', ['get', 'level'], 'city'],
+      0.34,
+      ['==', ['get', 'level'], 'admin1'],
+      0.38,
+      0.32,
+    ],
     0,
   ]
 }
@@ -299,9 +351,9 @@ export function compactExplorerSummaryCards(cards: MapSummaryCard[]) {
 export type BiomarkerExplorerMetricKey = 'records' | 'literature' | 'points'
 
 export function biomarkerExplorerMetricKeys(hasSpecificBiomarker: boolean) {
-  return (hasSpecificBiomarker
-    ? ['records']
-    : ['records', 'literature', 'points']) as BiomarkerExplorerMetricKey[]
+  return (
+    hasSpecificBiomarker ? ['records'] : ['records', 'literature', 'points']
+  ) as BiomarkerExplorerMetricKey[]
 }
 
 export type PndlAxisTick = {
@@ -333,8 +385,7 @@ export function pndlChartAxisTicks(max: number, min: number, useLogScale: boolea
   }
   const denominator = useLogScale && min > 0 ? Math.log10(max / min + 1) : 0
   return ratios.map((ratio): PndlAxisTick => {
-    const value =
-      denominator > 0 ? min * (10 ** (ratio * denominator) - 1) : max * ratio
+    const value = denominator > 0 ? min * (10 ** (ratio * denominator) - 1) : max * ratio
     return { ratio, value: Math.max(0, value) }
   })
 }

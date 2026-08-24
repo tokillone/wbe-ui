@@ -8,7 +8,6 @@ import BrandMark from '../components/BrandMark.vue'
 
 const brandedViews = [
   'HomeView.vue',
-  'MapVisualizationView.vue',
   'Icd11SankeyView.vue',
   'CoreMarkerPriorityView.vue',
   'DataEntryView.vue',
@@ -31,11 +30,35 @@ describe('shared blue brand mark', () => {
     expect(source).toContain('<BrandMark')
   })
 
-  it('MethodologyVerificationView.vue uses the shared component through PageHeader', () => {
-    const viewSource = readFileSync(resolve(process.cwd(), 'src/views/MethodologyVerificationView.vue'), 'utf8')
-    const headerSource = readFileSync(resolve(process.cwd(), 'src/components/methodology/PageHeader.vue'), 'utf8')
+  it('MapVisualizationView.vue uses the shared component through MapPageHeader', () => {
+    const viewSource = readFileSync(
+      resolve(process.cwd(), 'src/views/MapVisualizationView.vue'),
+      'utf8',
+    )
+    const headerSource = readFileSync(
+      resolve(process.cwd(), 'src/components/map/MapPageHeader.vue'),
+      'utf8',
+    )
 
-    expect(viewSource).toContain("import PageHeader from '../components/methodology/PageHeader.vue'")
+    expect(viewSource).toContain("import MapPageHeader from '../components/map/MapPageHeader.vue'")
+    expect(viewSource).toContain('<MapPageHeader')
+    expect(headerSource).toContain("import BrandMark from '../BrandMark.vue'")
+    expect(headerSource).toContain('<BrandMark')
+  })
+
+  it('MethodologyVerificationView.vue uses the shared component through PageHeader', () => {
+    const viewSource = readFileSync(
+      resolve(process.cwd(), 'src/views/MethodologyVerificationView.vue'),
+      'utf8',
+    )
+    const headerSource = readFileSync(
+      resolve(process.cwd(), 'src/components/methodology/PageHeader.vue'),
+      'utf8',
+    )
+
+    expect(viewSource).toContain(
+      "import PageHeader from '../components/methodology/PageHeader.vue'",
+    )
     expect(viewSource).toContain('<PageHeader')
     expect(headerSource).toContain("import BrandMark from '../BrandMark.vue'")
     expect(headerSource).toContain('<BrandMark')

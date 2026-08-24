@@ -1,0 +1,65 @@
+export const CONTINENT_COUNTRY_SAMPLES = {
+  asia: [
+    'china',
+    'japan',
+    'india',
+    'indonesia',
+    'thailand',
+    'vietnam',
+    'kazakhstan',
+    'saudiarabia',
+  ],
+  europe: ['france', 'germany', 'spain', 'italy', 'poland', 'sweden', 'greece', 'portugal'],
+  africa: [
+    'morocco',
+    'algeria',
+    'egypt',
+    'ghana',
+    'kenya',
+    'unitedrepublicoftanzania',
+    'zambia',
+    'southafrica',
+  ],
+  northAmerica: [
+    'canada',
+    'unitedsofamerica',
+    'mexico',
+    'cuba',
+    'dominicanrepublic',
+    'guatemala',
+    'costarica',
+    'panama',
+  ],
+  southAmerica: [
+    'brazil',
+    'argentina',
+    'chile',
+    'peru',
+    'colombia',
+    'ecuador',
+    'bolivia',
+    'uruguay',
+  ],
+  oceania: [
+    'australia',
+    'newzealand',
+    'papuanewguinea',
+    'fiji',
+    'solomonislands',
+    'vanuatu',
+    'samoa',
+    'tonga',
+  ],
+}
+
+// Explicitly outside the regression sample because active conflict or disputed
+// administration makes a visual mismatch insufficient evidence for a repair.
+export const CONFLICT_OR_DISPUTED_EXCLUSIONS = [
+  'israel',
+  'palestine',
+  'syria',
+  'ukraine',
+  'sudan',
+  'southsudan',
+  'westernsahara',
+]

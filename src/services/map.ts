@@ -8,6 +8,7 @@ import type {
   MapStatsResponse,
 } from '../types/map'
 import { API_BASE_URL } from '../config/api'
+import { excludeSpecialAdminCityRows, isSpecialAdminCityGeoKey } from '../utils/mapVisualization'
 import { requestApi } from './api'
 
 export function buildMapApiUrl(
@@ -168,26 +169,53 @@ function normalizeSelectedRankingItem(
 }
 
 export function normalizeMapStatsResponse(response: MapStatsResponse): MapStatsResponse {
+  const regions = excludeSpecialAdminCityRows(response.regions ?? []).map(normalizeRegionStat)
+  const points = excludeSpecialAdminCityRows(response.points ?? []).map(normalizeRegionStat)
+  const removedLegacySpecialAdminCities =
+    regions.length !== (response.regions ?? []).length || points.length !== (response.points ?? []).length
   return {
     ...response,
-    regions: (response.regions ?? []).map(normalizeRegionStat),
-    points: (response.points ?? []).map(normalizeRegionStat),
+    summary: removedLegacySpecialAdminCities
+      ? {
+          countryCount: regions.filter((row) => row.level === 'country').length,
+          admin1Count: regions.filter((row) => row.level === 'admin1').length,
+          cityCount: regions.filter((row) => row.level === 'city').length,
+          pointCount: points.length,
+          recordCount: regions.reduce((sum, row) => sum + Number(row.recordCount ?? 0), 0),
+          doiCount: regions.reduce((sum, row) => sum + Number(row.doiCount ?? 0), 0),
+        }
+      : response.summary,
+    regions,
+    points,
   }
 }
 
 export function normalizeMapDetailResponse(response: MapDetailResponse): MapDetailResponse {
-  const region = response.region ? normalizeRegionStat(response.region) : null
+  const region =
+    response.region && !isSpecialAdminCityGeoKey(response.region.level, response.region.geoKey)
+      ? normalizeRegionStat(response.region)
+      : null
   return {
     ...response,
     region,
-    locations: response.locations?.map(normalizeRegionStat) ?? response.locations,
+    locations:
+      response.locations == null
+        ? response.locations
+        : excludeSpecialAdminCityRows(response.locations).map(normalizeRegionStat),
     summaryCards: response.summaryCards?.map((card) =>
       card.label === 'PNDL 几何均值' ? { ...card, label: '当前 PNDL' } : card,
     ) ?? response.summaryCards,
-    pndlRanking: response.pndlRanking?.map((row) => normalizeSelectedRankingItem(row, region)) ?? response.pndlRanking,
+    pndlRanking:
+      response.pndlRanking == null
+        ? response.pndlRanking
+        : excludeSpecialAdminCityRows(response.pndlRanking).map((row) =>
+            normalizeSelectedRankingItem(row, region),
+          ),
     pndlComparisons: response.pndlComparisons?.map((comparison) => ({
       ...comparison,
-      rows: (comparison.rows ?? []).map((row) => normalizeSelectedRankingItem(row, region)),
+      rows: excludeSpecialAdminCityRows(comparison.rows ?? []).map((row) =>
+        normalizeSelectedRankingItem(row, region),
+      ),
     })) ?? response.pndlComparisons,
   }
 }
