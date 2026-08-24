@@ -5,6 +5,12 @@ import {
   fetchIcd11SankeyGraph,
   normalizeIcd11SankeyGraph,
 } from '../services/icd11Sankey'
+import { ApiTimeoutError, requestApi } from '../services/api'
+import {
+  buildDynamicLevel2ColorMap,
+  dynamicLevel2Color,
+  sankeyLevel2ColorKey,
+} from '../utils/icd11SankeyColors'
 import {
   relationPieSectionsForNode,
   relationShareItems,
@@ -17,10 +23,12 @@ import {
   upstreamLayerText,
 } from '../utils/icd11SankeyDisplay'
 import type { Icd11SankeyPath } from '../types/icd11Sankey'
+import { icd11SankeyGraphIndex } from '../utils/icd11SankeyGraphIndex'
 
 describe('icd11Sankey service', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.useRealTimers()
   })
 
   it('fetches categories from the backend endpoint', async () => {
@@ -83,6 +91,30 @@ describe('icd11Sankey service', () => {
       '/api/icd11-sankey/graph-v2?schema=all-level1-v1&category=N+%E7%A5%9E%E7%BB%8F%E7%B3%BB%E7%BB%9F%E8%8D%AF%E7%89%A9',
       expect.any(Object),
     )
+  })
+
+  it('turns a stalled graph request into a distinct timeout error', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (_url: string, options?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            options?.signal?.addEventListener(
+              'abort',
+              () => reject(new DOMException('aborted', 'AbortError')),
+              { once: true },
+            )
+          }),
+      ),
+    )
+
+    const rejection = requestApi('/icd11-sankey/graph-v2', { timeoutMs: 25 }).catch(
+      (error: unknown) => error,
+    )
+    await vi.advanceTimersByTimeAsync(25)
+
+    await expect(rejection).resolves.toBeInstanceOf(ApiTimeoutError)
   })
 })
 
@@ -303,6 +335,67 @@ describe('icd11Sankey display helpers', () => {
     expect(graph.stats.level2OnlyPaths).toBe(1)
     expect(graph.stats.level2OnlyWeight).toBe(3)
   })
+
+  it('normalizes the same response object only once', () => {
+    const raw = emptyGraph()
+    const first = normalizeIcd11SankeyGraph(raw)
+    const second = normalizeIcd11SankeyGraph(raw)
+    const third = normalizeIcd11SankeyGraph(first)
+
+    expect(second).toBe(first)
+    expect(third).toBe(first)
+  })
+
+  it('indexes paths once for constant-time path and node detail lookup', () => {
+    const firstPath = path('p1', '糖尿病', null, '二甲双胍', '乳酸', 2)
+    const secondPath = path('p2', '糖尿病', '2型糖尿病', '二甲双胍', '二甲双胍', 3)
+    const graph = { ...emptyGraph(), paths: [firstPath, secondPath] }
+
+    const firstIndex = icd11SankeyGraphIndex(graph)
+    const secondIndex = icd11SankeyGraphIndex(graph)
+
+    expect(secondIndex).toBe(firstIndex)
+    expect(firstIndex.pathById.get('p2')).toBe(secondPath)
+    expect(firstIndex.pathIdsByNode.get('level1')).toEqual(['p1', 'p2'])
+    expect(firstIndex.pathIdsByNode.get('biomarker::乳酸')).toEqual(['p1'])
+  })
+})
+
+describe('dynamic Level2 sankey colors', () => {
+  it('prioritizes the selected Level1 and reallocates the most distinct colors on selection change', () => {
+    const primaryHigh = path('primary-high', '高权重 Level2', null, '药物甲', '标记物甲', 8)
+    const primaryLow = path('primary-low', '低权重 Level2', null, '药物乙', '标记物乙', 3)
+    const related = {
+      ...path('related', '关联 Level2', null, '药物丙', '标记物丙', 20),
+      level1: '循环系统疾病',
+    }
+
+    const primaryMap = buildDynamicLevel2ColorMap(
+      [related, primaryLow, primaryHigh],
+      primaryHigh.level1,
+    )
+    expect(primaryMap.get(sankeyLevel2ColorKey(primaryHigh.level1, primaryHigh.level2))).toBe(
+      dynamicLevel2Color(0),
+    )
+    expect(primaryMap.get(sankeyLevel2ColorKey(primaryLow.level1, primaryLow.level2))).toBe(
+      dynamicLevel2Color(1),
+    )
+    expect(primaryMap.get(sankeyLevel2ColorKey(related.level1, related.level2))).toBe(
+      dynamicLevel2Color(2),
+    )
+    expect(new Set(primaryMap.values()).size).toBe(3)
+
+    const relatedMap = buildDynamicLevel2ColorMap(
+      [related, primaryLow, primaryHigh],
+      related.level1,
+    )
+    expect(relatedMap.get(sankeyLevel2ColorKey(related.level1, related.level2))).toBe(
+      dynamicLevel2Color(0),
+    )
+    expect(new Set(Array.from({ length: 12 }, (_, index) => dynamicLevel2Color(index))).size).toBe(
+      12,
+    )
+  })
 })
 
 function node(
@@ -346,5 +439,33 @@ function path(
     nodeIds: level3
       ? ['level1', 'level2', `level3::${level3}`, `drug::${drug}`, `biomarker::${biomarker}`]
       : ['level1', 'level2', `drug::${drug}`, `biomarker::${biomarker}`],
+  }
+}
+
+function emptyGraph() {
+  return {
+    category: '全部目标类别',
+    nodes: [],
+    links: [],
+    paths: [],
+    level1Colors: {},
+    stats: {
+      totalWeight: 0,
+      level1: 0,
+      level2: 0,
+      level3: 0,
+      drug: 0,
+      biomarker: 0,
+      relations: 0,
+      maxNodes: 0,
+      level2OnlyPaths: 0,
+      level3Paths: 0,
+      level2OnlyWeight: 0,
+      level3Weight: 0,
+      topLevel1: [],
+      topLevel3: [],
+      topDrug: [],
+      topBiomarker: [],
+    },
   }
 }

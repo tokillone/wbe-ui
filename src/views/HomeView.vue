@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
+import BrandMark from '../components/BrandMark.vue'
 import {
   AuthRequestError,
   fetchCaptcha,
@@ -14,12 +15,41 @@ import {
   type CaptchaResponse,
   type UserResponse,
 } from '../services/auth'
+import { HOME_OVERVIEW_API_ENABLED } from '../config/api'
+import { fetchHomeOverview, HomeOverviewRequestError } from '../services/home'
+import { getUserErrorMessage } from '../services/errors'
 import { clearSession, getStoredSession, saveSession, updateStoredUser } from '../services/session'
 
 type AuthMode = 'login' | 'register' | 'reset'
-type PendingAction = 'download' | 'operator' | null
+type PendingAction = 'operator' | null
 type BiomarkerSortMode = 'frequency' | 'frequencyAsc' | 'name'
 type TargetGroupMode = 'all' | 'drug' | 'consumer'
+type ActionNoticeTone = 'success' | 'info' | 'warning'
+type HomeLoadState = 'disabled' | 'idle' | 'loading' | 'success' | 'empty' | 'error' | 'timeout' | 'unauthorized'
+
+interface RolePresentation {
+  label: string
+  shortLabel: string
+  description: string
+}
+
+const ROLE_PRESENTATIONS: Record<UserResponse['role'], RolePresentation> = {
+  admin: {
+    label: '系统管理员',
+    shortLabel: '管理',
+    description: '拥有系统配置、数据维护与审核权限',
+  },
+  editor: {
+    label: '数据维护员',
+    shortLabel: '维护',
+    description: '负责数据录入、校验与版本维护',
+  },
+  viewer: {
+    label: '研究用户',
+    shortLabel: '研究',
+    description: '可检索证据并使用已授权的数据能力',
+  },
+}
 
 interface HeroMetric {
   key: string
@@ -117,25 +147,6 @@ interface WordCloudItem {
   aliases?: string[]
 }
 
-interface CatalogItem {
-  title: string
-  detail: string
-  meta: string
-}
-
-interface AccessRuleItem {
-  title: string
-  detail: string
-  state: string
-}
-
-interface HomeModuleItem {
-  index: string
-  title: string
-  detail: string
-  target: string
-}
-
 interface HomeData {
   metrics: HeroMetric[]
   trends: TrendItem[]
@@ -144,16 +155,7 @@ interface HomeData {
   biomarkerFrequencies: BiomarkerFrequencyItem[]
   targetCategoryOptions?: TargetCategoryOption[]
   keywords: WordCloudItem[]
-  catalogItems: CatalogItem[]
-  accessRules: AccessRuleItem[]
-  homeModules: HomeModuleItem[]
   activity: ActivityItem[]
-}
-
-interface ApiResponse<T> {
-  code?: number
-  message?: string
-  data?: T
 }
 
 interface WordDetailDefaults {
@@ -162,8 +164,6 @@ interface WordDetailDefaults {
 }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const HOME_OVERVIEW_ENDPOINT = '/api/home/overview'
-const shouldFetchHomeOverview = import.meta.env.VITE_ENABLE_HOME_OVERVIEW_API === 'true'
 const DEFAULT_SUBCLASS = '默认'
 const TARGET_CATEGORY_ALL = 'all'
 const DETAIL_COLUMN_WIDTH = 56
@@ -497,23 +497,6 @@ const mockHomeData: HomeData = {
     { name: 'Azithromycin', value: 9, rows: 30, docs: 9, countries: 7, regions: 9, category: '抗生素', tone: '#1f77b4', targetLabel: '药物类' },
     { name: '阿托伐他汀', value: 9, rows: 82, docs: 9, countries: 7, regions: 15, category: '降血脂药', tone: '#6f5fa8', targetLabel: '药物类' },
   ],
-  catalogItems: [
-    { title: '目标物质与类别', detail: '32 类目标物质，覆盖药物类、消费品类和暴露/生活方式标志物。', meta: '类别、别名、归并规则' },
-    { title: '生物标记物', detail: '601 项生物标记物，保留去重文献数、数据行数和覆盖地区。', meta: '中文名、英文名、代谢物' },
-    { title: '空间覆盖', detail: '45 个国家/地区与 259 个省级或城市层级地区。', meta: '国家、地区、城市、流域' },
-    { title: '文献证据', detail: '198 篇 WBE 文献，覆盖 2004-2025 年。', meta: '题名、年份、DOI、期刊' },
-  ],
-  accessRules: [
-    { title: '开放检索', detail: '目标物质、词云、类别分布和字段说明对访客开放。', state: '公开' },
-    { title: '受控下载', detail: '按筛选条件导出完整数据包前需要登录并记录用途。', state: '登录后' },
-    { title: '数据维护', detail: '上传、批量校验、字段修订和版本发布仅面向操作员。', state: '操作员' },
-  ],
-  homeModules: [
-    { index: '01', title: '数据说明', detail: '查看开放字段、权限边界和来源说明。', target: 'about' },
-    { index: '02', title: '词云图谱', detail: '按 DOI 去重研究数理解高频标记物。', target: 'visual' },
-    { index: '03', title: '类别分布', detail: '对比目标物质类别的数据行数和覆盖范围。', target: 'visual' },
-    { index: '04', title: '方法质量', detail: '查看字段口径、质量控制和版本说明。', target: 'methods' },
-  ],
   activity: [
     {
       date: '2026 Q2',
@@ -541,6 +524,8 @@ const currentUserCanSyncData = ref(false)
 const currentUserCanDownload = ref(true)
 const pendingAction = ref<PendingAction>(null)
 const actionNotice = ref('')
+const actionNoticeTitle = ref('')
+const actionNoticeTone = ref<ActionNoticeTone>('success')
 const loginComplete = ref(false)
 const isUploadWorkspaceOpen = ref(false)
 const selectedFileName = ref('')
@@ -554,6 +539,10 @@ const selectedSubclassName = ref('')
 const biomarkerSortMode = ref<BiomarkerSortMode>('frequency')
 const selectedWord = ref<WordCloudItem | null>(null)
 const wordPopoverStyle = ref<Record<string, string>>({})
+const homeLoadState = ref<HomeLoadState>(HOME_OVERVIEW_API_ENABLED ? 'idle' : 'disabled')
+const homeLoadMessage = ref(
+  HOME_OVERVIEW_API_ENABLED ? '' : '开发模式未启用首页接口，当前展示内置基准数据。',
+)
 
 const mode = ref<AuthMode>('login')
 const isSubmitting = ref(false)
@@ -591,6 +580,8 @@ const router = useRouter()
 
 let codeTimer: number | undefined
 let overviewTimer: number | undefined
+let actionNoticeTimer: number | undefined
+let homeRequestSequence = 0
 
 const isLogin = computed(() => mode.value === 'login')
 const isRegister = computed(() => mode.value === 'register')
@@ -603,6 +594,22 @@ const canAccessDataEntry = computed(
       currentUserCanReviewUploads.value ||
       currentUserCanSyncData.value),
 )
+const currentRolePresentation = computed<RolePresentation>(() => {
+  if (currentUserRole.value) return ROLE_PRESENTATIONS[currentUserRole.value]
+  return ROLE_PRESENTATIONS.viewer
+})
+const currentUserCapabilities = computed(() => {
+  const capabilities: string[] = []
+  if (currentUserCanDownload.value) capabilities.push('数据下载')
+  if (currentUserCanUpload.value) capabilities.push('数据录入')
+  if (currentUserCanReviewUploads.value) capabilities.push('上传审核')
+  if (currentUserCanSyncData.value) capabilities.push('数据同步')
+  return capabilities.length ? capabilities : ['开放检索']
+})
+const showHomeLoadFeedback = computed(() => homeLoadState.value !== 'success')
+const canRetryHomeData = computed(() =>
+  ['empty', 'error', 'timeout'].includes(homeLoadState.value),
+)
 const needsCode = computed(() => isRegister.value || isReset.value)
 const pageTitle = computed(() => {
   if (isRegister.value) return '注册账号'
@@ -610,9 +617,8 @@ const pageTitle = computed(() => {
   return '登录平台'
 })
 const authLead = computed(() => {
-  if (pendingAction.value === 'download') return '登录后将继续下载当前数据包。'
   if (pendingAction.value === 'operator') return '登录后可进入数据上传与批量校验。'
-  return '用于受控下载、字段维护和数据版本发布。'
+  return '用于账号权限、字段维护和数据版本发布。'
 })
 const submitText = computed(() => {
   if (isRegister.value) return '创建账号'
@@ -949,25 +955,20 @@ const visualEntryItems = computed(() => [
     route: '/icd11-sankey',
   },
   {
-    icon: 'cloud',
-    title: '因子词云',
-    value: metricText('markers', '601', '项'),
-    detail: '浏览高频生物标记物',
-    target: 'visual',
+    icon: 'priority',
+    title: '核心标记物优先级',
+    value: '516 项',
+    detail: '识别高优先级标记物与证据短板',
+    target: 'core-marker-priority',
+    route: '/core-marker-priority',
   },
   {
-    icon: 'coverage',
-    title: '研究图谱',
-    value: `${homeData.value.biomarkerFrequencies.length || mockHomeData.biomarkerFrequencies.length} 类样例`,
-    detail: '比较目标物质类别累计研究走势',
-    target: 'visual',
-  },
-  {
-    icon: 'evidence',
-    title: '文献/地区证据',
-    value: `${metricText('docs', '198', '篇')} / ${coverageText()}`,
-    detail: '追踪来源与空间覆盖',
-    target: 'about',
+    icon: 'method',
+    title: '方法学核验',
+    value: '12 种方法',
+    detail: '核查处方属性、采样路径与分析覆盖',
+    target: 'methodology-verification',
+    route: '/methodology-verification',
   },
 ])
 const quickSearchItems = computed(() => [
@@ -1028,13 +1029,6 @@ const searchResults = computed(() => {
     .filter((item) => `${item.title} ${item.meta}`.toLowerCase().includes(keyword))
     .slice(0, 5)
 })
-
-function metricText(key: string, fallbackValue: string, fallbackUnit = '') {
-  const metric = homeData.value.metrics.find((item) => item.key === key)
-  const value = metric?.value ?? fallbackValue
-  const unit = metric?.unit ?? fallbackUnit
-  return unit ? `${value} ${unit}` : value
-}
 
 function coverageText() {
   const coverage = homeData.value.metrics.find((item) => item.key === 'coverage')?.value ?? '45 / 259'
@@ -1132,26 +1126,20 @@ function belongingTags(word: WordCloudItem) {
 }
 
 async function loadHomeData() {
-  if (!shouldFetchHomeOverview) return
+  if (!HOME_OVERVIEW_API_ENABLED) return
+
+  const requestSequence = ++homeRequestSequence
+  homeLoadState.value = 'loading'
+  homeLoadMessage.value = '正在读取最新首页统计…'
 
   try {
-    const params = new URLSearchParams()
-    params.set('targetCategory', selectedTargetCategory.value)
-    const endpoint = `${HOME_OVERVIEW_ENDPOINT}?${params.toString()}`
-    const response = await fetch(endpoint, {
-      headers: {
-        Accept: 'application/json',
-      },
+    const result = await fetchHomeOverview<HomeData>({
+      targetCategory: selectedTargetCategory.value,
     })
-    if (!response.ok) return
+    if (requestSequence !== homeRequestSequence) return
 
-    const body = (await response.json()) as ApiResponse<Partial<HomeData>> | Partial<HomeData> | null
-    if (!body) return
-
-    const result: Partial<HomeData> =
-      'data' in body
-        ? ((body.code === undefined || body.code === 200 ? body.data : null) ?? {})
-        : (body as Partial<HomeData>)
+    const hasOverviewData =
+      Array.isArray(result.biomarkerFrequencies) && result.biomarkerFrequencies.length > 0
 
     homeData.value = {
       metrics: result.metrics?.length ? result.metrics : mockHomeData.metrics,
@@ -1165,11 +1153,12 @@ async function loadHomeData() {
         ? result.targetCategoryOptions
         : (homeData.value.targetCategoryOptions ?? mockHomeData.targetCategoryOptions),
       keywords: result.keywords?.length ? result.keywords : mockHomeData.keywords,
-      catalogItems: result.catalogItems?.length ? result.catalogItems : mockHomeData.catalogItems,
-      accessRules: result.accessRules?.length ? result.accessRules : mockHomeData.accessRules,
-      homeModules: result.homeModules?.length ? result.homeModules : mockHomeData.homeModules,
       activity: result.activity?.length ? result.activity : mockHomeData.activity,
     }
+    homeLoadState.value = hasOverviewData ? 'success' : 'empty'
+    homeLoadMessage.value = hasOverviewData
+      ? ''
+      : '首页接口暂时没有可展示的统计数据，当前保留内置基准数据。'
 
     const hasSelectedTargetCategory = targetCategoryOptions.value.some(
       (option) => option.value === selectedTargetCategory.value,
@@ -1185,9 +1174,22 @@ async function loadHomeData() {
       selectedBiomarkerName.value = ''
       selectedSubclassName.value = ''
     }
-  } catch {
-    homeData.value = mockHomeData
+  } catch (error) {
+    if (requestSequence !== homeRequestSequence) return
+    if (error instanceof HomeOverviewRequestError) {
+      const nextState: HomeLoadState =
+        error.kind === 'timeout' || error.kind === 'unauthorized' ? error.kind : 'error'
+      homeLoadState.value = nextState
+      homeLoadMessage.value = `${error.message} 当前保留内置基准数据。`
+      return
+    }
+    homeLoadState.value = 'error'
+    homeLoadMessage.value = '首页数据加载失败，当前保留内置基准数据。'
   }
+}
+
+function retryHomeData() {
+  void loadHomeData()
 }
 
 function focusOverview(index: number) {
@@ -1277,7 +1279,7 @@ async function refreshLoginCaptcha() {
     loginCaptcha.value = await fetchCaptcha()
     loginForm.captchaCode = ''
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '图形验证码获取失败')
+    setMessage('error', getUserErrorMessage(error, '图形验证码获取失败，请稍后重试'))
   } finally {
     isLoadingCaptcha.value = false
   }
@@ -1310,13 +1312,34 @@ function closeAuth() {
   if (!loginComplete.value) pendingAction.value = null
 }
 
+function dismissActionNotice() {
+  actionNotice.value = ''
+  actionNoticeTitle.value = ''
+  if (actionNoticeTimer) {
+    window.clearTimeout(actionNoticeTimer)
+    actionNoticeTimer = undefined
+  }
+}
+
+function showActionNotice(
+  title: string,
+  detail: string,
+  tone: ActionNoticeTone = 'success',
+) {
+  dismissActionNotice()
+  actionNoticeTitle.value = title
+  actionNotice.value = detail
+  actionNoticeTone.value = tone
+  actionNoticeTimer = window.setTimeout(dismissActionNotice, 5200)
+}
+
 async function handleLogout() {
   const token = getStoredSession()?.token
   try {
     if (token) await requestLogout(token)
-    actionNotice.value = '已退出登录。'
+    showActionNotice('已安全退出', '当前账号的本地登录状态已清除。', 'info')
   } catch {
-    actionNotice.value = '本地登录状态已清除，服务端会话可能已过期。'
+    showActionNotice('本地状态已清除', '服务端会话可能已经过期，无需重复退出。', 'warning')
   } finally {
     clearSession()
     isAuthenticated.value = false
@@ -1335,7 +1358,10 @@ async function handleLogout() {
 
 function returnToPrevious() {
   isAuthOpen.value = false
-  actionNotice.value = `登录成功，已显示账号状态。`
+  showActionNotice(
+    `欢迎回来，${currentUser.value}`,
+    `已按“${currentRolePresentation.value.label}”身份恢复访问权限。`,
+  )
   pendingAction.value = null
 }
 
@@ -1346,16 +1372,7 @@ function continueProtectedAction() {
   if (action) runProtectedAction(action)
 }
 
-function runProtectedAction(action: Exclude<PendingAction, null>) {
-  if (action === 'download') {
-    if (!currentUserCanDownload.value) {
-      actionNotice.value = '当前账号已被禁止下载，请联系系统管理员调整权限。'
-      return
-    }
-    actionNotice.value = '已通过认证：可按筛选条件发起受控下载。'
-    return
-  }
-
+function runProtectedAction(_action: Exclude<PendingAction, null>) {
   openUploadWorkspace()
 }
 
@@ -1371,9 +1388,19 @@ function preloadIcd11Sankey() {
   void import('./Icd11SankeyView.vue')
 }
 
+function preloadCoreMarkerPriority() {
+  void import('./CoreMarkerPriorityView.vue')
+}
+
+function preloadMethodologyVerification() {
+  void import('./MethodologyVerificationView.vue')
+}
+
 function preloadVisualRoute(route?: string) {
   if (route === '/map-visualization') preloadMapVisualization()
   if (route === '/icd11-sankey') preloadIcd11Sankey()
+  if (route === '/core-marker-priority') preloadCoreMarkerPriority()
+  if (route === '/methodology-verification') preloadMethodologyVerification()
 }
 
 function handleVisualEntry(item: { target: string; route?: string }) {
@@ -1392,7 +1419,11 @@ async function openUploadWorkspace() {
   }
 
   if (!canAccessDataEntry.value) {
-    actionNotice.value = '当前账号没有数据工作台权限，请联系系统管理员开启上传、审核或同步权限。'
+    showActionNotice(
+      '暂无工作台权限',
+      '当前账号未开通上传、审核或同步能力，请联系系统管理员。',
+      'warning',
+    )
     return
   }
 
@@ -1503,7 +1534,7 @@ async function handleSendCode() {
     setMessage(result.success ? 'success' : 'error', result.message || '验证码已发送')
     startCountdown()
   } catch (error) {
-    setMessage('error', error instanceof Error ? error.message : '验证码发送失败')
+    setMessage('error', getUserErrorMessage(error, '验证码发送失败，请稍后重试'))
   } finally {
     isSendingCode.value = false
   }
@@ -1554,6 +1585,9 @@ async function handleSubmit() {
       currentUserCanReviewUploads.value = result.data.user.canReviewUploads === true
       currentUserCanSyncData.value = result.data.user.canSyncData === true
       currentUserCanDownload.value = result.data.user.canDownload !== false
+      if (homeLoadState.value === 'unauthorized') {
+        void loadHomeData()
+      }
       loginComplete.value = true
       isAuthOpen.value = false
       const action = pendingAction.value
@@ -1561,16 +1595,19 @@ async function handleSubmit() {
       if (action) {
         runProtectedAction(action)
       } else {
-        actionNotice.value = result.message || '登录成功，已显示账号入口。'
+        showActionNotice(
+          `欢迎回来，${currentUser.value}`,
+          `${currentRolePresentation.value.label} · ${currentUserCapabilities.value.join('、')}`,
+        )
       }
     }
   } catch (error) {
     if (isCaptchaRequiredError(error)) {
       await refreshLoginCaptcha()
-      setMessage('error', error instanceof Error ? error.message : '请完成图形验证码后重试')
+      setMessage('error', getUserErrorMessage(error, '请完成图形验证码后重试'))
       return
     }
-    setMessage('error', error instanceof Error ? error.message : '请求失败，请稍后再试')
+    setMessage('error', getUserErrorMessage(error, '操作未完成，请稍后重试'))
   } finally {
     isSubmitting.value = false
   }
@@ -1618,8 +1655,10 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  homeRequestSequence += 1
   if (codeTimer) window.clearInterval(codeTimer)
   if (overviewTimer) window.clearInterval(overviewTimer)
+  if (actionNoticeTimer) window.clearTimeout(actionNoticeTimer)
 })
 </script>
 
@@ -1627,11 +1666,7 @@ onBeforeUnmount(() => {
   <main class="site-shell">
     <header class="site-header">
       <a class="brand" href="#top" aria-label="污水信息因子数据库首页">
-        <span class="brand-logo" aria-hidden="true">
-          <span class="brand-drop"></span>
-          <span class="brand-bars"><i></i><i></i><i></i></span>
-          <span class="brand-line"><i></i><i></i></span>
-        </span>
+        <BrandMark :size="44" />
         <span>
           <strong>污水信息因子数据库</strong>
           <small>Wastewater Biomarker Evidence</small>
@@ -1639,8 +1674,8 @@ onBeforeUnmount(() => {
       </a>
 
       <nav class="main-nav" aria-label="主导航">
-        <a href="#about">数据说明</a>
         <a href="#visual-entry">可视化</a>
+        <a href="#visual">图谱分析</a>
         <a href="#methods">方法与质量</a>
         <a href="#news">更新</a>
       </nav>
@@ -1666,26 +1701,62 @@ onBeforeUnmount(() => {
         <div v-if="isAuthenticated" class="user-tools">
           <details class="account-menu">
             <summary>
-              <span class="account-status-dot" aria-hidden="true"></span>
+              <span class="account-avatar" aria-hidden="true">{{ currentUser.slice(0, 1).toUpperCase() }}</span>
               <span class="account-summary-copy">
-                <small>已登录</small>
                 <strong>{{ currentUser }}</strong>
+                <small>{{ currentRolePresentation.label }}</small>
               </span>
             </summary>
             <div class="account-menu-panel">
-              <span>当前账号</span>
-              <strong>{{ currentUser }}</strong>
-              <small>{{ currentUserRole || '用户' }}</small>
-              <button class="logout-button" type="button" @click="handleLogout">退出登录</button>
+              <div class="account-panel-head">
+                <span class="account-avatar large" aria-hidden="true">{{ currentUser.slice(0, 1).toUpperCase() }}</span>
+                <span>
+                  <strong>{{ currentUser }}</strong>
+                  <small>{{ currentRolePresentation.label }}</small>
+                </span>
+              </div>
+              <p>{{ currentRolePresentation.description }}</p>
+              <div class="account-capabilities" aria-label="当前账号能力">
+                <span v-for="capability in currentUserCapabilities" :key="capability">
+                  {{ capability }}
+                </span>
+              </div>
+              <button class="logout-button" type="button" @click="handleLogout">
+                <span aria-hidden="true">↗</span>
+                退出当前账号
+              </button>
             </div>
           </details>
           <RouterLink v-if="canAccessDataEntry" class="upload-entry" to="/data-entry">
             数据录入
           </RouterLink>
         </div>
-        <button v-else class="login-button" type="button" @click="openAuth()">登录</button>
+        <button v-else class="login-button" type="button" @click="openAuth()">
+          <span class="login-button-icon" aria-hidden="true"></span>
+          <span class="login-button-copy">
+            <strong>登录 / 注册</strong>
+            <small>账号入口</small>
+          </span>
+        </button>
       </div>
     </header>
+
+    <Transition name="account-notice">
+      <aside
+        v-if="actionNotice"
+        class="account-notice"
+        :class="`is-${actionNoticeTone}`"
+        role="status"
+        aria-live="polite"
+      >
+        <span class="account-notice-icon" aria-hidden="true"></span>
+        <span class="account-notice-copy">
+          <strong>{{ actionNoticeTitle }}</strong>
+          <small>{{ actionNotice }}</small>
+        </span>
+        <button type="button" aria-label="关闭提示" @click="dismissActionNotice">×</button>
+      </aside>
+    </Transition>
 
     <section id="top" class="hero-section" aria-labelledby="heroTitle">
       <div class="hero-copy">
@@ -1695,18 +1766,17 @@ onBeforeUnmount(() => {
           整合 WBE 文献、目标物质、地区覆盖和生物标记物关系，支持数据检索、证据追踪和可视化分析。
         </p>
         <div class="hero-actions">
-          <button type="button" class="primary-action" @click="scrollToSection('about')">
-            查看数据说明
+          <button type="button" class="primary-action" @click="scrollToSection('visual-entry')">
+            进入可视化中心
           </button>
           <button
             type="button"
             class="secondary-action"
-            @click="scrollToSection('visual-entry')"
+            @click="scrollToSection('visual')"
           >
-            进入可视化中心
+            浏览数据图谱
           </button>
         </div>
-        <p v-if="actionNotice" class="action-notice">{{ actionNotice }}</p>
       </div>
 
       <div class="insight-board" aria-label="首页数据横幅">
@@ -1740,8 +1810,10 @@ onBeforeUnmount(() => {
           <p>{{ overviewFocusCopy }}</p>
         </div>
         <div class="board-foot">
-          <span>开放检索，受控下载。</span>
-          <button type="button" @click="scrollToSection('about')">查看说明</button>
+          <span>{{
+            isAuthenticated ? '已登录：可按账号权限使用数据能力。' : '访客模式：公开检索与分析功能可用。'
+          }}</span>
+          <button type="button" @click="scrollToSection('visual')">查看图谱</button>
         </div>
       </div>
     </section>
@@ -1753,7 +1825,7 @@ onBeforeUnmount(() => {
           <p class="section-kicker">VISUAL ENTRY</p>
             <h2 id="glanceTitle">可视化与数据入口</h2>
           </div>
-          <p class="glance-lead">空间分布、ICD11 桑基图、标记物词云、类别走势与文献证据集中检索。</p>
+          <p class="glance-lead">空间分布、疾病关联、核心标记物和方法质量，集中为四个真实功能入口。</p>
         </div>
         <div class="glance-grid">
           <button
@@ -1761,6 +1833,7 @@ onBeforeUnmount(() => {
             :key="item.title"
             type="button"
             class="glance-item"
+            :class="item.icon"
             @mouseenter="preloadVisualRoute(item.route)"
             @focus="preloadVisualRoute(item.route)"
             @click="handleVisualEntry(item)"
@@ -1772,81 +1845,6 @@ onBeforeUnmount(() => {
             </span>
             <span class="glance-value">{{ item.value }}</span>
           </button>
-        </div>
-      </div>
-    </section>
-
-    <section id="about" class="about-band" aria-label="数据说明">
-      <div class="data-dossier">
-        <div class="dossier-header">
-          <div class="about-intro">
-            <p class="section-kicker">ABOUT DATA</p>
-            <h2>数据说明</h2>
-            <p>
-              面向污水流行病学研究，按目标物质、地区覆盖、研究年份和来源文献组织字段，
-              支持开放检索、证据追踪和受控下载。
-            </p>
-          </div>
-          <div class="dossier-guide" aria-label="数据说明导览">
-            <article>
-              <span>可检索内容</span>
-              <strong>查字段与对象</strong>
-              <p>访客可检索目标物质、标记物、地区覆盖和文献证据字段。</p>
-            </article>
-            <article>
-              <span>使用边界</span>
-              <strong>分级开放使用</strong>
-              <p>检索开放，完整下载需登录；数据录入和维护仅限操作员。</p>
-            </article>
-            <article>
-              <span>证据追踪</span>
-              <strong>来源与版本可查</strong>
-              <p>保留 DOI、年份、期刊、地区覆盖和字段版本用于复核。</p>
-            </article>
-          </div>
-        </div>
-
-        <div class="dossier-body">
-          <article class="metadata-panel field-panel">
-            <header>
-              <span>字段结构</span>
-              <strong>开放检索字段</strong>
-            </header>
-            <div class="field-table" role="table" aria-label="开放检索字段">
-              <div class="field-table-head" role="row">
-                <span role="columnheader">对象</span>
-                <span role="columnheader">覆盖说明</span>
-                <span role="columnheader">开放字段</span>
-              </div>
-              <article v-for="item in homeData.catalogItems" :key="item.title">
-                <strong>{{ item.title }}</strong>
-                <span>{{ item.detail }}</span>
-                <em>{{ item.meta }}</em>
-              </article>
-            </div>
-          </article>
-
-          <article class="metadata-panel access-panel">
-            <header>
-              <span>权限边界</span>
-              <strong>检索开放，下载受控</strong>
-            </header>
-            <div class="permission-table" aria-label="权限边界">
-              <article v-for="item in homeData.accessRules" :key="item.title">
-                <span>{{ item.state }}</span>
-                <div>
-                  <strong>{{ item.title }}</strong>
-                  <p>{{ item.detail }}</p>
-                </div>
-              </article>
-            </div>
-            <div class="permission-actions">
-              <button type="button" @click="openAuth('download')">下载申请</button>
-              <button v-if="canAccessDataEntry" type="button" @click="openUploadWorkspace">
-                数据录入
-              </button>
-            </div>
-          </article>
         </div>
       </div>
     </section>
@@ -1916,6 +1914,24 @@ onBeforeUnmount(() => {
             <strong>累计研究数横向柱状图</strong>
             <em>{{ formatNumber(biomarkerTotalFrequency) }} 次 DOI 去重研究 · {{ biomarkerFrequencyItems.length }} 类目标物质</em>
           </header>
+          <div
+            v-if="showHomeLoadFeedback"
+            class="home-load-feedback"
+            :class="`is-${homeLoadState}`"
+            role="status"
+            aria-live="polite"
+          >
+            <span class="home-load-feedback-icon" aria-hidden="true"></span>
+            <p>{{ homeLoadMessage }}</p>
+            <button v-if="canRetryHomeData" type="button" @click="retryHomeData">重新加载</button>
+            <button
+              v-else-if="homeLoadState === 'unauthorized'"
+              type="button"
+              @click="openAuth()"
+            >
+              登录后重试
+            </button>
+          </div>
 
           <div class="biomarker-chart-layout">
             <section class="biomarker-bar-section" aria-label="目标物质类别 DOI 去重累计研究数">
@@ -2141,23 +2157,18 @@ onBeforeUnmount(() => {
 
     <footer id="news" class="site-footer">
       <div class="footer-brand">
-        <span class="brand-logo small" aria-hidden="true">
-          <span class="brand-drop"></span>
-          <span class="brand-bars"><i></i><i></i><i></i></span>
-          <span class="brand-line"><i></i><i></i></span>
-        </span>
+        <BrandMark :size="32" compact />
         <span>
           <strong>污水信息因子数据库</strong>
           <p>服务于污水流行病学数据整合、公共健康研究和证据型决策。</p>
         </span>
       </div>
       <nav aria-label="页脚导航">
-        <a href="#about">数据说明</a>
+        <a href="#visual-entry">分析入口</a>
         <a href="#visual">图谱分析</a>
         <a href="#methods">方法与质量</a>
-        <button type="button" @click="openAuth('download')">下载申请</button>
       </nav>
-      <small>© 2026 WBE Information Platform · 字段版本与数据更新保持可追溯</small>
+      <small>© 2026 Wastewater Biomarker Evidence · 字段版本与数据更新保持可追溯</small>
     </footer>
 
     <div v-if="selectedWord" class="word-popover-layer" @click.self="closeWordPopover">
@@ -2227,10 +2238,7 @@ onBeforeUnmount(() => {
           ×
         </button>
         <header class="auth-header">
-          <span class="auth-logo" aria-hidden="true">
-            <span class="auth-logo-drop"></span>
-            <span class="auth-logo-bars"><i></i><i></i><i></i></span>
-          </span>
+          <BrandMark :size="40" />
           <h2 id="authTitle">{{ pageTitle }}</h2>
           <p>{{ authLead }}</p>
         </header>
@@ -2441,7 +2449,7 @@ onBeforeUnmount(() => {
               class="ghost-action"
               @click="continueProtectedAction"
             >
-              {{ pendingAction === 'download' ? '继续下载' : '进入数据上传' }}
+              进入数据上传
             </button>
           </div>
 
@@ -2790,15 +2798,70 @@ a {
 }
 
 .login-button {
-  max-width: 220px;
-  height: 42px;
-  overflow: hidden;
-  padding: 0 16px;
-  border-radius: 8px;
-  color: #ffffff;
-  background: #173247;
-  text-overflow: ellipsis;
+  min-width: 142px;
+  height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 16px 0 13px;
+  border: 1px solid rgba(12, 125, 111, 0.26);
+  border-radius: 12px;
+  color: #0a6f63;
+  background: linear-gradient(145deg, #ffffff, #f1faf8);
+  box-shadow: 0 8px 22px rgba(16, 71, 87, 0.08);
   white-space: nowrap;
+}
+
+.login-button-icon {
+  position: relative;
+  width: 27px;
+  height: 27px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  background: linear-gradient(145deg, #0e8d7b, #087063);
+  box-shadow: 0 6px 14px rgba(11, 120, 104, 0.2);
+}
+
+.login-button-icon::before {
+  position: absolute;
+  top: 6px;
+  left: 9px;
+  width: 7px;
+  height: 7px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  content: '';
+}
+
+.login-button-icon::after {
+  position: absolute;
+  right: 6px;
+  bottom: 5px;
+  left: 6px;
+  height: 6px;
+  border: 2px solid #ffffff;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  content: '';
+}
+
+.login-button-copy {
+  display: grid;
+  gap: 1px;
+  text-align: left;
+}
+
+.login-button-copy strong {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.login-button-copy small {
+  color: #68808d;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.2;
 }
 
 .user-tools {
@@ -2810,18 +2873,19 @@ a {
 
 .account-menu {
   position: relative;
-  min-width: 112px;
+  min-width: 148px;
 }
 
 .account-menu summary {
-  min-height: 42px;
+  min-height: 48px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 10px;
-  border: 1px solid rgba(95, 124, 143, 0.2);
-  border-radius: 8px;
-  background: #ffffff;
+  padding: 5px 11px 5px 6px;
+  border: 1px solid rgba(12, 125, 111, 0.2);
+  border-radius: 12px;
+  background: linear-gradient(145deg, #ffffff, #f4faf9);
+  box-shadow: 0 8px 22px rgba(16, 71, 87, 0.07);
   cursor: pointer;
   list-style: none;
 }
@@ -2842,13 +2906,25 @@ a {
   transform: rotate(180deg);
 }
 
-.account-status-dot {
-  width: 8px;
-  height: 8px;
+.account-avatar {
+  width: 35px;
+  height: 35px;
   flex: 0 0 auto;
-  border-radius: 50%;
-  background: #0b7868;
-  box-shadow: 0 0 0 3px rgba(11, 120, 104, 0.12);
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: #ffffff;
+  background: linear-gradient(145deg, #159483, #087064);
+  box-shadow: 0 6px 16px rgba(11, 120, 104, 0.2);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.account-avatar.large {
+  width: 43px;
+  height: 43px;
+  border-radius: 13px;
+  font-size: 17px;
 }
 
 .account-summary-copy {
@@ -2858,7 +2934,7 @@ a {
 }
 
 .account-summary-copy small {
-  color: #6a7f8d;
+  color: #0b7868;
   font-size: 11px;
   font-weight: 900;
 }
@@ -2877,29 +2953,65 @@ a {
   top: calc(100% + 8px);
   left: 0;
   z-index: 30;
-  width: 190px;
+  right: 0;
+  left: auto;
+  width: 286px;
   display: grid;
-  gap: 5px;
-  padding: 12px;
-  border: 1px solid rgba(95, 124, 143, 0.2);
-  border-radius: 10px;
+  gap: 13px;
+  padding: 16px;
+  border: 1px solid rgba(95, 124, 143, 0.18);
+  border-radius: 16px;
   background: #ffffff;
-  box-shadow: 0 18px 44px rgba(21, 52, 72, 0.16);
+  box-shadow: 0 22px 54px rgba(21, 52, 72, 0.18);
 }
 
-.account-menu-panel > span,
-.account-menu-panel > small {
-  color: #607684;
-  font-size: 11px;
-  font-weight: 800;
+.account-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
 }
 
-.account-menu-panel > strong {
+.account-panel-head > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.account-panel-head strong {
   overflow: hidden;
   color: #173247;
-  font-size: 14px;
+  font-size: 15px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.account-panel-head small {
+  color: #0b7868;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.account-menu-panel > p {
+  margin: 0;
+  color: #667e8c;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.account-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.account-capabilities span {
+  padding: 4px 8px;
+  border: 1px solid rgba(11, 120, 104, 0.15);
+  border-radius: 999px;
+  color: #0b6f63;
+  background: #eef9f6;
+  font-size: 10px;
+  font-weight: 900;
 }
 
 .upload-entry {
@@ -2916,10 +3028,14 @@ a {
 
 .logout-button {
   width: 100%;
-  height: 36px;
-  margin-top: 6px;
-  padding: 0 10px;
-  border-radius: 7px;
+  height: 40px;
+  margin-top: 1px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid rgba(104, 126, 140, 0.14);
+  border-radius: 10px;
   color: #173247;
   background: #eef4f7;
   text-align: left;
@@ -2934,6 +3050,12 @@ a {
 .auth-submit:hover,
 .ghost-action:hover {
   transform: translateY(-1px);
+}
+
+.login-button:hover {
+  border-color: rgba(12, 125, 111, 0.42);
+  background: #f2fbf9;
+  box-shadow: 0 12px 28px rgba(13, 104, 95, 0.14);
 }
 
 .hero-section {
@@ -3019,17 +3141,122 @@ a {
   background: #ffffff;
 }
 
-.action-notice {
-  width: fit-content;
-  max-width: 100%;
-  margin: 18px 0 0;
-  padding: 10px 12px;
-  border: 1px solid rgba(14, 143, 119, 0.22);
+.account-notice {
+  position: fixed;
+  top: 86px;
+  right: clamp(16px, 3vw, 44px);
+  z-index: 80;
+  width: min(390px, calc(100vw - 32px));
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 28px;
+  gap: 11px;
+  align-items: center;
+  padding: 13px 12px 13px 14px;
+  border: 1px solid rgba(13, 128, 111, 0.2);
+  border-radius: 15px;
+  color: #173247;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 22px 60px rgba(17, 55, 74, 0.2);
+  backdrop-filter: blur(16px);
+}
+
+.account-notice-icon {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  color: #ffffff;
+  background: linear-gradient(145deg, #159483, #087064);
+}
+
+.account-notice-icon::before {
+  width: 13px;
+  height: 7px;
+  border-bottom: 2px solid currentColor;
+  border-left: 2px solid currentColor;
+  content: '';
+  transform: translateY(-2px) rotate(-45deg);
+}
+
+.account-notice.is-info .account-notice-icon {
+  background: linear-gradient(145deg, #3487b5, #21668d);
+}
+
+.account-notice.is-info .account-notice-icon::before {
+  width: auto;
+  height: auto;
+  border: 0;
+  content: 'i';
+  font-family: Georgia, serif;
+  font-size: 19px;
+  font-weight: 900;
+  transform: none;
+}
+
+.account-notice.is-warning {
+  border-color: rgba(190, 126, 27, 0.25);
+}
+
+.account-notice.is-warning .account-notice-icon {
+  background: linear-gradient(145deg, #d89b38, #ad6e18);
+}
+
+.account-notice.is-warning .account-notice-icon::before {
+  width: auto;
+  height: auto;
+  border: 0;
+  content: '!';
+  font-size: 19px;
+  font-weight: 900;
+  transform: none;
+}
+
+.account-notice-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.account-notice-copy strong {
+  color: #173247;
+  font-size: 14px;
+}
+
+.account-notice-copy small {
+  color: #607684;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.account-notice > button {
+  width: 28px;
+  height: 28px;
+  border: 0;
   border-radius: 8px;
-  color: #0b6f5f;
-  background: rgba(235, 249, 245, 0.88);
-  font-size: 13px;
-  line-height: 1.6;
+  color: #758894;
+  background: transparent;
+  cursor: pointer;
+  font-size: 19px;
+}
+
+.account-notice > button:hover {
+  color: #173247;
+  background: #edf4f5;
+}
+
+.account-notice-enter-active,
+.account-notice-leave-active {
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s ease;
+}
+
+.account-notice-enter-from,
+.account-notice-leave-to {
+  opacity: 0;
+  transform: translateY(-10px) scale(0.98);
 }
 
 .insight-board {
@@ -3273,20 +3500,20 @@ a {
 
 .glance-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
 }
 
 .glance-item {
   position: relative;
-  min-height: 124px;
+  min-height: 176px;
   display: grid;
-  grid-template-columns: 54px minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 18px;
   align-items: start;
-  padding: 16px 16px 42px;
+  padding: 24px 20px 56px;
   border: 1px solid rgba(109, 139, 158, 0.18);
-  border-radius: 8px;
+  border-radius: 16px;
   color: #173247;
   background: #ffffff;
   text-align: left;
@@ -3311,13 +3538,13 @@ a {
 
 .glance-icon {
   position: relative;
-  width: 54px;
-  height: 54px;
+  width: 64px;
+  height: 64px;
   grid-row: 1;
   display: grid;
   place-items: center;
   border: 2px solid #1f638d;
-  border-radius: 8px;
+  border-radius: 14px;
   background: #ffffff;
   transition:
     background 0.2s ease,
@@ -3327,7 +3554,7 @@ a {
 
 .glance-icon::before {
   color: #1f638d;
-  font-size: 22px;
+  font-size: 25px;
   font-weight: 900;
   transition: color 0.2s ease;
 }
@@ -3364,12 +3591,24 @@ a {
   content: 'D';
 }
 
+.glance-icon.priority::before {
+  content: 'P';
+}
+
+.glance-icon.method::before {
+  content: 'M';
+}
+
+.glance-item.priority .glance-copy strong {
+  white-space: normal;
+}
+
 .glance-value {
   position: absolute;
-  bottom: 15px;
-  left: 84px;
+  bottom: 22px;
+  left: 102px;
   justify-self: start;
-  padding: 3px 8px;
+  padding: 5px 10px;
   border-radius: 999px;
   color: #ffffff;
   background: #0b7868;
@@ -3396,9 +3635,9 @@ a {
 
 .glance-copy strong {
   color: #173247;
-  font-size: 18px;
+  font-size: 20px;
   line-height: 1.2;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .glance-copy em {
@@ -4035,6 +4274,73 @@ a {
   font-size: 13px;
   font-style: normal;
   font-weight: 900;
+}
+
+.home-load-feedback {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(47, 112, 120, 0.18);
+  border-radius: 8px;
+  color: #36546d;
+  background: #f4f9fa;
+}
+
+.home-load-feedback.is-error,
+.home-load-feedback.is-timeout,
+.home-load-feedback.is-unauthorized {
+  border-color: rgba(183, 103, 44, 0.24);
+  color: #7b4b27;
+  background: #fff8f1;
+}
+
+.home-load-feedback-icon {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #2f7078;
+  box-shadow: 0 0 0 4px rgba(47, 112, 120, 0.1);
+}
+
+.home-load-feedback.is-loading .home-load-feedback-icon {
+  animation: feedback-pulse 1.2s ease-in-out infinite;
+}
+
+.home-load-feedback.is-error .home-load-feedback-icon,
+.home-load-feedback.is-timeout .home-load-feedback-icon,
+.home-load-feedback.is-unauthorized .home-load-feedback-icon {
+  background: #b7672c;
+  box-shadow: 0 0 0 4px rgba(183, 103, 44, 0.1);
+}
+
+.home-load-feedback p {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.6;
+}
+
+.home-load-feedback button {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+@keyframes feedback-pulse {
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
 }
 
 .frequency-chart-toolbar {
@@ -5250,6 +5556,10 @@ a {
 }
 
 @media (max-width: 1120px) {
+  .account-notice {
+    top: 140px;
+  }
+
   .site-header {
     grid-template-columns: auto minmax(0, 1fr);
     gap: 12px 24px;
@@ -5307,6 +5617,12 @@ a {
 }
 
 @media (max-width: 720px) {
+  .account-notice {
+    top: 132px;
+    right: 12px;
+    width: calc(100vw - 24px);
+  }
+
   .site-header {
     grid-template-columns: 1fr;
     padding: 14px 16px;
@@ -5331,6 +5647,11 @@ a {
   .user-tools {
     grid-column: 1 / -1;
     justify-content: space-between;
+  }
+
+  .account-menu-panel {
+    right: auto;
+    left: 0;
   }
 
   .search-box {
@@ -5481,6 +5802,19 @@ a {
     grid-column: 1;
     grid-row: auto;
     justify-self: start;
+  }
+
+  .home-load-feedback {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .home-load-feedback p {
+    flex-basis: calc(100% - 24px);
+  }
+
+  .home-load-feedback button {
+    margin-left: 18px;
   }
 
   .frequency-chart-toolbar {

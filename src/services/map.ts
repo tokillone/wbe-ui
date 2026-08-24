@@ -7,49 +7,37 @@ import type {
   MapRegionStat,
   MapStatsResponse,
 } from '../types/map'
+import { API_BASE_URL } from '../config/api'
+import { excludeSpecialAdminCityRows, isSpecialAdminCityGeoKey } from '../utils/mapVisualization'
+import { requestApi } from './api'
 
-interface ApiResponse<T> {
-  code: number
-  message: string
-  data: T
+export function buildMapApiUrl(
+  endpoint: string,
+  params?: Record<string, string | undefined>,
+) {
+  if (!endpoint.startsWith('/') || endpoint.startsWith('//')) {
+    throw new Error('地图接口必须使用 /api 下的相对路径')
+  }
+  const searchParams = new URLSearchParams()
+  Object.entries(params ?? {}).forEach(([key, value]) => {
+    if (value) searchParams.set(key, value)
+  })
+  const query = searchParams.toString()
+  return `${API_BASE_URL}${endpoint}${query ? `?${query}` : ''}`
 }
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
 async function requestMap<T>(
   endpoint: string,
   params?: Record<string, string | undefined>,
   signal?: AbortSignal,
 ): Promise<T> {
-  const url = new URL(`${API_BASE_URL}${endpoint}`, window.location.origin)
-  Object.entries(params ?? {}).forEach(([key, value]) => {
-    if (value) url.searchParams.set(key, value)
+  const url = buildMapApiUrl(endpoint, params)
+  return requestApi<T>(url.slice(API_BASE_URL.length), {
+    headers: { Accept: 'application/json' },
+    signal,
+    auth: false,
+    redirectOnUnauthorized: false,
   })
-
-  let response: Response
-  try {
-    response = await fetch(url, { signal })
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw error
-    throw new Error('无法连接后端地图接口，请确认后端服务已启动')
-  }
-  const result = (await response.json().catch(() => null)) as ApiResponse<T> | null
-
-  if (!response.ok) {
-    if (response.status === 404) {
-      throw new Error('地图接口不存在或前端代理未连接')
-    }
-    if (response.status >= 500) {
-      throw new Error(result?.message || '后端地图接口异常，请检查服务日志')
-    }
-    throw new Error(result?.message || `地图请求失败（${response.status}）`)
-  }
-
-  if (result?.code !== 200 || !result.data) {
-    throw new Error(result?.message || '地图数据返回异常，请检查接口响应格式')
-  }
-
-  return result.data
 }
 
 async function postMap<T>(
@@ -57,37 +45,17 @@ async function postMap<T>(
   body: unknown,
   signal?: AbortSignal,
 ): Promise<T> {
-  const url = new URL(`${API_BASE_URL}${endpoint}`, window.location.origin)
-
-  let response: Response
-  try {
-    response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal,
-    })
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw error
-    throw new Error('无法连接后端地图接口，请确认后端服务已启动')
-  }
-  const result = (await response.json().catch(() => null)) as ApiResponse<T> | null
-
-  if (!response.ok) {
-    if (response.status === 404) {
-      throw new Error('地图接口不存在或前端代理未连接')
-    }
-    if (response.status >= 500) {
-      throw new Error(result?.message || '后端地图接口异常，请检查服务日志')
-    }
-    throw new Error(result?.message || `地图请求失败（${response.status}）`)
-  }
-
-  if (result?.code !== 200 || !result.data) {
-    throw new Error(result?.message || '地图数据返回异常，请检查接口响应格式')
-  }
-
-  return result.data
+  return requestApi<T>(endpoint, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    signal,
+    auth: false,
+    redirectOnUnauthorized: false,
+  })
 }
 
 export function buildSelectionKey(...parts: string[]) {
@@ -201,26 +169,53 @@ function normalizeSelectedRankingItem(
 }
 
 export function normalizeMapStatsResponse(response: MapStatsResponse): MapStatsResponse {
+  const regions = excludeSpecialAdminCityRows(response.regions ?? []).map(normalizeRegionStat)
+  const points = excludeSpecialAdminCityRows(response.points ?? []).map(normalizeRegionStat)
+  const removedLegacySpecialAdminCities =
+    regions.length !== (response.regions ?? []).length || points.length !== (response.points ?? []).length
   return {
     ...response,
-    regions: (response.regions ?? []).map(normalizeRegionStat),
-    points: (response.points ?? []).map(normalizeRegionStat),
+    summary: removedLegacySpecialAdminCities
+      ? {
+          countryCount: regions.filter((row) => row.level === 'country').length,
+          admin1Count: regions.filter((row) => row.level === 'admin1').length,
+          cityCount: regions.filter((row) => row.level === 'city').length,
+          pointCount: points.length,
+          recordCount: regions.reduce((sum, row) => sum + Number(row.recordCount ?? 0), 0),
+          doiCount: regions.reduce((sum, row) => sum + Number(row.doiCount ?? 0), 0),
+        }
+      : response.summary,
+    regions,
+    points,
   }
 }
 
 export function normalizeMapDetailResponse(response: MapDetailResponse): MapDetailResponse {
-  const region = response.region ? normalizeRegionStat(response.region) : null
+  const region =
+    response.region && !isSpecialAdminCityGeoKey(response.region.level, response.region.geoKey)
+      ? normalizeRegionStat(response.region)
+      : null
   return {
     ...response,
     region,
-    locations: response.locations?.map(normalizeRegionStat) ?? response.locations,
+    locations:
+      response.locations == null
+        ? response.locations
+        : excludeSpecialAdminCityRows(response.locations).map(normalizeRegionStat),
     summaryCards: response.summaryCards?.map((card) =>
       card.label === 'PNDL 几何均值' ? { ...card, label: '当前 PNDL' } : card,
     ) ?? response.summaryCards,
-    pndlRanking: response.pndlRanking?.map((row) => normalizeSelectedRankingItem(row, region)) ?? response.pndlRanking,
+    pndlRanking:
+      response.pndlRanking == null
+        ? response.pndlRanking
+        : excludeSpecialAdminCityRows(response.pndlRanking).map((row) =>
+            normalizeSelectedRankingItem(row, region),
+          ),
     pndlComparisons: response.pndlComparisons?.map((comparison) => ({
       ...comparison,
-      rows: (comparison.rows ?? []).map((row) => normalizeSelectedRankingItem(row, region)),
+      rows: excludeSpecialAdminCityRows(comparison.rows ?? []).map((row) =>
+        normalizeSelectedRankingItem(row, region),
+      ),
     })) ?? response.pndlComparisons,
   }
 }

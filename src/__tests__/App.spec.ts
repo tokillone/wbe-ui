@@ -16,6 +16,12 @@ describe('App', () => {
 
     expect(wrapper.text()).toContain('污水信息因子数据库')
     expect(wrapper.text()).toContain('ICD11 桑基图')
+    expect(wrapper.text()).toContain('核心标记物优先级')
+    expect(wrapper.text()).toContain('方法学核验')
+    expect(wrapper.text()).not.toContain('数据说明')
+    expect(wrapper.text()).not.toContain('下载申请')
     expect(router.getRoutes().some((route) => route.path === '/icd11-sankey')).toBe(true)
+    expect(router.getRoutes().some((route) => route.path === '/core-marker-priority')).toBe(true)
+    expect(router.getRoutes().some((route) => route.path === '/methodology-verification')).toBe(true)
   })
 })

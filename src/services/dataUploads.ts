@@ -22,10 +22,26 @@ export interface DataUploadBatch {
   reviewNote?: string | null
   syncedBy?: number | null
   syncedByName?: string | null
+  syncErrorMessage?: string | null
+  sourceReviewedBy?: number | null
+  sourceReviewedByName?: string | null
+  sourceReviewedAt?: string | null
+  sourceReviewNote?: string | null
+  currentPackageId?: number | null
+  currentPackageVersion?: number | null
+  currentPackageFileName?: string | null
+  currentPackageStatus?: string | null
+  currentPackageRows?: number | null
+  approvedPackageId?: number | null
+  reviewChecklistComplete?: boolean
+  currentRevisionNo?: number
+  publishedReleaseId?: number | null
 }
 
 export interface DataUploadRow {
   rowId: number
+  rowStage: 'SUBMISSION' | 'REVIEW_PACKAGE'
+  reviewPackageId?: number | null
   sheetName: string
   excelRowNumber: number
   status: string
@@ -54,6 +70,54 @@ export interface DataUploadPreview {
   previewRows: DataUploadRow[]
   sheetSummaries: DataUploadSheetSummary[]
   previewRowsBySheet: Record<string, DataUploadRow[]>
+  requiredReviewSheets?: string[]
+}
+
+export interface DataUploadReviewPackage {
+  packageId: number
+  uploadId: number
+  versionNo: number
+  fileName: string
+  status: string
+  uploadedBy: number
+  uploadedByName: string
+  totalRows: number
+  validRows: number
+  errorRows: number
+  warningRows: number
+  createdAt?: string | null
+  validationErrors: string[]
+  diffSummary: {
+    riskLevel?: string
+    submissionRows?: number
+    publishRows?: number
+    excludedRows?: number
+    newRecordGroups?: number
+    existingRowsDeleted?: number
+    sheets?: Record<
+      string,
+      {
+        currentRows: number
+        incomingRows: number
+        deltaRows: number
+        decreasePercent: number
+        highRisk: boolean
+      }
+    >
+  }
+  sheetSummaries: DataUploadSheetSummary[]
+}
+
+export interface DataUploadReviewDecision {
+  sourceCoverageConfirmed: boolean
+  traceabilityConfirmed: boolean
+  valuesAndUnitsConfirmed: boolean
+  siteLinkageConfirmed: boolean
+  icd11Confirmed: boolean
+  methodologyConfirmed: boolean
+  coreMarkerConfirmed: boolean
+  productionDiffConfirmed: boolean
+  note?: string
 }
 
 export interface DataUploadRowsPage {
@@ -61,6 +125,8 @@ export interface DataUploadRowsPage {
   page: number
   size: number
   total: number
+  rowView: 'submission' | 'reviewPackage'
+  reviewPackageId?: number | null
   rows: DataUploadRow[]
 }
 
@@ -83,9 +149,32 @@ export interface DataUploadSyncResult {
 export function uploadPreview(file: File) {
   const formData = new FormData()
   formData.set('file', file)
-  return requestApi<DataUploadPreview>('/data-uploads/preview', {
+  return requestApi<DataUploadPreview>('/data-uploads', {
     method: 'POST',
     body: formData,
+  })
+}
+
+export function uploadSubmissionRevision(uploadId: number, file: File) {
+  const formData = new FormData()
+  formData.set('file', file)
+  return requestApi<DataUploadPreview>(`/data-uploads/${uploadId}/submission-revisions`, {
+    method: 'POST',
+    body: formData,
+  })
+}
+
+export function publishUpload(uploadId: number) {
+  return requestApi<DataUploadSyncResult>(`/data-uploads/${uploadId}/publish`, {
+    method: 'POST',
+  })
+}
+
+export function returnUpload(uploadId: number, reason: string) {
+  return requestApi<DataUploadBatch>(`/data-uploads/${uploadId}/return`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
   })
 }
 
@@ -95,10 +184,42 @@ export function syncUpload(uploadId: number) {
   })
 }
 
-export function approveUpload(uploadId: number) {
+export function approveUpload(uploadId: number, decision: DataUploadReviewDecision) {
   return requestApi<DataUploadBatch>(`/data-uploads/${uploadId}/approve`, {
     method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(decision),
   })
+}
+
+export function acceptSourceReview(uploadId: number, note?: string) {
+  return requestApi<DataUploadBatch>(`/data-uploads/${uploadId}/source-review/accept`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ note }),
+  })
+}
+
+export function uploadReviewPackage(uploadId: number, file: File) {
+  const formData = new FormData()
+  formData.set('file', file)
+  return requestApi<DataUploadReviewPackage>(
+    `/data-uploads/${uploadId}/review-packages`,
+    {
+      method: 'POST',
+      body: formData,
+    },
+  )
+}
+
+export function fetchReviewPackages(uploadId: number) {
+  return requestApi<DataUploadReviewPackage[]>(
+    `/data-uploads/${uploadId}/review-packages`,
+  )
 }
 
 export function rejectUpload(uploadId: number, reason?: string) {
@@ -133,17 +254,54 @@ export function fetchUploads(params: FetchUploadsParams = {}) {
 }
 
 export async function downloadUploadTemplate() {
-  const blob = await fetchBlob('/data-uploads/template', '模板下载失败')
+  const blob = await fetchBlob('/data-uploads/submission-template', '模板下载失败')
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  link.download = 'WBE数据上传模板.xlsx'
+  link.download = 'WBE原始数据投稿模板.xlsx'
   link.click()
   URL.revokeObjectURL(url)
 }
 
-export function fetchUploadRows(uploadId: number, page = 1, size = 20, status = 'all') {
-  const params = new URLSearchParams({ page: String(page), size: String(size) })
+export async function downloadReviewDraft(uploadId: number) {
+  const blob = await fetchBlob(`/data-uploads/${uploadId}/review-draft`, '五表审核草稿下载失败')
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `WBE五表审核草稿-${uploadId}.xlsx`
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+export async function downloadReviewPackageTemplate() {
+  const blob = await fetchBlob(
+    '/data-uploads/review-package-template',
+    '完整整理包模板下载失败',
+  )
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'WBE完整整理包模板.xlsx'
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+export function fetchUploadBatch(uploadId: number) {
+  return requestApi<DataUploadBatch>(`/data-uploads/${uploadId}`)
+}
+
+export function fetchUploadRows(
+  uploadId: number,
+  page = 1,
+  size = 20,
+  status = 'all',
+  rowView: 'active' | 'submission' | 'reviewPackage' = 'active',
+) {
+  const params = new URLSearchParams({
+    page: String(page),
+    size: String(size),
+    rowView,
+  })
   if (status !== 'all') {
     params.set('status', status)
   }
@@ -152,6 +310,23 @@ export function fetchUploadRows(uploadId: number, page = 1, size = 20, status = 
 
 export async function downloadUploadFile(uploadId: number, fileName: string) {
   const blob = await fetchBlob(`/data-uploads/${uploadId}/file`, '文件下载失败')
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+export async function downloadReviewPackageFile(
+  uploadId: number,
+  packageId: number,
+  fileName: string,
+) {
+  const blob = await fetchBlob(
+    `/data-uploads/${uploadId}/review-packages/${packageId}/file`,
+    '完整整理包下载失败',
+  )
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url

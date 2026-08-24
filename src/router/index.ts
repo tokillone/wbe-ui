@@ -23,6 +23,16 @@ const routes: RouteRecordRaw[] = [
     name: 'icd11-sankey',
     component: () => import('../views/Icd11SankeyView.vue'),
   },
+  {
+    path: '/core-marker-priority',
+    name: 'core-marker-priority',
+    component: () => import('../views/CoreMarkerPriorityView.vue'),
+  },
+  {
+    path: '/methodology-verification',
+    name: 'methodology-verification',
+    component: () => import('../views/MethodologyVerificationView.vue'),
+  },
 ]
 
 if (dataEntryView) {

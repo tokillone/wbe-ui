@@ -9,6 +9,8 @@ const apiMocks = vi.hoisted(() => ({
   logout: vi.fn(),
   fetchUploads: vi.fn(),
   fetchUploadRows: vi.fn(),
+  fetchReviewPackages: vi.fn(),
+  uploadPreview: vi.fn(),
   fetchUsers: vi.fn(),
 }))
 
@@ -27,6 +29,8 @@ vi.mock('../services/dataUploads', async () => {
     ...actual,
     fetchUploads: apiMocks.fetchUploads,
     fetchUploadRows: apiMocks.fetchUploadRows,
+    fetchReviewPackages: apiMocks.fetchReviewPackages,
+    uploadPreview: apiMocks.uploadPreview,
   }
 })
 
@@ -107,6 +111,17 @@ describe('data entry permissions', () => {
     vi.clearAllMocks()
     apiMocks.fetchUploads.mockResolvedValue(emptyBatchPage)
     apiMocks.fetchUsers.mockResolvedValue(emptyUserPage)
+    apiMocks.fetchUploadRows.mockResolvedValue({
+      uploadId: 10,
+      page: 1,
+      size: 20,
+      total: 0,
+      rowView: 'submission',
+      reviewPackageId: null,
+      rows: [],
+    })
+    apiMocks.fetchReviewPackages.mockResolvedValue([])
+    apiMocks.uploadPreview.mockReset()
     apiMocks.logout.mockResolvedValue({ success: true, message: 'ok' })
   })
 
@@ -134,6 +149,22 @@ describe('data entry permissions', () => {
     wrapper.unmount()
   })
 
+  it('rejects an oversized workbook before sending it to the backend', async () => {
+    const wrapper = await mountFor(user({ canUpload: true }))
+    const oversized = new File(['x'], 'large.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    Object.defineProperty(oversized, 'size', { value: 50 * 1024 * 1024 + 1 })
+    const input = wrapper.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [oversized] })
+
+    await input.trigger('change')
+
+    expect(wrapper.text()).toContain('上传文件不能超过 50MB')
+    expect(apiMocks.uploadPreview).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('opens reviewers on the pending review queue', async () => {
     apiMocks.fetchUploads.mockResolvedValue({
       ...emptyBatchPage,
@@ -145,17 +176,23 @@ describe('data entry permissions', () => {
 
     expect(workspaceModules(wrapper)).toEqual(['上传批次'])
     expect(apiMocks.fetchUploads).toHaveBeenLastCalledWith(
-      expect.objectContaining({ status: 'PENDING_REVIEW', scope: 'pendingReview' }),
+      expect.objectContaining({ status: 'all', scope: 'pendingReview' }),
     )
     expect(wrapper.findAll('.row-actions button').map((button) => button.text())).toEqual([
       '查看/审核',
       '下载',
-      '审核通过',
     ])
+    await wrapper.find('.row-actions button').trigger('click')
+    await flushPromises()
+    expect(apiMocks.fetchUploadRows).toHaveBeenCalledWith(10, 1, 20, 'all', 'submission')
+    expect(wrapper.find('.review-package-panel').text()).toContain('下载预填草稿')
+    expect(wrapper.find('.review-package-panel').text()).toContain('上传五表审核包')
+    expect(wrapper.find('.drawer-actions').text()).toContain('退回修改')
+    expect(wrapper.find('.drawer-actions').text()).not.toContain('确认入库')
     wrapper.unmount()
   })
 
-  it('opens sync users on the approved queue', async () => {
+  it('keeps legacy sync-only users read-only in the simplified workflow', async () => {
     apiMocks.fetchUploads.mockResolvedValue({
       ...emptyBatchPage,
       items: [batch('APPROVED')],
@@ -166,13 +203,25 @@ describe('data entry permissions', () => {
 
     expect(workspaceModules(wrapper)).toEqual(['上传批次'])
     expect(apiMocks.fetchUploads).toHaveBeenLastCalledWith(
-      expect.objectContaining({ status: 'APPROVED', scope: 'approved' }),
+      expect.objectContaining({ status: 'all', scope: 'approved' }),
     )
     expect(wrapper.findAll('.row-actions button').map((button) => button.text())).toEqual([
       '查看',
       '下载',
-      '同步',
     ])
+    wrapper.unmount()
+  })
+
+  it('lets the same reviewer confirm an incrementally validated package', async () => {
+    apiMocks.fetchUploads.mockResolvedValue({
+      ...emptyBatchPage,
+      items: [batch('READY_TO_PUBLISH')],
+      total: 1,
+      totalPages: 1,
+    })
+    const wrapper = await mountFor(user({ canReviewUploads: true }))
+
+    expect(wrapper.findAll('.row-actions button').map((button) => button.text())).toContain('确认入库')
     wrapper.unmount()
   })
 })
