@@ -3,12 +3,16 @@ import { describe, expect, it } from 'vitest'
 import { normalizeMapDetailResponse, normalizeMapStatsResponse } from '../services/map'
 import type { MapDetailResponse, MapRegionStat, MapStatsResponse } from '../types/map'
 import {
+  adaptiveHeatColor,
+  adaptiveHeatPercentile,
   biomarkerExplorerMetricKeys,
+  buildAdaptiveHeatScale,
   canExploreBiomarker,
   compactExplorerSummaryCards,
   compactHeatFootprintPadding,
   countryLabelStyleForArea,
   declutterScreenSpaceCandidates,
+  declutterScreenSpacePlacements,
   detailFilterContext,
   displayLevelForZoom,
   excludeSpecialAdminCityRows,
@@ -25,11 +29,9 @@ import {
   pndlComparisonsForRegion,
   progressiveDeclutterGap,
   regionFillOpacityExpression,
-  resolveStableHeatRange,
   selectRowsForDisplayLevel,
   selectionYearRange,
   sortBiomarkersByLiterature,
-  temperatureBandIndex,
   usesCompactHeatFootprint,
   visibleLevelsForZoom,
 } from '../utils/mapVisualization'
@@ -161,6 +163,47 @@ describe('map visualization hierarchy', () => {
     expect(visible).toEqual(['belgium-search'])
   })
 
+  it('tries alternate anchors before hiding a complete bubble-name unit', () => {
+    const visible = declutterScreenSpacePlacements(
+      [
+        {
+          value: 'primary',
+          order: 0,
+          pointCount: 20,
+          bounds: { left: 0, top: 0, right: 40, bottom: 40 },
+        },
+        {
+          value: 'secondary',
+          order: 1,
+          pointCount: 10,
+          bounds: { left: 20, top: 0, right: 60, bottom: 40 },
+          alternativeBounds: [{ left: 50, top: 0, right: 90, bottom: 40 }],
+        },
+      ],
+      4,
+    )
+    expect(visible.map((item) => [item.value, item.placementIndex])).toEqual([
+      ['primary', 0],
+      ['secondary', 1],
+    ])
+  })
+
+  it('never places a bubble-name unit beneath a fixed map panel', () => {
+    const visible = declutterScreenSpacePlacements(
+      [
+        {
+          value: 'blocked',
+          order: 0,
+          forceVisible: true,
+          bounds: { left: 0, top: 0, right: 40, bottom: 40 },
+        },
+      ],
+      4,
+      [{ left: -5, top: -5, right: 45, bottom: 45 }],
+    )
+    expect(visible).toEqual([])
+  })
+
   it('aggregates heat fill at the same hierarchy as the visible bubbles', () => {
     expect(heatRegionLevelForDisplayLevel('country')).toBe('country')
     expect(heatRegionLevelForDisplayLevel('admin1')).toBe('admin1')
@@ -190,48 +233,54 @@ describe('map visualization hierarchy', () => {
     ).toEqual({ id: 'country|china', label: '中国' })
   })
 
-  it('maps low and high values to opposite temperature bands', () => {
-    expect(temperatureBandIndex(1, 1, 1000, 4)).toBe(0)
-    expect(temperatureBandIndex(1000, 1, 1000, 4)).toBe(3)
-  })
-
-  it('keeps the backend heat range stable when the visible hierarchy changes', () => {
-    const countryRange = resolveStableHeatRange(50, 5478, [100, 5478])
-    const cityRange = resolveStableHeatRange(50, 5478, [50, 527.6, 5478])
-
-    expect(countryRange).toEqual({ min: 50, max: 5478 })
-    expect(cityRange).toEqual(countryRange)
-    expect(temperatureBandIndex(527.6, countryRange.min, countryRange.max, 7)).toBe(
-      temperatureBandIndex(527.6, cityRange.min, cityRange.max, 7),
+  it('spreads a dense value cluster across empirical-percentile heat bands', () => {
+    const palette = ['#FFFF8C', '#FEE08B', '#FDD17A', '#FDAE61', '#F98A51', '#F46D43', '#D73027']
+    const scale = buildAdaptiveHeatScale([100, 200, 205, 210, 215, 220, 225, 10_000], palette)
+    const clusteredColors = [200, 205, 210, 215, 220, 225].map((value) =>
+      adaptiveHeatColor(scale, value, '#000000'),
     )
+
+    expect(new Set(clusteredColors).size).toBeGreaterThanOrEqual(5)
+    expect(adaptiveHeatColor(scale, 100, '#000000')).toBe(palette[0])
+    expect(adaptiveHeatColor(scale, 10_000, '#000000')).toBe(palette[6])
+    expect(scale).toMatchObject({ count: 8, distinctCount: 8, min: 100, max: 10_000 })
+    expect(scale.median).toBe(212.5)
   })
 
-  it('falls back to all hierarchy values when a legacy response has no legend range', () => {
-    expect(resolveStableHeatRange(null, null, [100, 50, 5478])).toEqual({ min: 50, max: 5478 })
+  it('keeps ties stable and is independent of response ordering', () => {
+    const palette = ['low', 'middle', 'high']
+    const left = buildAdaptiveHeatScale([20, 10, 20, 30, 40], palette)
+    const right = buildAdaptiveHeatScale([40, 20, 30, 20, 10], palette)
+
+    expect(left.groups).toEqual(right.groups)
+    expect(adaptiveHeatPercentile(left, 20)).toBe(adaptiveHeatPercentile(right, 20))
+    expect(adaptiveHeatColor(left, 20, 'fallback')).toBe(adaptiveHeatColor(right, 20, 'fallback'))
   })
 
-  it('uses a lower neutral opacity for covered regions without a PNDL value', () => {
+  it('shrinks the active palette for sparse distributions and handles empty or single values', () => {
+    const palette = ['#FFFF8C', '#FEE08B', '#FDD17A', '#FDAE61', '#F98A51', '#F46D43', '#D73027']
+    expect(buildAdaptiveHeatScale([10, 20, 30], palette).colors).toEqual([
+      '#FFFF8C',
+      '#FDAE61',
+      '#D73027',
+    ])
+    expect(buildAdaptiveHeatScale([42], palette)).toMatchObject({
+      count: 1,
+      distinctCount: 1,
+      min: 42,
+      median: 42,
+      max: 42,
+      colors: ['#FDAE61'],
+    })
+    expect(adaptiveHeatColor(buildAdaptiveHeatScale([], palette), 42, 'fallback')).toBe('fallback')
+  })
+
+  it('uses an opaque business fill so base-map detail cannot bleed through colored regions', () => {
     const expression = regionFillOpacityExpression(true)
     expect(expression).toEqual([
       'case',
-      ['==', ['get', 'hasPndlValue'], true],
-      [
-        'case',
-        ['==', ['get', 'level'], 'city'],
-        0.76,
-        ['==', ['get', 'level'], 'admin1'],
-        0.72,
-        0.68,
-      ],
-      ['==', ['get', 'hasCoverage'], true],
-      [
-        'case',
-        ['==', ['get', 'level'], 'city'],
-        0.34,
-        ['==', ['get', 'level'], 'admin1'],
-        0.38,
-        0.32,
-      ],
+      ['any', ['==', ['get', 'hasPndlValue'], true], ['==', ['get', 'hasCoverage'], true]],
+      1,
       0,
     ])
     expect(regionFillOpacityExpression(false)).toBe(0)

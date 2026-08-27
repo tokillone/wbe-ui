@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "generated_geometry_sources": [
+    {
+      "id": "geoboundaries-cgaz-adm1",
+      "levels": ["ADM1"],
+      "revision": "5c25134028196d43ce97b5071934fd0cfc92f09f",
+      "license": "CC BY 4.0",
+      "url": "https://github.com/wmgeolab/geoBoundaries/raw/5c25134028196d43ce97b5071934fd0cfc92f09f/releaseData/CGAZ/geoBoundariesCGAZ_ADM1.zip",
+      "sha256": "767ed22dfddf8a82d5c7d23149628378f8d2d95a2bb915401afaa65c5593e6f8"
+    },
+    {
+      "id": "geoboundaries-cgaz-adm2",
+      "levels": ["ADM2"],
+      "revision": "5c25134028196d43ce97b5071934fd0cfc92f09f",
+      "license": "CC BY 4.0",
+      "url": "https://github.com/wmgeolab/geoBoundaries/raw/5c25134028196d43ce97b5071934fd0cfc92f09f/releaseData/CGAZ/geoBoundariesCGAZ_ADM2.zip",
+      "sha256": "598f6c70893d60a35b96eb0dc31fd1c045e69177e4b8203407710306f6585de1"
+    },
+    {
+      "id": "us-census-tiger-2020-mp-cousub",
+      "countries": ["northernmarianaislands"],
+      "levels": ["ADM2"],
+      "revision": "2020 TIGER/Line",
+      "authority": "United States Census Bureau",
+      "license": "U.S. federal government work; public domain",
+      "url": "https://www2.census.gov/geo/tiger/TIGER2020/COUSUB/tl_2020_69_cousub.zip",
+      "sha256": "2065ab34369cda4208b9ec06d9b5ab135da959a776cdb86cf10495a2073f773a",
+      "generated_file": "scripts/data/preview-map/admin2-supplements/pacific-polar-cnmi.geojson",
+      "generated_sha256": "e2376b61238eb100a08adf31289e0997457c4326badeb0133d40010c04b5c05b",
+      "preparation_script": "scripts/data/preview-map/admin2-supplements/pacific-polar-cnmi-prepare.mjs",
+      "selection_rule": "Keep the 8 legal land election-district records where COUSUBFP is not 00000; retain District 4 as two non-overlapping features under its two official ADM1 parents.",
+      "containment_rule": "Validate against the complete 12-feature Census COUSUB territory face. Do not clip official districts to the repository's generalized display coastline."
+    }
+  ],
+  "validation_references": [
+    {
+      "id": "ibge-territorial-meshes",
+      "countries": ["brazil"],
+      "usage": "count-and-manual-sample-validation-only",
+      "ingested": false,
+      "url": "https://www.ibge.gov.br/geociencias/organizacao-do-territorio/malhas-territoriais.html"
+    },
+    {
+      "id": "baidu-maps",
+      "usage": "manual-visual-cross-check-only",
+      "ingested": false,
+      "url": "https://map.baidu.com/"
+    },
+    {
+      "id": "google-maps",
+      "usage": "manual-visual-cross-check-only",
+      "ingested": false,
+      "url": "https://maps.google.com/"
+    }
+  ]
+}

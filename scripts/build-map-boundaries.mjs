@@ -18,7 +18,11 @@ const coastalDisplayPath = resolve(renderDir, 'china-coastal-display-envelopes.g
 const detailedChinaLandSourcePath = resolve(rootDir, 'scripts/data/china-land-detail.geojson')
 const controlledLabelsPath = resolve(rootDir, 'scripts/data/preview-map/controlled-labels.geojson')
 const mapshaperBin = resolve(rootDir, 'node_modules/.bin/mapshaper')
-const checkOnly = new Set(process.argv.slice(2)).has('--check')
+const cliFlags = new Set(process.argv.slice(2))
+const checkOnly = cliFlags.has('--check')
+const preservePresentationIndex = cliFlags.has('--preserve-presentation-index')
+const previousRegionIndex =
+  preservePresentationIndex && existsSync(indexPath) ? readJson(indexPath) : null
 
 const specs = [
   // Coastlines are expressed by the land/water fill transition. Only shared
@@ -204,10 +208,17 @@ try {
     coastalDisplayEnvelopes,
     renderedCollections.get('china-cities.geojson'),
   )
-  const regionIndex = buildRegionIndex(renderedCollections, specialAdmins)
+  const baseRegionIndex = buildRegionIndex(renderedCollections, specialAdmins)
+  const regionIndex = previousRegionIndex
+    ? mergePreservedPresentationIndex(baseRegionIndex, previousRegionIndex)
+    : baseRegionIndex
   if (!checkOnly) writeJson(indexPath, regionIndex)
+  report.regionIndexLocalization = regionIndex.localization
   const vietnamAnchor = regionIndex.regions.find(
     (region) => region.level === 'country' && region.geo_key === 'vietnam',
+  )
+  const hebeiAnchor = regionIndex.regions.find(
+    (region) => region.level === 'admin1' && region.geo_key === 'china|hebei',
   )
   report.controlledLabelAnchors = {
     countryCount: controlledLabelPoints.country.size,
@@ -217,6 +228,14 @@ try {
           coordinates: vietnamAnchor.label_point,
           insideGeometry: true,
           source: 'controlled-override',
+        }
+      : null,
+    hebei: hebeiAnchor
+      ? {
+          coordinates: hebeiAnchor.label_point,
+          insideGeometry: true,
+          source: 'province-capital-region-anchor',
+          sourceGeoKey: 'china|hebei|shijiazhuang',
         }
       : null,
   }
@@ -252,6 +271,46 @@ try {
   if (!checkOnly) rmSync(workDir, { recursive: true, force: true })
 }
 
+function mergePreservedPresentationIndex(baseIndex, previousIndex) {
+  const previousByKey = new Map(
+    (previousIndex.regions ?? [])
+      .filter((entry) => entry.presentation_index !== true)
+      .map((entry) => [`${entry.level}|${entry.geo_key}`, entry]),
+  )
+  const presentationFields = [
+    'display_name',
+    'display_name_zh',
+    'display_name_en',
+    'display_name_local',
+    'name_zh_source',
+    'name_zh_reference_key',
+    'search_aliases',
+    'name',
+    'boundary_min_zoom',
+    'label_min_zoom',
+    'source_level',
+  ]
+  const regions = (baseIndex.regions ?? []).map((entry) => {
+    const previous = previousByKey.get(`${entry.level}|${entry.geo_key}`)
+    if (!previous) return entry
+    const preserved = {}
+    for (const field of presentationFields) {
+      if (previous[field] !== undefined) preserved[field] = previous[field]
+    }
+    return { ...entry, ...preserved }
+  })
+  regions.push(
+    ...(previousIndex.regions ?? [])
+      .filter((entry) => entry.presentation_index === true)
+      .map((entry) => ({ ...entry })),
+  )
+  return {
+    ...baseIndex,
+    regions,
+    ...(previousIndex.presentation ? { presentation: previousIndex.presentation } : {}),
+  }
+}
+
 function prepareCollection(collection, spec) {
   const groups = new Map()
   let removedNonMainlandCities = 0
@@ -274,7 +333,9 @@ function prepareCollection(collection, spec) {
       excludedNonMainlandCityGeoKeys.push(featureGeoKey(feature, spec.level))
       continue
     }
-    const key = spec.mergeChina ? canonicalCountryKey(featureGeoKey(feature, spec.level)) : featureGeoKey(feature, spec.level)
+    const key = spec.mergeChina
+      ? canonicalCountryKey(featureGeoKey(feature, spec.level))
+      : featureGeoKey(feature, spec.level)
     const groupKey = key || `__missing__${groups.size}`
     if (!groups.has(groupKey)) groups.set(groupKey, [])
     groups.get(groupKey).push(feature)
@@ -291,18 +352,26 @@ function prepareCollection(collection, spec) {
       properties.region_key = 'china'
       properties.display_name = '中国'
       properties.name = 'China'
-      properties.keys = [...new Set(group.flatMap((feature) => [
-        featureGeoKey(feature, 'country'),
-        feature.properties?.country_key,
-        feature.properties?.display_name,
-        feature.properties?.name,
-      ]).filter(Boolean).map(String))]
+      properties.keys = [
+        ...new Set(
+          group
+            .flatMap((feature) => [
+              featureGeoKey(feature, 'country'),
+              feature.properties?.country_key,
+              feature.properties?.display_name,
+              feature.properties?.name,
+            ])
+            .filter(Boolean)
+            .map(String),
+        ),
+      ]
     }
-    const sourceGeometry = spec.mergeChina && groupKey === 'china'
-      ? structuredClone(detailedChinaLandGeometry)
-      : polygons.length === 1
-        ? { type: 'Polygon', coordinates: polygons[0] }
-        : { type: 'MultiPolygon', coordinates: polygons }
+    const sourceGeometry =
+      spec.mergeChina && groupKey === 'china'
+        ? structuredClone(detailedChinaLandGeometry)
+        : polygons.length === 1
+          ? { type: 'Polygon', coordinates: polygons[0] }
+          : { type: 'MultiPolygon', coordinates: polygons }
     const repaired = repairGeometrySpikes(sourceGeometry, spec.level)
     let acceptedGeometry = repaired.geometry
     let acceptedRemoved = repaired.removed
@@ -310,7 +379,10 @@ function prepareCollection(collection, spec) {
       const areaBefore = geometryArea(sourceGeometry)
       const areaAfter = geometryArea(repaired.geometry)
       const areaDriftRatio = areaBefore > 0 ? Math.abs(areaAfter - areaBefore) / areaBefore : 0
-      const bboxDriftDegrees = bboxDrift(geometryBbox(sourceGeometry), geometryBbox(repaired.geometry))
+      const bboxDriftDegrees = bboxDrift(
+        geometryBbox(sourceGeometry),
+        geometryBbox(repaired.geometry),
+      )
       const bboxLimit = spec.level === 'country' ? 0.35 : spec.level === 'admin1' ? 0.12 : 0.06
       if (areaDriftRatio > 0.005 || bboxDriftDegrees > bboxLimit + 1e-9) {
         rejectedSpikeRepairs.push(
@@ -353,10 +425,10 @@ function runMapshaperByParent(collection, spec, outputPath) {
     const groupKey = spec.cleanTogether
       ? '__all__'
       : spec.level === 'city'
-      ? String(props.parent_geo_key ?? props.province_key ?? 'unassigned')
-      : spec.level === 'admin1'
-        ? String(props.parent_geo_key ?? props.country_key ?? 'unassigned')
-        : '__countries__'
+        ? String(props.parent_geo_key ?? props.province_key ?? 'unassigned')
+        : spec.level === 'admin1'
+          ? String(props.parent_geo_key ?? props.country_key ?? 'unassigned')
+          : '__countries__'
     if (!groups.has(groupKey)) groups.set(groupKey, [])
     groups.get(groupKey).push(feature)
   }
@@ -371,7 +443,9 @@ function runMapshaperByParent(collection, spec, outputPath) {
     index += 1
   }
   if (spec.level === 'country') {
-    const cleanedKeys = new Set(cleanedFeatures.map((feature) => featureGeoKey(feature, spec.level)))
+    const cleanedKeys = new Set(
+      cleanedFeatures.map((feature) => featureGeoKey(feature, spec.level)),
+    )
     const missing = (collection.features ?? []).filter(
       (feature) => !cleanedKeys.has(featureGeoKey(feature, spec.level)),
     )
@@ -432,7 +506,9 @@ function deriveChinaProvincesFromCities(provinces, cities) {
     (parentKey) => parentKey && !alignedParentKeys.includes(parentKey),
   )
   if (missingParents.length) {
-    throw new Error(`China city partition has unknown province parents: ${missingParents.join(', ')}`)
+    throw new Error(
+      `China city partition has unknown province parents: ${missingParents.join(', ')}`,
+    )
   }
   return { type: 'FeatureCollection', features }
 }
@@ -587,7 +663,8 @@ function topologyLineCollection(collection, spec) {
         type: 'Feature',
         properties: {
           boundary_group: groupKey,
-          parent_geo_key: spec.level === 'city' ? groupKey : String(firstProps.parent_geo_key ?? ''),
+          parent_geo_key:
+            spec.level === 'city' ? groupKey : String(firstProps.parent_geo_key ?? ''),
           country_key: String(firstProps.country_key ?? ''),
           left_geo_key: owners[0] ?? '',
           right_geo_key: owners[1] ?? '',
@@ -618,8 +695,7 @@ function stitchSegments(segments) {
   while (remaining.size) {
     const seedIndex = remaining.values().next().value
     const seed = entries[seedIndex]
-    const startKey =
-      endpointIndex.get(seed.leftKey)?.length !== 2 ? seed.leftKey : seed.rightKey
+    const startKey = endpointIndex.get(seed.leftKey)?.length !== 2 ? seed.leftKey : seed.rightKey
     const line = []
     let currentKey = startKey
     while (true) {
@@ -659,15 +735,17 @@ function buildSpecialAdminEnvelopes(provinces) {
     visitCoordinates(feature.geometry?.coordinates, points)
     const hull = convexHull(points)
     if (hull.length < 4) return []
-    return [{
-      type: 'Feature',
-      properties: {
-        ...(feature.properties ?? {}),
-        display_only: true,
-        is_special_admin: true,
+    return [
+      {
+        type: 'Feature',
+        properties: {
+          ...(feature.properties ?? {}),
+          display_only: true,
+          is_special_admin: true,
+        },
+        geometry: { type: 'Polygon', coordinates: [hull] },
       },
-      geometry: { type: 'Polygon', coordinates: [hull] },
-    }]
+    ]
   })
   const rawEnvelopes = { type: 'FeatureCollection', features: envelopeFeatures }
   const blockers = {
@@ -699,15 +777,14 @@ function buildSpecialAdminEnvelopes(provinces) {
     ],
     { stdio: 'inherit' },
   )
-  if (result.status !== 0) throw new Error('Mapshaper failed while clipping special admin envelopes')
+  if (result.status !== 0)
+    throw new Error('Mapshaper failed while clipping special admin envelopes')
   const clipped = readJson(envelopeOutput)
   return {
     type: 'FeatureCollection',
     features: (clipped.features ?? []).flatMap((feature) => {
       const polygon = largestGeometryPolygon(feature.geometry)
-      return polygon
-        ? [{ ...feature, geometry: { type: 'Polygon', coordinates: polygon } }]
-        : []
+      return polygon ? [{ ...feature, geometry: { type: 'Polygon', coordinates: polygon } }] : []
     }),
   }
 }
@@ -800,20 +877,21 @@ function eraseDisplayEnvelope(collection, eraser, name) {
 }
 
 function validateChinaCoastalDisplayEnvelopes(envelopes, cities) {
-  const expectedKeys = [
-    'china|aomen',
-    'china|guangdong|zhuhai',
-    'china|hongkong',
-  ]
+  const expectedKeys = ['china|aomen', 'china|guangdong|zhuhai', 'china|hongkong']
   const features = envelopes?.features ?? []
   const keys = features
     .map((feature) =>
-      featureGeoKey(feature, String(feature.properties?.level ?? '') === 'city' ? 'city' : 'admin1'),
+      featureGeoKey(
+        feature,
+        String(feature.properties?.level ?? '') === 'city' ? 'city' : 'admin1',
+      ),
     )
     .sort()
   const failures = []
   if (JSON.stringify(keys) !== JSON.stringify(expectedKeys)) {
-    failures.push(`coastal display envelopes: expected ${expectedKeys.join(', ')}, got ${keys.join(', ')}`)
+    failures.push(
+      `coastal display envelopes: expected ${expectedKeys.join(', ')}, got ${keys.join(', ')}`,
+    )
   }
   for (const feature of features) {
     const level = String(feature.properties?.level ?? '') === 'city' ? 'city' : 'admin1'
@@ -822,7 +900,11 @@ function validateChinaCoastalDisplayEnvelopes(envelopes, cities) {
       failures.push(`coastal display envelope is not Polygon: ${key}`)
     }
     const otherEnvelopes = features.filter((candidate) => candidate !== feature)
-    if (otherEnvelopes.some((candidate) => geometriesOverlapArea(feature.geometry, candidate.geometry))) {
+    if (
+      otherEnvelopes.some((candidate) =>
+        geometriesOverlapArea(feature.geometry, candidate.geometry),
+      )
+    ) {
       failures.push(`coastal display envelopes overlap: ${key}`)
     }
     const cityBlockers = (cities?.features ?? []).filter(
@@ -869,19 +951,23 @@ function eraseCollection(collection, eraser, name) {
 }
 
 function convexHull(values) {
-  const unique = [...new Map(
-    values
-      .map(normalizeCoordinate)
-      .filter(Boolean)
-      .map((point) => [coordinateKey(point), point]),
-  ).values()].sort((left, right) => left[0] - right[0] || left[1] - right[1])
+  const unique = [
+    ...new Map(
+      values
+        .map(normalizeCoordinate)
+        .filter(Boolean)
+        .map((point) => [coordinateKey(point), point]),
+    ).values(),
+  ].sort((left, right) => left[0] - right[0] || left[1] - right[1])
   if (unique.length < 3) return []
   const cross = (origin, left, right) =>
-    (left[0] - origin[0]) * (right[1] - origin[1]) -
-    (left[1] - origin[1]) * (right[0] - origin[0])
+    (left[0] - origin[0]) * (right[1] - origin[1]) - (left[1] - origin[1]) * (right[0] - origin[0])
   const lower = []
   for (const point of unique) {
-    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) {
+    while (
+      lower.length >= 2 &&
+      cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0
+    ) {
       lower.pop()
     }
     lower.push(point)
@@ -889,7 +975,10 @@ function convexHull(values) {
   const upper = []
   for (let index = unique.length - 1; index >= 0; index -= 1) {
     const point = unique[index]
-    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) {
+    while (
+      upper.length >= 2 &&
+      cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0
+    ) {
       upper.pop()
     }
     upper.push(point)
@@ -907,18 +996,27 @@ function largestGeometryPolygon(geometry) {
 function validateSpecialAdminEnvelopes(envelopes, provinces, cities) {
   const expectedKeys = ['china|aomen', 'china|hongkong']
   const keys = (envelopes.features ?? []).map((feature) => featureGeoKey(feature, 'admin1')).sort()
-  const blockers = (provinces?.features ?? []).filter((feature) => !expectedKeys.includes(featureGeoKey(feature, 'admin1')))
+  const blockers = (provinces?.features ?? []).filter(
+    (feature) => !expectedKeys.includes(featureGeoKey(feature, 'admin1')),
+  )
   const failures = []
   if (JSON.stringify(keys) !== JSON.stringify(expectedKeys)) {
-    failures.push(`special admin envelopes: expected ${expectedKeys.join(', ')}, got ${keys.join(', ')}`)
+    failures.push(
+      `special admin envelopes: expected ${expectedKeys.join(', ')}, got ${keys.join(', ')}`,
+    )
   }
   for (const feature of envelopes.features ?? []) {
     const key = featureGeoKey(feature, 'admin1')
-    if (feature.geometry?.type !== 'Polygon') failures.push(`special admin envelope is not Polygon: ${key}`)
+    if (feature.geometry?.type !== 'Polygon')
+      failures.push(`special admin envelope is not Polygon: ${key}`)
     if (blockers.some((blocker) => geometriesOverlapArea(feature.geometry, blocker.geometry))) {
       failures.push(`special admin envelope overlaps another province: ${key}`)
     }
-    if ((cities?.features ?? []).some((city) => geometriesOverlapArea(feature.geometry, city.geometry))) {
+    if (
+      (cities?.features ?? []).some((city) =>
+        geometriesOverlapArea(feature.geometry, city.geometry),
+      )
+    ) {
       failures.push(`special admin envelope overlaps a mainland city: ${key}`)
     }
   }
@@ -931,11 +1029,12 @@ function validateLineCollection(collection) {
   const antimeridianJumps = []
   for (const [featureIndex, feature] of (collection.features ?? []).entries()) {
     const geometry = feature.geometry ?? {}
-    const lines = geometry.type === 'LineString'
-      ? [geometry.coordinates]
-      : geometry.type === 'MultiLineString'
-        ? geometry.coordinates
-        : []
+    const lines =
+      geometry.type === 'LineString'
+        ? [geometry.coordinates]
+        : geometry.type === 'MultiLineString'
+          ? geometry.coordinates
+          : []
     for (const [lineIndex, line] of lines.entries()) {
       for (let index = 1; index < (line?.length ?? 0); index += 1) {
         const left = normalizeCoordinate(line[index - 1])
@@ -956,6 +1055,7 @@ function validateLineCollection(collection) {
 }
 
 function buildRegionIndex(collections, specialAdmins) {
+  let corruptRejectedCount = 0
   const specialByKey = new Map(
     (specialAdmins.features ?? []).map((feature) => [featureGeoKey(feature, 'admin1'), feature]),
   )
@@ -990,14 +1090,66 @@ function buildRegionIndex(collections, specialAdmins) {
       if (controlledLabelPoint && level === 'country') matchedControlledCountryKeys.add(geoKey)
       if (controlledLabelPoint && level === 'admin1') matchedControlledAdmin1Keys.add(geoKey)
       const labelPoint = controlledLabelPoint ?? center
+      const controlledNames =
+        level === 'country'
+          ? controlledLabelPoints.countryNames.get(geoKey)
+          : level === 'admin1' && countryKey === 'china'
+            ? controlledLabelPoints.chinaAdmin1Names.get(geoKey)
+            : null
+      const rawNames = rawFeatureNameValues(props)
+      corruptRejectedCount += new Set(
+        rawNames.filter((value) => String(value ?? '').trim() && !cleanMapLabel(value)).map(String),
+      ).size
+      const aliases = featureNameAliases(props)
+      const displayNameZh = firstCleanCjk([
+        controlledNames?.display_name_zh,
+        controlledNames?.display_name,
+        props.display_name_zh,
+        props.display_name,
+        ...featureChineseAliases(props),
+      ])
+      const displayNameEn = firstCleanNonCjk([
+        controlledNames?.display_name_en,
+        props.display_name_en,
+        props.name,
+        props.display_name,
+        ...aliases,
+      ])
+      const displayNameLocal = firstCleanLabel([
+        props.display_name,
+        props.name,
+        controlledNames?.display_name,
+        displayNameEn,
+      ])
+      const searchAliases = uniqueCleanLabels([
+        displayNameZh,
+        displayNameEn,
+        displayNameLocal,
+        controlledNames?.display_name,
+        controlledNames?.display_name_zh,
+        controlledNames?.display_name_en,
+        ...aliases,
+      ])
+      const nameZhSource = displayNameZh
+        ? controlledNames
+          ? level === 'country'
+            ? 'controlled-country-label'
+            : 'china-standard'
+          : 'canonical-boundary-alias'
+        : ''
       return [
         {
           level,
           geo_key: geoKey,
           parent_geo_key: String(props.parent_geo_key ?? ''),
           country_key: countryKey,
-          display_name: String(props.display_name ?? props.name ?? geoKey),
-          name: String(props.name ?? props.display_name ?? geoKey),
+          display_name: displayNameZh || displayNameEn || displayNameLocal,
+          display_name_zh: displayNameZh,
+          display_name_en: displayNameEn,
+          display_name_local: displayNameLocal,
+          name_zh_source: nameZhSource,
+          search_aliases: searchAliases,
+          name: displayNameEn || displayNameLocal,
           center,
           label_point: labelPoint,
           area: roundCoord(geometryArea(displayFeature.geometry)),
@@ -1022,7 +1174,26 @@ function buildRegionIndex(collections, specialAdmins) {
       `Controlled China admin1 labels have no rendered geometry: ${unmatchedControlledAdmin1Keys.join(', ')}`,
     )
   }
-  return { generatedAt: new Date().toISOString(), regions }
+  const admin1 = regions.filter((region) => region.level === 'admin1')
+  const chineseAdmin1 = admin1.filter((region) => region.display_name_zh).length
+  const corruptVisibleLabelCount = regions.filter((region) =>
+    [region.display_name, region.display_name_zh, region.display_name_en, region.display_name_local]
+      .filter(Boolean)
+      .some((value) => !cleanMapLabel(value)),
+  ).length
+  const hiddenLabelCount = regions.filter((region) => !region.display_name).length
+  const localization = {
+    admin1ChineseCount: chineseAdmin1,
+    admin1Count: admin1.length,
+    admin1ChineseRate: admin1.length ? roundCoord(chineseAdmin1 / admin1.length) : 0,
+    corruptRejectedCount,
+    corruptVisibleLabelCount,
+    hiddenLabelCount,
+  }
+  if (corruptVisibleLabelCount !== 0) {
+    throw new Error(`Region index contains ${corruptVisibleLabelCount} corrupt visible labels`)
+  }
+  return { generatedAt: new Date().toISOString(), localization, regions }
 }
 
 function loadControlledLabelPoints() {
@@ -1033,6 +1204,8 @@ function loadControlledLabelPoints() {
   const { collection: labels } = applyControlledLabelPointOverrides(rawLabels)
   const country = new Map()
   const chinaAdmin1 = new Map()
+  const countryNames = new Map()
+  const chinaAdmin1Names = new Map()
   for (const feature of labels.features ?? []) {
     const props = feature.properties ?? {}
     const isCountry = props.level === 'country'
@@ -1050,10 +1223,76 @@ function loadControlledLabelPoints() {
       throw new Error(`Duplicate controlled ${props.level} label: ${geoKey}`)
     }
     points.set(geoKey, point.map(roundCoord))
+    const names = isCountry ? countryNames : chinaAdmin1Names
+    names.set(geoKey, {
+      display_name: cleanMapLabel(props.display_name),
+      display_name_zh: cleanMapLabel(props.display_name_zh),
+      display_name_en: cleanMapLabel(props.display_name_en),
+    })
   }
   if (!country.size) throw new Error('No controlled country labels found')
   if (!chinaAdmin1.size) throw new Error('No controlled China admin1 labels found')
-  return { country, chinaAdmin1 }
+  return { country, chinaAdmin1, countryNames, chinaAdmin1Names }
+}
+
+function featureNameAliases(props = {}) {
+  return uniqueCleanLabels(rawFeatureNameValues(props))
+}
+
+function featureChineseAliases(props = {}) {
+  const keys = Array.isArray(props.keys) ? props.keys : [props.keys]
+  return [
+    props.display_name_zh,
+    props.display_name,
+    ...keys.map(
+      (value) =>
+        String(value ?? '')
+          .split('|')
+          .pop() ?? '',
+    ),
+  ]
+}
+
+function rawFeatureNameValues(props = {}) {
+  const keys = Array.isArray(props.keys) ? props.keys : [props.keys]
+  return [
+    props.display_name,
+    props.display_name_zh,
+    props.display_name_en,
+    props.name,
+    props.region_key,
+    props.geo_key,
+    ...keys.flatMap((value) => {
+      const text = String(value ?? '').trim()
+      const separator = text.indexOf('|')
+      return separator >= 0 ? [text, text.slice(separator + 1)] : [text]
+    }),
+  ]
+}
+
+function cleanMapLabel(value) {
+  const label = String(value ?? '')
+    .normalize('NFC')
+    .trim()
+  if (!label || /[?\uFFFD\u0000-\u001F\u007F-\u009F]/u.test(label)) return ''
+  if (/(?:Ã[\u0080-\u00ff]|Â[\u0080-\u00ff]|â[\u0080-\u00ff]{1,2}|ðŸ)/u.test(label)) return ''
+  return label
+}
+
+function uniqueCleanLabels(values) {
+  return [...new Set(values.map(cleanMapLabel).filter(Boolean))]
+}
+
+function firstCleanLabel(values) {
+  return values.map(cleanMapLabel).find(Boolean) ?? ''
+}
+
+function firstCleanCjk(values) {
+  return values.map(cleanMapLabel).find((value) => /[\u3400-\u9fff]/u.test(value)) ?? ''
+}
+
+function firstCleanNonCjk(values) {
+  return values.map(cleanMapLabel).find((value) => value && !/[\u3400-\u9fff]/u.test(value)) ?? ''
 }
 
 function validateCollection(collection, spec) {
@@ -1146,7 +1385,9 @@ function ringSelfIntersects(ring) {
         const pairKey = `${first}|${second}`
         if (checked.has(pairKey)) continue
         checked.add(pairKey)
-        if (segmentsProperlyIntersect(ring[first], ring[first + 1], ring[second], ring[second + 1])) {
+        if (
+          segmentsProperlyIntersect(ring[first], ring[first + 1], ring[second], ring[second + 1])
+        ) {
           return true
         }
       }
@@ -1178,8 +1419,16 @@ function orientation(a, b, c) {
 }
 
 function isMainlandChinaCity(props) {
-  const values = [props.geo_key, props.parent_geo_key, props.province_key, ...(props.keys ?? [])]
-    .map((value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, ''))
+  const values = [
+    props.geo_key,
+    props.parent_geo_key,
+    props.province_key,
+    ...(props.keys ?? []),
+  ].map((value) =>
+    String(value ?? '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\u4e00-\u9fff]+/g, ''),
+  )
   return !values.some((value) =>
     ['hongkong', 'macao', 'macau', 'taiwan', '香港', '澳门', '台湾'].some((blocked) =>
       value.includes(blocked),
@@ -1218,7 +1467,9 @@ function pointDistance(left, right) {
 }
 
 function canonicalCountryKey(value) {
-  const key = String(value ?? '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, '')
+  const key = String(value ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, '')
   return [
     'china',
     'hongkong',
@@ -1263,11 +1514,16 @@ function polygonArea(polygon) {
     for (let index = 0; index < ring.length - 1; index += 1) {
       const left = ring[index]
       const right = ring[index + 1]
-      area += Number(left?.[0] ?? 0) * Number(right?.[1] ?? 0) - Number(right?.[0] ?? 0) * Number(left?.[1] ?? 0)
+      area +=
+        Number(left?.[0] ?? 0) * Number(right?.[1] ?? 0) -
+        Number(right?.[0] ?? 0) * Number(left?.[1] ?? 0)
     }
     return Math.abs(area / 2)
   }
-  return Math.max(0, ringArea(polygon[0] ?? []) - polygon.slice(1).reduce((sum, ring) => sum + ringArea(ring), 0))
+  return Math.max(
+    0,
+    ringArea(polygon[0] ?? []) - polygon.slice(1).reduce((sum, ring) => sum + ringArea(ring), 0),
+  )
 }
 
 function geometryRepresentativePoint(geometry, suppliedBbox = geometryBbox(geometry)) {

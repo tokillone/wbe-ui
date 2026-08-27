@@ -4,6 +4,15 @@ export interface MapBiomarkerOption {
   cas?: string | null
 }
 
+export interface MapBiomarkerPath {
+  targetClass: string
+  category: string
+  subcategory: string
+  biomarkerKey: string
+  biomarkerLabel: string
+  biomarkerCas?: string | null
+}
+
 export interface MapFilterSelection {
   targetClass: string
   category: string
@@ -27,6 +36,7 @@ export interface MapFilterResponse {
   categoriesByTargetClass: Record<string, string[]>
   subcategoriesByCategory: Record<string, string[]>
   biomarkersByCategorySubcategory: Record<string, MapBiomarkerOption[]>
+  biomarkerPaths?: MapBiomarkerPath[]
   yearsBySelection: Record<string, string[]>
   defaultSelection: MapFilterSelection
   diagnostics?: MapDiagnostics | null

@@ -4,6 +4,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 export type MapFilterSelectOption = {
   value: string
   label: string
+  description?: string
+  searchText?: string
 }
 
 const props = withDefaults(
@@ -42,7 +44,11 @@ const normalizedQuery = computed(() => normalizeSearch(query.value))
 const filteredOptions = computed(() => {
   const search = normalizedQuery.value
   if (!search) return props.options
-  return props.options.filter((option) => normalizeSearch(option.label).includes(search))
+  return props.options.filter((option) =>
+    normalizeSearch(
+      `${option.label} ${option.description ?? ''} ${option.searchText ?? ''}`,
+    ).includes(search),
+  )
 })
 const activeDescendant = computed(() => {
   const option = filteredOptions.value[highlightedIndex.value]
@@ -86,8 +92,13 @@ function normalizeSearch(value: string) {
 }
 
 function optionId(option: MapFilterSelectOption) {
-  const safeValue = option.value.replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 48)
-  return `${props.id}-option-${safeValue || 'empty'}`
+  const safeValue = option.value.replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 32)
+  let hash = 2166136261
+  for (const character of option.value) {
+    hash ^= character.charCodeAt(0)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `${props.id}-option-${safeValue || 'empty'}-${(hash >>> 0).toString(36)}`
 }
 
 function openMenu(initialDirection: 1 | -1 = 1) {
@@ -95,7 +106,8 @@ function openMenu(initialDirection: 1 | -1 = 1) {
   isOpen.value = true
   query.value = ''
   const selectedIndex = props.options.findIndex((option) => option.value === props.modelValue)
-  highlightedIndex.value = selectedIndex >= 0 ? selectedIndex : initialDirection > 0 ? 0 : props.options.length - 1
+  highlightedIndex.value =
+    selectedIndex >= 0 ? selectedIndex : initialDirection > 0 ? 0 : props.options.length - 1
   updateOpeningDirection()
   void nextTick(() => {
     searchInput.value?.focus()
@@ -119,7 +131,8 @@ function toggleMenu() {
 function updateOpeningDirection() {
   const rect = trigger.value?.getBoundingClientRect()
   if (!rect) return
-  const preferredHeight = Math.min(282, 68 + props.options.length * 36)
+  const optionHeight = props.options.some((option) => option.description) ? 52 : 36
+  const preferredHeight = Math.min(282, 68 + props.options.length * optionHeight)
   const spaceBelow = window.innerHeight - rect.bottom - 12
   const spaceAbove = rect.top - 12
   opensUp.value = spaceBelow < preferredHeight && spaceAbove > spaceBelow
@@ -172,7 +185,8 @@ function moveHighlight(direction: 1 | -1) {
   const count = filteredOptions.value.length
   if (!count) return
   const current = highlightedIndex.value
-  highlightedIndex.value = current < 0 ? (direction > 0 ? 0 : count - 1) : (current + direction + count) % count
+  highlightedIndex.value =
+    current < 0 ? (direction > 0 ? 0 : count - 1) : (current + direction + count) % count
   scrollHighlightedIntoView()
 }
 
@@ -191,7 +205,11 @@ function selectOption(option: MapFilterSelectOption) {
 </script>
 
 <template>
-  <div ref="root" class="map-filter-select" :class="{ open: isOpen, disabled, 'opens-up': opensUp }">
+  <div
+    ref="root"
+    class="map-filter-select"
+    :class="{ open: isOpen, disabled, 'opens-up': opensUp }"
+  >
     <span :id="`${id}-label`" class="map-filter-select-label">{{ label }}</span>
     <button
       :id="id"
@@ -223,7 +241,12 @@ function selectOption(option: MapFilterSelectOption) {
           :aria-activedescendant="activeDescendant"
         />
       </div>
-      <div :id="`${id}-listbox`" class="map-filter-select-options" role="listbox" :aria-labelledby="`${id}-label`">
+      <div
+        :id="`${id}-listbox`"
+        class="map-filter-select-options"
+        role="listbox"
+        :aria-labelledby="`${id}-label`"
+      >
         <button
           v-for="(option, index) in filteredOptions"
           :id="optionId(option)"
@@ -239,7 +262,10 @@ function selectOption(option: MapFilterSelectOption) {
           @mouseenter="highlightedIndex = index"
           @click="selectOption(option)"
         >
-          <span>{{ option.label }}</span>
+          <span class="map-filter-select-option-copy">
+            <strong>{{ option.label }}</strong>
+            <small v-if="option.description">{{ option.description }}</small>
+          </span>
           <i aria-hidden="true"></i>
         </button>
         <p v-if="!filteredOptions.length" class="map-filter-select-empty">{{ emptyText }}</p>
@@ -274,7 +300,7 @@ function selectOption(option: MapFilterSelectOption) {
   align-items: center;
   gap: 8px;
   padding: 0 11px;
-  border: 1px solid #bcc9d2;
+  border: 1px solid #cbd5dc;
   border-radius: 4px;
   color: #173247;
   background: #ffffff;
@@ -283,7 +309,9 @@ function selectOption(option: MapFilterSelectOption) {
   font-weight: 600;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
 }
 
 .map-filter-select-trigger > span {
@@ -302,11 +330,17 @@ function selectOption(option: MapFilterSelectOption) {
   transition: transform 0.15s ease;
 }
 
-.map-filter-select.open .map-filter-select-trigger,
+.map-filter-select.open .map-filter-select-trigger {
+  border-color: #8fa0ab;
+  outline: none;
+  box-shadow: none;
+}
+
 .map-filter-select-trigger:focus-visible {
   border-color: #174f7c;
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(23, 79, 124, 0.13);
+  outline: 2px solid #174f7c;
+  outline-offset: 1px;
+  box-shadow: none;
 }
 
 .map-filter-select.open .map-filter-select-trigger > i {
@@ -332,10 +366,10 @@ function selectOption(option: MapFilterSelectOption) {
   min-width: 250px;
   box-sizing: border-box;
   overflow: hidden;
-  border: 1px solid #b7c5cf;
-  border-radius: 5px;
+  border: 1px solid #cbd5dc;
+  border-radius: 4px;
   background: #ffffff;
-  box-shadow: 0 10px 26px rgba(24, 50, 68, 0.16);
+  box-shadow: 0 6px 18px rgba(24, 50, 68, 0.13);
 }
 
 .map-filter-select.opens-up .map-filter-select-menu {
@@ -346,8 +380,8 @@ function selectOption(option: MapFilterSelectOption) {
 .map-filter-select-search {
   position: relative;
   padding: 8px;
-  border-bottom: 1px solid #e0e6ea;
-  background: #f7f9fa;
+  border-bottom: 1px solid #e1e6e9;
+  background: #ffffff;
 }
 
 .map-filter-select-search > span {
@@ -377,7 +411,7 @@ function selectOption(option: MapFilterSelectOption) {
   height: 32px;
   box-sizing: border-box;
   padding: 0 9px 0 30px;
-  border: 1px solid #c6d1d8;
+  border: 1px solid #cbd5dc;
   border-radius: 3px;
   outline: none;
   color: #213d52;
@@ -387,8 +421,16 @@ function selectOption(option: MapFilterSelectOption) {
 }
 
 .map-filter-select-search input:focus {
-  border-color: #5f86a4;
-  box-shadow: 0 0 0 2px rgba(23, 79, 124, 0.1);
+  border-color: #174f7c;
+  outline: none;
+  box-shadow: inset 0 0 0 1px #174f7c;
+}
+
+.map-filter-select-search input:focus-visible {
+  border-color: #174f7c;
+  outline: none;
+  outline-offset: 0;
+  box-shadow: inset 0 0 0 1px #174f7c;
 }
 
 .map-filter-select-options {
@@ -419,43 +461,67 @@ function selectOption(option: MapFilterSelectOption) {
   cursor: pointer;
 }
 
-.map-filter-select-option > span {
+.map-filter-select-option-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
   overflow-wrap: anywhere;
 }
 
+.map-filter-select-option-copy strong {
+  color: inherit;
+  font: inherit;
+}
+
+.map-filter-select-option-copy small {
+  overflow: hidden;
+  color: #728592;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-filter-select-option.selected .map-filter-select-option-copy small {
+  color: #687b88;
+}
+
 .map-filter-select-option.highlighted {
-  color: #173f60;
-  background: #edf3f7;
+  color: #183244;
+  background: #f5f7f8;
 }
 
 .map-filter-select-option.selected {
-  color: #174f7c;
-  background: #e7f0f7;
-  font-weight: 700;
+  color: #183244;
+  background: #f0f3f5;
+  font-weight: 600;
+}
+
+.map-filter-select-option.selected.highlighted {
+  background: #e9eef1;
 }
 
 .map-filter-select-option > i {
   position: relative;
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 9px;
   justify-self: center;
-  border: 1px solid transparent;
-  border-radius: 50%;
 }
 
 .map-filter-select-option.selected > i {
-  border-color: #174f7c;
-  background: #174f7c;
+  border: 0;
+  background: transparent;
 }
 
 .map-filter-select-option.selected > i::after {
   position: absolute;
-  top: 2px;
-  left: 4px;
-  width: 4px;
-  height: 7px;
-  border-right: 1.5px solid #ffffff;
-  border-bottom: 1.5px solid #ffffff;
+  top: -1px;
+  left: 3px;
+  width: 5px;
+  height: 8px;
+  border-right: 1.5px solid #174f7c;
+  border-bottom: 1.5px solid #174f7c;
   transform: rotate(45deg);
   content: '';
 }

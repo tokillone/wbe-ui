@@ -11,10 +11,7 @@ import { API_BASE_URL } from '../config/api'
 import { excludeSpecialAdminCityRows, isSpecialAdminCityGeoKey } from '../utils/mapVisualization'
 import { requestApi } from './api'
 
-export function buildMapApiUrl(
-  endpoint: string,
-  params?: Record<string, string | undefined>,
-) {
+export function buildMapApiUrl(endpoint: string, params?: Record<string, string | undefined>) {
   if (!endpoint.startsWith('/') || endpoint.startsWith('//')) {
     throw new Error('地图接口必须使用 /api 下的相对路径')
   }
@@ -30,21 +27,19 @@ async function requestMap<T>(
   endpoint: string,
   params?: Record<string, string | undefined>,
   signal?: AbortSignal,
+  cache?: RequestCache,
 ): Promise<T> {
   const url = buildMapApiUrl(endpoint, params)
   return requestApi<T>(url.slice(API_BASE_URL.length), {
     headers: { Accept: 'application/json' },
     signal,
+    cache,
     auth: false,
     redirectOnUnauthorized: false,
   })
 }
 
-async function postMap<T>(
-  endpoint: string,
-  body: unknown,
-  signal?: AbortSignal,
-): Promise<T> {
+async function postMap<T>(endpoint: string, body: unknown, signal?: AbortSignal): Promise<T> {
   return requestApi<T>(endpoint, {
     method: 'POST',
     headers: {
@@ -63,7 +58,7 @@ export function buildSelectionKey(...parts: string[]) {
 }
 
 export function fetchMapFilters(signal?: AbortSignal) {
-  return requestMap<MapFilterResponse>('/map/filters', undefined, signal)
+  return requestMap<MapFilterResponse>('/map/filters', undefined, signal, 'no-cache')
 }
 
 export function fetchMapStats(
@@ -172,7 +167,8 @@ export function normalizeMapStatsResponse(response: MapStatsResponse): MapStatsR
   const regions = excludeSpecialAdminCityRows(response.regions ?? []).map(normalizeRegionStat)
   const points = excludeSpecialAdminCityRows(response.points ?? []).map(normalizeRegionStat)
   const removedLegacySpecialAdminCities =
-    regions.length !== (response.regions ?? []).length || points.length !== (response.points ?? []).length
+    regions.length !== (response.regions ?? []).length ||
+    points.length !== (response.points ?? []).length
   return {
     ...response,
     summary: removedLegacySpecialAdminCities
@@ -202,20 +198,22 @@ export function normalizeMapDetailResponse(response: MapDetailResponse): MapDeta
       response.locations == null
         ? response.locations
         : excludeSpecialAdminCityRows(response.locations).map(normalizeRegionStat),
-    summaryCards: response.summaryCards?.map((card) =>
-      card.label === 'PNDL 几何均值' ? { ...card, label: '当前 PNDL' } : card,
-    ) ?? response.summaryCards,
+    summaryCards:
+      response.summaryCards?.map((card) =>
+        card.label === 'PNDL 几何均值' ? { ...card, label: '当前 PNDL' } : card,
+      ) ?? response.summaryCards,
     pndlRanking:
       response.pndlRanking == null
         ? response.pndlRanking
         : excludeSpecialAdminCityRows(response.pndlRanking).map((row) =>
             normalizeSelectedRankingItem(row, region),
           ),
-    pndlComparisons: response.pndlComparisons?.map((comparison) => ({
-      ...comparison,
-      rows: excludeSpecialAdminCityRows(comparison.rows ?? []).map((row) =>
-        normalizeSelectedRankingItem(row, region),
-      ),
-    })) ?? response.pndlComparisons,
+    pndlComparisons:
+      response.pndlComparisons?.map((comparison) => ({
+        ...comparison,
+        rows: excludeSpecialAdminCityRows(comparison.rows ?? []).map((row) =>
+          normalizeSelectedRankingItem(row, region),
+        ),
+      })) ?? response.pndlComparisons,
   }
 }

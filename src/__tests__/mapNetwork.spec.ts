@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   buildMapApiUrl,
+  fetchMapFilters,
   fetchMapStats,
   normalizeMapStatsResponse,
 } from '../services/map'
@@ -20,16 +21,14 @@ describe('map network contract', () => {
         levels: 'country,admin1,city',
         year: undefined,
       }),
-    ).toBe(
-      '/api/map/stats?category=%E6%8A%97%E7%94%9F%E7%B4%A0&levels=country%2Cadmin1%2Ccity',
-    )
+    ).toBe('/api/map/stats?category=%E6%8A%97%E7%94%9F%E7%B4%A0&levels=country%2Cadmin1%2Ccity')
     expect(() => buildMapApiUrl('https://example.test/map/stats')).toThrow(
       '地图接口必须使用 /api 下的相对路径',
     )
   })
 
   it('requests country, province/state, and city statistics through the relative API', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
         JSON.stringify({
           code: 200,
@@ -70,6 +69,40 @@ describe('map network contract', () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('levels=country%2Cadmin1%2Ccity')
   })
 
+  it('revalidates the filter contract so a cached legacy response cannot hide new paths', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 200,
+          message: 'success',
+          data: {
+            targetClasses: [],
+            categories: [],
+            categoriesByTargetClass: {},
+            subcategoriesByCategory: {},
+            biomarkersByCategorySubcategory: {},
+            biomarkerPaths: [],
+            yearsBySelection: {},
+            defaultSelection: {
+              targetClass: 'ALL',
+              category: '全部目标物质类别',
+              subcategory: '全部小类',
+              biomarkerKey: 'ALL',
+              year: '全部年份',
+            },
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchMapFilters()
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/map/filters')
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ cache: 'no-cache' })
+  })
+
   it('keeps an empty filter result empty during response normalization', () => {
     const response = normalizeMapStatsResponse({
       legend: { min: null, max: null, unit: 'mg/day/1000 inh', colors: [] },
@@ -99,7 +132,7 @@ describe('map network contract', () => {
   })
 
   it('accepts a PMTiles archive only when byte Range returns a valid 206 prefix', async () => {
-    const fetcher = vi.fn().mockResolvedValue(
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response('PMTiles', {
         status: 206,
         headers: {
@@ -119,7 +152,9 @@ describe('map network contract', () => {
   })
 
   it('rejects a server that ignores Range and answers with the full archive', async () => {
-    const fetcher = vi.fn().mockResolvedValue(new Response('PMTiles and the rest', { status: 200 }))
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response('PMTiles and the rest', { status: 200 }))
 
     await expect(probePmtilesRange('/tiles/wbe-basemap.pmtiles', fetcher)).resolves.toEqual({
       ok: false,

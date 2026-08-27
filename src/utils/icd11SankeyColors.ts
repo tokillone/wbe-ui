@@ -6,6 +6,22 @@ const SATURATION_SEQUENCE = [40, 46, 36]
 const LIGHTNESS_SEQUENCE = [50, 56, 45]
 
 export const SANKEY_LEVEL2_FALLBACK_COLOR = '#7E8A98'
+export const RELATION_PIE_COLORS = [
+  '#4E79A7',
+  '#F28E2B',
+  '#59A14F',
+  '#E15759',
+  '#B07AA1',
+  '#76B7B2',
+  '#EDC948',
+] as const
+export const RELATION_PIE_OTHER_COLOR = '#8C969F'
+
+export function relationPieColor(index: number, isOther = false) {
+  if (isOther) return RELATION_PIE_OTHER_COLOR
+  const safeIndex = Math.max(0, Math.floor(index))
+  return RELATION_PIE_COLORS[safeIndex % RELATION_PIE_COLORS.length] ?? RELATION_PIE_COLORS[0]
+}
 
 export function sankeyLevel2ColorKey(level1: string, level2: string) {
   return `${level1}::${level2}`

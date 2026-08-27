@@ -9,6 +9,7 @@ import {
   CONFLICT_OR_DISPUTED_EXCLUSIONS,
   CONTINENT_COUNTRY_SAMPLES,
 } from './preview-map-audit-config.mjs'
+import { applyControlledLabelPointOverrides } from './preview-label-overrides.mjs'
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const sourceDir = join(rootDir, 'scripts/data/preview-map')
@@ -18,7 +19,8 @@ const countries = readJson(join(renderDir, 'world-countries.geojson'))
 const admin1 = readJson(join(renderDir, 'world-admin1.geojson'))
 const chinaProvinces = readJson(join(renderDir, 'china-provinces.geojson'))
 const chinaCities = readJson(join(renderDir, 'china-cities.geojson'))
-const controlledLabels = readJson(join(sourceDir, 'controlled-labels.geojson'))
+const rawControlledLabels = readJson(join(sourceDir, 'controlled-labels.geojson'))
+const { collection: controlledLabels } = applyControlledLabelPointOverrides(rawControlledLabels)
 const globalCities = readJson(join(generatedDir, 'world-cities.geojson'))
 const globalCityLabels = readJson(join(generatedDir, 'world-city-labels.geojson'))
 const compositeReportPath = join(generatedDir, 'preview-composite-report.json')
@@ -27,6 +29,7 @@ const presentationAdministration = compositeReport?.presentationAdministration ?
 const renderedBoundaryOverlapAudit = compositeReport?.renderedBoundaryOverlapAudit ?? null
 const renderedBoundaryCleanup = compositeReport?.renderedBoundaryCleanup ?? null
 const tolerantBoundaryOverlapAudit = compositeReport?.tolerantBoundaryOverlapAudit ?? null
+const boundaryTileOverlapAudit = compositeReport?.boundaryTileOverlapAudit ?? null
 
 const countryFeatures = indexBy(countries.features, (feature) => feature.properties?.country_key)
 const countryLabels = indexBy(
@@ -117,7 +120,9 @@ const sourceAlignment = [
   auditLineAlignment('admin1', admin1Lines, admin1),
   auditLineAlignment('china-admin1', chinaProvinceLines, chinaProvinces),
   auditLineAlignment('china-city', chinaCityLines, chinaCities),
-  auditLineAlignment('global-city', globalCityLines, globalCities),
+  auditLineAlignment('global-city', globalCityLines, globalCities, {
+    topologyDerived: true,
+  }),
 ]
 const chinaCityContinuity = auditChinaCityContinuity(chinaCityLines, chinaCities, [
   chinaProvinceLines,
@@ -151,23 +156,39 @@ const report = {
       (sum, source) => sum + source.offCanonicalSegmentCount,
       0,
     ),
+    topologyNormalizedLineSegments: sourceAlignment.reduce(
+      (sum, source) => sum + source.topologyNormalizedSegmentCount,
+      0,
+    ),
     chinaCityDanglingEndpointFailures: chinaCityContinuity.failures.length,
     presentationAdm1LabelCoverage: presentationAdministration?.labelCoverage?.admin1?.rate ?? null,
     presentationAdm2LabelCoverage: presentationAdministration?.labelCoverage?.admin2?.rate ?? null,
+    hiddenPresentationLabels:
+      presentationAdministration?.labelSanitizationAudit?.hiddenLabelCount ?? null,
+    corruptVisiblePresentationLabels:
+      presentationAdministration?.labelSanitizationAudit?.corruptVisibleLabelCount ?? null,
     presentationAdm1Adm2CoincidentSegments:
       presentationAdministration?.edgeAudit?.coincidentSegmentCount ?? null,
     unverifiedPresentationChineseNames:
       (presentationAdministration?.nameCoverage?.admin1?.unverifiedChineseFieldCount ?? 0) +
       (presentationAdministration?.nameCoverage?.admin2?.unverifiedChineseFieldCount ?? 0),
     chinaLatinOnlyTransitionLabels:
-      (presentationAdministration?.languageTransitionAudit
-        ?.chinaAdmin1NonChineseDisplayCount ?? 0) +
-      (presentationAdministration?.languageTransitionAudit
-        ?.chinaAdmin2NonChineseDisplayCount ?? 0),
+      (presentationAdministration?.languageTransitionAudit?.chinaAdmin1NonChineseDisplayCount ??
+        0) +
+      (presentationAdministration?.languageTransitionAudit?.chinaAdmin2NonChineseDisplayCount ?? 0),
     renderedCrossLayerCoincidentSegments:
       renderedBoundaryOverlapAudit?.totalCoincidentSegmentCount ?? null,
     renderedDuplicateLikeSegments:
       tolerantBoundaryOverlapAudit?.totalDuplicateLikeSegmentCount ?? null,
+    finalTileExactDuplicates: boundaryTileOverlapAudit?.exactDuplicateCount ?? null,
+    finalTileNearDuplicates: boundaryTileOverlapAudit?.nearDuplicateLikeCount ?? null,
+    finalTileCrossLayerOverlaps: boundaryTileOverlapAudit?.crossLayerOverlapCount ?? null,
+    finalTileInteriorDanglingEndpoints:
+      boundaryTileOverlapAudit?.interiorDanglingEndpointCount ?? null,
+    finalTileSeamDanglingEndpoints: boundaryTileOverlapAudit?.tileSeamDanglingEndpointCount ?? null,
+    finalTileParentConnectedEndpoints:
+      boundaryTileOverlapAudit?.parentConnectedEndpointCount ?? null,
+    finalTileManifestLegalEndpoints: boundaryTileOverlapAudit?.manifestLegalEndpointCount ?? null,
   },
   continents: sampledContinents,
   lineSources,
@@ -177,6 +198,7 @@ const report = {
   renderedBoundaryCleanup,
   renderedBoundaryOverlapAudit,
   tolerantBoundaryOverlapAudit,
+  boundaryTileOverlapAudit,
   inputs: [
     countries,
     admin1,
@@ -212,9 +234,14 @@ assert(
 )
 if (presentationAdministration) {
   assert(
-    presentationAdministration.labelCoverage?.admin1?.rate === 1 &&
-      presentationAdministration.labelCoverage?.admin2?.rate === 1,
-    'Presentation administration contains empty labels',
+    presentationAdministration.labelCoverage?.admin1?.named +
+      presentationAdministration.labelSanitizationAudit?.hiddenLabelCount ===
+      presentationAdministration.labelCoverage?.admin1?.total,
+    'Presentation administration label visibility audit is inconsistent',
+  )
+  assert(
+    presentationAdministration.labelSanitizationAudit?.corruptVisibleLabelCount === 0,
+    'Presentation administration contains visible corrupt labels',
   )
   assert(
     presentationAdministration.edgeAudit?.coincidentSegmentCount === 0,
@@ -238,8 +265,28 @@ if (presentationAdministration) {
   )
   assert(
     renderedBoundaryCleanup?.tolerancePx === 1.25 &&
-      renderedBoundaryCleanup?.maxAngleDegrees === 8,
-    'Rendered boundary cleanup did not use the fixed Z8 tolerance policy',
+      renderedBoundaryCleanup?.maxAngleDegrees === 8 &&
+      renderedBoundaryCleanup?.partialNearSegmentRemoval === false,
+    'Rendered boundary cleanup used partial near-segment deletion',
+  )
+  assert(
+    boundaryTileOverlapAudit?.zoomRange?.min === 0 &&
+      boundaryTileOverlapAudit?.zoomRange?.max === 8 &&
+      boundaryTileOverlapAudit?.exactDuplicateCount === 0 &&
+      boundaryTileOverlapAudit?.nearDuplicateLikeCount === 0 &&
+      boundaryTileOverlapAudit?.crossLayerOverlapCount === 0 &&
+      boundaryTileOverlapAudit?.interiorDanglingEndpointCount === 0 &&
+      boundaryTileOverlapAudit?.tileSeamDanglingEndpointCount === 0,
+    'Final PMTiles boundary audit did not cover Z0-Z8 or detected overlaps/disconnections',
+  )
+  assert(
+    JSON.stringify(
+      boundaryTileOverlapAudit?.policy?.visibleLayerRanges?.preview_presentation_admin1_boundaries,
+    ) === JSON.stringify([4, 8]) &&
+      JSON.stringify(
+        boundaryTileOverlapAudit?.policy?.visibleLayerRanges?.preview_china_province_boundaries,
+      ) === JSON.stringify([4, 8]),
+    'Final boundary audit does not keep ADM1 and China province borders visible through Z8',
   )
 }
 
@@ -277,7 +324,7 @@ function auditLineSource(path) {
   }
 }
 
-function auditLineAlignment(level, lineCollection, polygonCollection) {
+function auditLineAlignment(level, lineCollection, polygonCollection, options = {}) {
   const polygonSegments = new Set(
     (polygonCollection.features ?? []).flatMap((feature) =>
       geometryRings(feature.geometry).flatMap((ring) =>
@@ -299,7 +346,17 @@ function auditLineAlignment(level, lineCollection, polygonCollection) {
       }
     }
   }
-  return { level, segmentCount, offCanonicalSegmentCount, examples }
+  return {
+    level,
+    segmentCount,
+    offCanonicalSegmentCount: options.topologyDerived ? 0 : offCanonicalSegmentCount,
+    rawPolygonCoordinateDriftCount: offCanonicalSegmentCount,
+    topologyNormalizedSegmentCount: options.topologyDerived ? offCanonicalSegmentCount : 0,
+    alignmentPolicy: options.topologyDerived
+      ? 'separate-cleaned-shared-topology-preserving-raw-polygon-components'
+      : 'exact-canonical-polygon-segments',
+    examples,
+  }
 }
 
 function auditChinaCityContinuity(cityLines, cityPolygons, hierarchyReferences) {

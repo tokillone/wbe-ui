@@ -1,0 +1,1997 @@
+{
+  "schema_version": 1,
+  "hierarchy": "country-adm1-adm2",
+  "generated_at": "2026-08-27",
+  "detection_rule": "Candidate when the current country-level entity has no native CGAZ_ADM2 source, or its native ADM2 source contains only one polygon; China is always protected because local city geometry is authoritative.",
+  "candidate_count": 60,
+  "protected_count": 195,
+  "candidates": [
+    {
+      "country_key": "akrotirisovereignbasearea",
+      "display_name_zh": "阿克罗蒂里英属基地区",
+      "display_name_en": "Akrotiri Sovereign Base Area",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "aland",
+      "display_name_zh": "奥兰群岛",
+      "display_name_en": "Aland",
+      "current_feature_count": 10,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "americansamoa",
+      "display_name_zh": "美属萨摩亚",
+      "display_name_en": "American Samoa",
+      "current_feature_count": 5,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "anguilla",
+      "display_name_zh": "安圭拉",
+      "display_name_en": "Anguilla",
+      "current_feature_count": 12,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "antarctica",
+      "display_name_zh": "南极洲",
+      "display_name_en": "Antarctica",
+      "current_feature_count": 1,
+      "current_source_levels": ["CGAZ_ADM2"]
+    },
+    {
+      "country_key": "aruba",
+      "display_name_zh": "阿鲁巴",
+      "display_name_en": "Aruba",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "ashmoreandcartierislands",
+      "display_name_zh": "阿什莫尔和卡捷群岛",
+      "display_name_en": "Ashmore and Cartier Islands",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "bajonuevobankpetrelis",
+      "display_name_zh": "巴霍努埃沃浅滩",
+      "display_name_en": "Bajo Nuevo Bank Petrel Is.",
+      "current_feature_count": 1,
+      "current_source_levels": ["country_promoted"]
+    },
+    {
+      "country_key": "baykonurcosmodrome",
+      "display_name_zh": "拜科努尔航天发射场",
+      "display_name_en": "Baykonur Cosmodrome",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "bermuda",
+      "display_name_zh": "百慕大",
+      "display_name_en": "Bermuda",
+      "current_feature_count": 8,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "birtawil",
+      "display_name_zh": "比尔泰维勒",
+      "display_name_en": "Bir Tawil",
+      "current_feature_count": 1,
+      "current_source_levels": ["country_promoted"]
+    },
+    {
+      "country_key": "brazilianisland",
+      "display_name_zh": "巴西岛",
+      "display_name_en": "Brazilian Island",
+      "current_feature_count": 1,
+      "current_source_levels": ["country_promoted"]
+    },
+    {
+      "country_key": "britishindianoceanterritory",
+      "display_name_zh": "英属印度洋领地",
+      "display_name_en": "British Indian Ocean Territory",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "britishvirginislands",
+      "display_name_zh": "英属维尔京群岛",
+      "display_name_en": "British Virgin Islands",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "caymanislands",
+      "display_name_zh": "开曼群岛",
+      "display_name_en": "Cayman Islands",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "clippertonisland",
+      "display_name_zh": "克利伯顿岛",
+      "display_name_en": "Clipperton Island",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "cookislands",
+      "display_name_zh": "库克群岛",
+      "display_name_en": "Cook Islands",
+      "current_feature_count": 9,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "coralseaislands",
+      "display_name_zh": "珊瑚海群岛",
+      "display_name_en": "Coral Sea Islands",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "curacao",
+      "display_name_zh": "库拉索",
+      "display_name_en": "Curaçao",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "cyprusnomansarea",
+      "display_name_zh": "塞浦路斯缓冲区",
+      "display_name_en": "Cyprus No Mans Area",
+      "current_feature_count": 1,
+      "current_source_levels": ["country_promoted"]
+    },
+    {
+      "country_key": "dhekeliasovereignbasearea",
+      "display_name_zh": "德凯利亚英属基地区",
+      "display_name_en": "Dhekelia Sovereign Base Area",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "falklandislands",
+      "display_name_zh": "福克兰群岛",
+      "display_name_en": "Falkland Islands",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "faroeislands",
+      "display_name_zh": "法罗群岛",
+      "display_name_en": "Faroe Islands",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "frenchpolynesia",
+      "display_name_zh": "法属波利尼西亚",
+      "display_name_en": "French Polynesia",
+      "current_feature_count": 5,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "frenchsouthernandantarcticlands",
+      "display_name_zh": "法属南部领地",
+      "display_name_en": "French Southern and Antarctic Lands",
+      "current_feature_count": 4,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "gibraltar",
+      "display_name_zh": "直布罗陀",
+      "display_name_en": "Gibraltar",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "guam",
+      "display_name_zh": "关岛",
+      "display_name_en": "Guam",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "guernsey",
+      "display_name_zh": "根西岛",
+      "display_name_en": "Guernsey",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "heardislandandmcdonaldislands",
+      "display_name_zh": "赫德岛和麦克唐纳群岛",
+      "display_name_en": "Heard Island and McDonald Islands",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "indianoceanterritories",
+      "display_name_zh": "印度洋领地",
+      "display_name_en": "Indian Ocean Territories",
+      "current_feature_count": 2,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "isleofman",
+      "display_name_zh": "马恩岛",
+      "display_name_en": "Isle of Man",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "jersey",
+      "display_name_zh": "泽西岛",
+      "display_name_en": "Jersey",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "montserrat",
+      "display_name_zh": "蒙特塞拉特",
+      "display_name_en": "Montserrat",
+      "current_feature_count": 3,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "newcaledonia",
+      "display_name_zh": "新喀里多尼亚",
+      "display_name_en": "New Caledonia",
+      "current_feature_count": 3,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "niue",
+      "display_name_zh": "纽埃",
+      "display_name_en": "Niue",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "norfolkisland",
+      "display_name_zh": "诺福克岛",
+      "display_name_en": "Norfolk Island",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "northerncyprus",
+      "display_name_zh": "北塞浦路斯",
+      "display_name_en": "Northern Cyprus",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "northernmarianaislands",
+      "display_name_zh": "北马里亚纳群岛",
+      "display_name_en": "Northern Mariana Islands",
+      "current_feature_count": 4,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "palestine",
+      "display_name_zh": "巴勒斯坦领土",
+      "display_name_en": "Palestine",
+      "current_feature_count": 1,
+      "current_source_levels": ["country_promoted"]
+    },
+    {
+      "country_key": "pitcairnislands",
+      "display_name_zh": "皮特凯恩群岛",
+      "display_name_en": "Pitcairn Islands",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "puertorico",
+      "display_name_zh": "波多黎各",
+      "display_name_en": "Puerto Rico",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "saintbarthelemy",
+      "display_name_zh": "圣巴泰勒米",
+      "display_name_en": "Saint Barthelemy",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "sainthelena",
+      "display_name_zh": "圣赫勒拿",
+      "display_name_en": "Saint Helena",
+      "current_feature_count": 3,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "saintmartin",
+      "display_name_zh": "法属圣马丁",
+      "display_name_en": "Saint Martin",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "saintpierreandmiquelon",
+      "display_name_zh": "圣皮埃尔和密克隆群岛",
+      "display_name_en": "Saint Pierre and Miquelon",
+      "current_feature_count": 2,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "scarboroughreef",
+      "display_name_zh": "黄岩岛",
+      "display_name_en": "Scarborough Reef",
+      "current_feature_count": 1,
+      "current_source_levels": ["country_promoted"]
+    },
+    {
+      "country_key": "serranillabank",
+      "display_name_zh": "塞拉尼利亚浅滩",
+      "display_name_en": "Serranilla Bank",
+      "current_feature_count": 1,
+      "current_source_levels": ["country_promoted"]
+    },
+    {
+      "country_key": "siachenglacier",
+      "display_name_zh": "锡亚琴冰川",
+      "display_name_en": "Siachen Glacier",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "sintmaarten",
+      "display_name_zh": "荷属圣马丁",
+      "display_name_en": "Sint Maarten",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "somaliland",
+      "display_name_zh": "索马里兰",
+      "display_name_en": "Somaliland",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "southernpatagonianicefield",
+      "display_name_zh": "南巴塔哥尼亚冰原",
+      "display_name_en": "Southern Patagonian Ice Field",
+      "current_feature_count": 1,
+      "current_source_levels": ["country_promoted"]
+    },
+    {
+      "country_key": "southgeorgiaandtheislands",
+      "display_name_zh": "南乔治亚和南桑威奇群岛",
+      "display_name_en": "South Georgia and the Islands",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "spratlyislands",
+      "display_name_zh": "南沙群岛",
+      "display_name_en": "Spratly Islands",
+      "current_feature_count": 1,
+      "current_source_levels": ["country_promoted"]
+    },
+    {
+      "country_key": "turksandcaicosislands",
+      "display_name_zh": "特克斯和凯科斯群岛",
+      "display_name_en": "Turks and Caicos Islands",
+      "current_feature_count": 5,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "unitedsminoroutlyingislands",
+      "display_name_zh": "美国本土外小岛屿",
+      "display_name_en": "United States Minor Outlying Islands",
+      "current_feature_count": 5,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "unitedsvirginislands",
+      "display_name_zh": "美属维尔京群岛",
+      "display_name_en": "United States Virgin Islands",
+      "current_feature_count": 3,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "usnavalbaseguantanamobay",
+      "display_name_zh": "关塔那摩湾美国海军基地",
+      "display_name_en": "US Naval Base Guantanamo Bay",
+      "current_feature_count": 1,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "vatican",
+      "display_name_zh": "梵蒂冈",
+      "display_name_en": "Vatican",
+      "current_feature_count": 1,
+      "current_source_levels": ["CGAZ_ADM2"]
+    },
+    {
+      "country_key": "wallisandfutuna",
+      "display_name_zh": "瓦利斯和富图纳",
+      "display_name_en": "Wallis and Futuna",
+      "current_feature_count": 3,
+      "current_source_levels": ["local_admin1_promoted"]
+    },
+    {
+      "country_key": "westernsahara",
+      "display_name_zh": "西撒哈拉",
+      "display_name_en": "Western Sahara",
+      "current_feature_count": 1,
+      "current_source_levels": ["CGAZ_ADM2"]
+    }
+  ],
+  "protected_countries": [
+    {
+      "country_key": "afghanistan",
+      "display_name_zh": "阿富汗",
+      "display_name_en": "Afghanistan",
+      "current_feature_count": 398,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "00b2a72518f7cdb8699b60d0d388da6a1dd76c33efd97d6f7126ae462ff85616"
+    },
+    {
+      "country_key": "albania",
+      "display_name_zh": "阿尔巴尼亚",
+      "display_name_en": "Albania",
+      "current_feature_count": 36,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "94c7b1229ad521e6ea1a2f0547c0b10ad7d430959266e304b7490ba398ba78ca"
+    },
+    {
+      "country_key": "algeria",
+      "display_name_zh": "阿尔及利亚",
+      "display_name_en": "Algeria",
+      "current_feature_count": 48,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "a14238821c6833fa9b5597dc16e143eb8fa4daca5e7f5b9d621d32268301e30e"
+    },
+    {
+      "country_key": "andorra",
+      "display_name_zh": "安道尔",
+      "display_name_en": "Andorra",
+      "current_feature_count": 7,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "0e3cc07464ad53259ca8485ed31707644ee069512f9a4f7afb67d5e33d523f57"
+    },
+    {
+      "country_key": "angola",
+      "display_name_zh": "安哥拉",
+      "display_name_en": "Angola",
+      "current_feature_count": 157,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "d37ffba09211140e5ce90beea2d0ea294df96e75c8f9dc0b1df97d12fd98463b"
+    },
+    {
+      "country_key": "antiguaandbarbuda",
+      "display_name_zh": "安提瓜和巴布达",
+      "display_name_en": "Antigua and Barbuda",
+      "current_feature_count": 8,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "519b8acd0726b6ed67144fc8a14a27aee3662dc9c2ad2fc26f11d81bc5dca3d3"
+    },
+    {
+      "country_key": "argentina",
+      "display_name_zh": "阿根廷",
+      "display_name_en": "Argentina",
+      "current_feature_count": 525,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "831b2c1b732634ea84fedd7c950a804eff7a33c296aa6cb52b805122ab73373c"
+    },
+    {
+      "country_key": "armenia",
+      "display_name_zh": "亚美尼亚",
+      "display_name_en": "Armenia",
+      "current_feature_count": 39,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "46d51c6c80cd0219a62af179c20f56d19e38cdce73ccc7d4fd30fe238baa49c2"
+    },
+    {
+      "country_key": "australia",
+      "display_name_zh": "澳大利亚",
+      "display_name_en": "Australia",
+      "current_feature_count": 547,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "6eba3771e48fdc5bb05b450eb6574622f3b6c03bf94754c906a8d0eade4915f3"
+    },
+    {
+      "country_key": "austria",
+      "display_name_zh": "奥地利",
+      "display_name_en": "Austria",
+      "current_feature_count": 94,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "c07559aeb09ddc888dd7c02dd81d9953342f54c14e9d3e7d9cbc02629ef4bdfe"
+    },
+    {
+      "country_key": "azerbaijan",
+      "display_name_zh": "阿塞拜疆",
+      "display_name_en": "Azerbaijan",
+      "current_feature_count": 79,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "02fa89487208e396c1a8d0008990e3a407e31e97919499d8f42b8c84ca5cb7a0"
+    },
+    {
+      "country_key": "bahrain",
+      "display_name_zh": "巴林",
+      "display_name_en": "Bahrain",
+      "current_feature_count": 4,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "2aa9b7fbec98ad99684c9b60d94d36f9af622972e497e55db03af21a643a29b4"
+    },
+    {
+      "country_key": "bangladesh",
+      "display_name_zh": "孟加拉国",
+      "display_name_en": "Bangladesh",
+      "current_feature_count": 64,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "2d995d45ed6c4de41c154bd13d2132dc626e1303a6221aa79c77fca147211a81"
+    },
+    {
+      "country_key": "barbados",
+      "display_name_zh": "巴巴多斯",
+      "display_name_en": "Barbados",
+      "current_feature_count": 11,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "fc04032c5157f5ab143e80b463ba8d9c293b2f69427fbdcdb2934b05f0824bb1"
+    },
+    {
+      "country_key": "belarus",
+      "display_name_zh": "白俄罗斯",
+      "display_name_en": "Belarus",
+      "current_feature_count": 118,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "f3fd68eb7f37f35fd23ff45070783b46783cfd505808eb55cddbbf4def7d7b3a"
+    },
+    {
+      "country_key": "belgium",
+      "display_name_zh": "比利时",
+      "display_name_en": "Belgium",
+      "current_feature_count": 11,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "8033268838c6ba8ec9244a607b049d832b191dbd538c183d19f7b94bee8f0d78"
+    },
+    {
+      "country_key": "belize",
+      "display_name_zh": "伯利兹",
+      "display_name_en": "Belize",
+      "current_feature_count": 31,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "f4f10bbdff1ba981303dcaed31c8fd2e406dd27d49c756995c1e55bac20931d9"
+    },
+    {
+      "country_key": "benin",
+      "display_name_zh": "贝宁",
+      "display_name_en": "Benin",
+      "current_feature_count": 77,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "671b77eb0f3b30c712c4de6d024d71c54a4357044c734a3796a20e69ff943f08"
+    },
+    {
+      "country_key": "bhutan",
+      "display_name_zh": "不丹",
+      "display_name_en": "Bhutan",
+      "current_feature_count": 205,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "0339ae99ccda5d6eff5f7f506339c9dd838d57c31fd51855e2bc9bd72773016d"
+    },
+    {
+      "country_key": "bolivia",
+      "display_name_zh": "玻利维亚",
+      "display_name_en": "Bolivia",
+      "current_feature_count": 110,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "0324af572bf0a7b6b0ba7c01644b4200c5ba7fd60ca89fa84ae0992a4d0615ad"
+    },
+    {
+      "country_key": "bosniaandherzegovina",
+      "display_name_zh": "波斯尼亚和黑塞哥维那",
+      "display_name_en": "Bosnia and Herzegovina",
+      "current_feature_count": 12,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "3b35e96bc5f19c0e60778a835946a93e303d587e6e1212548adff0f47f9d6983"
+    },
+    {
+      "country_key": "botswana",
+      "display_name_zh": "博茨瓦纳",
+      "display_name_en": "Botswana",
+      "current_feature_count": 25,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "54870b4deef9f588697c80060f67dd20dfa5d533f148324a5d6519886fc21144"
+    },
+    {
+      "country_key": "brazil",
+      "display_name_zh": "巴西",
+      "display_name_en": "Brazil",
+      "current_feature_count": 5570,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "bd511daac7ff60ea50ff7651b41e99463a147725cec4751b20a3a2ba05f07b45"
+    },
+    {
+      "country_key": "brunei",
+      "display_name_zh": "文莱",
+      "display_name_en": "Brunei",
+      "current_feature_count": 38,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "f44ca28ea3b4d5e293e324395676ac845846b29a1d195ce2dce809add06ed2a7"
+    },
+    {
+      "country_key": "bulgaria",
+      "display_name_zh": "保加利亚",
+      "display_name_en": "Bulgaria",
+      "current_feature_count": 265,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "df27820f5dd13051649b05dabf4b4470efb4acf1bd309fc0f2b2506a7eb1c057"
+    },
+    {
+      "country_key": "burkinafaso",
+      "display_name_zh": "布基纳法索",
+      "display_name_en": "Burkina Faso",
+      "current_feature_count": 45,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "39b41bf1e2400c663009ab459a4b9445196e9c9fef0cc574a6257d0239cc4e57"
+    },
+    {
+      "country_key": "burundi",
+      "display_name_zh": "布隆迪",
+      "display_name_en": "Burundi",
+      "current_feature_count": 119,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "db197f28261da0149b104c4753c22231cdcee54495d862404de62efa03763b25"
+    },
+    {
+      "country_key": "caboverde",
+      "display_name_zh": "佛得角",
+      "display_name_en": "Cabo Verde",
+      "current_feature_count": 32,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "2a7e670e9e9a07e53ffe6946e449cdb44d7ba57b66cc14ece4a576f07664c220"
+    },
+    {
+      "country_key": "cambodia",
+      "display_name_zh": "柬埔寨",
+      "display_name_en": "Cambodia",
+      "current_feature_count": 197,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "719f3ead5e6c9f0bfb60b0f4ed457cf40d032cd5814b766001edfde16a0af27e"
+    },
+    {
+      "country_key": "cameroon",
+      "display_name_zh": "喀麦隆",
+      "display_name_en": "Cameroon",
+      "current_feature_count": 58,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "60f38523034fe58c4b321d03df8bfce06914da264a8860822aacb457f236112d"
+    },
+    {
+      "country_key": "canada",
+      "display_name_zh": "加拿大",
+      "display_name_en": "Canada",
+      "current_feature_count": 76,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "e916f37be447513f22b427b4eaa054756449757973c61ac561bb68c3d4f18d1f"
+    },
+    {
+      "country_key": "centralafricanrepublic",
+      "display_name_zh": "中非共和国",
+      "display_name_en": "Central African Republic",
+      "current_feature_count": 72,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "dfcf600f3554fec419f0b071d064bf5e31b23575922af9694a48fdf9dee6269f"
+    },
+    {
+      "country_key": "chad",
+      "display_name_zh": "乍得",
+      "display_name_en": "Chad",
+      "current_feature_count": 70,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "584c02992c8cb49526aa36b440b7bfbcbd2d51835c26c7febb6e42d50fe814dd"
+    },
+    {
+      "country_key": "chile",
+      "display_name_zh": "智利",
+      "display_name_en": "Chile",
+      "current_feature_count": 56,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "8e26ee4559b7eebc0500891fa02e658fd7fc08e432dd5ca53e6f912d717d58d6"
+    },
+    {
+      "country_key": "china",
+      "display_name_zh": "中国",
+      "display_name_en": "China",
+      "current_feature_count": 37,
+      "current_source_levels": ["local_admin1_promoted"],
+      "feature_sha256": "5c60aad9f6ed20c172cefee016640b8572eb9f686bac2904559859e818d86f51"
+    },
+    {
+      "country_key": "colombia",
+      "display_name_zh": "哥伦比亚",
+      "display_name_en": "Colombia",
+      "current_feature_count": 1122,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "9036e93c9bbcc53f6e3c45970dceab9b44b21cd6fefc0dc6c9a128f5bc1d25cb"
+    },
+    {
+      "country_key": "comoros",
+      "display_name_zh": "科摩罗",
+      "display_name_en": "Comoros",
+      "current_feature_count": 17,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "4ae8a250cef8403cee7b4bc8d07446d2e6841ab97e928b3db2670611a1591785"
+    },
+    {
+      "country_key": "costarica",
+      "display_name_zh": "哥斯达黎加",
+      "display_name_en": "Costa Rica",
+      "current_feature_count": 83,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "d35db5d82513c642567d463e5745700e630d1244e0c58adae8fbe2ee0c2e56da"
+    },
+    {
+      "country_key": "croatia",
+      "display_name_zh": "克罗地亚",
+      "display_name_en": "Croatia",
+      "current_feature_count": 545,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "545c86cb20f3d5786e05596d580f8fd0e13cdcb7e254433f637fd5a194b68ad5"
+    },
+    {
+      "country_key": "cuba",
+      "display_name_zh": "古巴",
+      "display_name_en": "Cuba",
+      "current_feature_count": 168,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "12015a32bc23d44af88b1fb34a7f2b83211307c872ae6768a2dabd7cafefd0d0"
+    },
+    {
+      "country_key": "cyprus",
+      "display_name_zh": "塞浦路斯",
+      "display_name_en": "Cyprus",
+      "current_feature_count": 609,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "8c6199b06da3eabcef6c07d9c7f97ecd9c07ea29fbb1c6b097a0226ec765da4a"
+    },
+    {
+      "country_key": "czechia",
+      "display_name_zh": "捷克",
+      "display_name_en": "Czechia",
+      "current_feature_count": 77,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "19477da87da3459cc771f79c2c5f08e79b7b92d92acbcc7e67a1e72bad189025"
+    },
+    {
+      "country_key": "democraticrepublicofthecongo",
+      "display_name_zh": "刚果金",
+      "display_name_en": "Democratic Republic of the Congo",
+      "current_feature_count": 189,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "aa356f4b3666f74214497575fbf7eaeec3e0b291e2857b650c8135c148e12d89"
+    },
+    {
+      "country_key": "denmark",
+      "display_name_zh": "丹麦",
+      "display_name_en": "Denmark",
+      "current_feature_count": 98,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "22bdf89da07d876c9e173ba089d94b9ed9001e33ae2c00fe69e951dca40afce5"
+    },
+    {
+      "country_key": "djibouti",
+      "display_name_zh": "吉布提",
+      "display_name_en": "Djibouti",
+      "current_feature_count": 11,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "e46d8b68dc131a9ae85407925bbfb2cb6e7361e8af1a78bcd5d1270640f1f7a6"
+    },
+    {
+      "country_key": "dominica",
+      "display_name_zh": "多米尼克",
+      "display_name_en": "Dominica",
+      "current_feature_count": 10,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "f564b0e740b0509814eca07bc371e2081f7df6db0973a86c3834a4589e62e0bc"
+    },
+    {
+      "country_key": "dominicanrepublic",
+      "display_name_zh": "多米尼加共和国",
+      "display_name_en": "Dominican Republic",
+      "current_feature_count": 155,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "a930c63b5f4f7c1560954bb6b543d03d8cef82b958d8de525347301fd854872a"
+    },
+    {
+      "country_key": "easttimor",
+      "display_name_zh": "东帝汶",
+      "display_name_en": "East Timor",
+      "current_feature_count": 65,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "2ae70ae3bff31fbf152ead4fe058e369561219bf264aa921a837d8a32179f776"
+    },
+    {
+      "country_key": "ecuador",
+      "display_name_zh": "厄瓜多尔",
+      "display_name_en": "Ecuador",
+      "current_feature_count": 223,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "56de93b02990f5710ade531899ae8ff5f19f96743c5e5defaa86b609b9085704"
+    },
+    {
+      "country_key": "egypt",
+      "display_name_zh": "埃及",
+      "display_name_en": "Egypt",
+      "current_feature_count": 364,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "69b5735a593ab2162bf1711f1e3aafe11a2ae96d08bc49411354112e405c90c5"
+    },
+    {
+      "country_key": "elsalvador",
+      "display_name_zh": "萨尔瓦多",
+      "display_name_en": "El Salvador",
+      "current_feature_count": 272,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "0574481ac3c80837c4e81f5d7e2bc9db12ecb4fe6ee5a5073454d1542c408e44"
+    },
+    {
+      "country_key": "equatorialguinea",
+      "display_name_zh": "赤道几内亚",
+      "display_name_en": "Equatorial Guinea",
+      "current_feature_count": 25,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "966b1f2e27f33dfab836b12a8a9014b4888819bbc87503fa68da696692156767"
+    },
+    {
+      "country_key": "eritrea",
+      "display_name_zh": "厄立特里亚",
+      "display_name_en": "Eritrea",
+      "current_feature_count": 58,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "685260577fcb30f28dff80de6818529796c5ae7cb4b4878bbad1241c2ab55bae"
+    },
+    {
+      "country_key": "estonia",
+      "display_name_zh": "爱沙尼亚",
+      "display_name_en": "Estonia",
+      "current_feature_count": 214,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "a3e6505ab58dc219c199269ec7da666c6992550f37f4cdbed6ffff51b5879a97"
+    },
+    {
+      "country_key": "eswatini",
+      "display_name_zh": "斯威士兰",
+      "display_name_en": "eSwatini",
+      "current_feature_count": 53,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "b515eb923e9a6e43846b8165bb74321ef8b8dac13a280f8ee99f60dea694edd7"
+    },
+    {
+      "country_key": "ethiopia",
+      "display_name_zh": "埃塞俄比亚",
+      "display_name_en": "Ethiopia",
+      "current_feature_count": 74,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "335a5dd9da48624a077cb2743642eb3385a4c694d4f0362a65342697cfa16a94"
+    },
+    {
+      "country_key": "federatedsofmicronesia",
+      "display_name_zh": "密克罗尼西亚",
+      "display_name_en": "Federated States of Micronesia",
+      "current_feature_count": 31,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "30e13250dedfd2a6da32a831d15fe823d9687d2ce56f9cefe3e7c360b43e98d4"
+    },
+    {
+      "country_key": "fiji",
+      "display_name_zh": "斐济",
+      "display_name_en": "Fiji",
+      "current_feature_count": 15,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "ccc34e9aefbf274fc1130d6aaa6e7f24202f2000f51a0fd5f49580b277491cb0"
+    },
+    {
+      "country_key": "finland",
+      "display_name_zh": "芬兰",
+      "display_name_en": "Finland",
+      "current_feature_count": 70,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "5a76f956685db0ab42e795d306daf75f95466ec57160dc58be39f05fca544b3a"
+    },
+    {
+      "country_key": "france",
+      "display_name_zh": "法国",
+      "display_name_en": "France",
+      "current_feature_count": 96,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "df7a60f9b5b24f847f8407563b1bfe83fa9e163bbaf57aadd3a3917ae4dfdc5d"
+    },
+    {
+      "country_key": "gabon",
+      "display_name_zh": "加蓬",
+      "display_name_en": "Gabon",
+      "current_feature_count": 49,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "a8c0332665dd1f83abbb12140fb4fbad635b38823afac87d16a74e7ef5ff7bff"
+    },
+    {
+      "country_key": "gambia",
+      "display_name_zh": "冈比亚",
+      "display_name_en": "Gambia",
+      "current_feature_count": 48,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "0e6982d257c9e745b092ab0fcf785a1896a301df78115591a4c4b89e57073244"
+    },
+    {
+      "country_key": "georgia",
+      "display_name_zh": "格鲁吉亚",
+      "display_name_en": "Georgia",
+      "current_feature_count": 68,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "1cab2232d1aca60e450d5dc00d08a018c8bdeba348e0b1667e884d2adc61fa76"
+    },
+    {
+      "country_key": "germany",
+      "display_name_zh": "德国",
+      "display_name_en": "Germany",
+      "current_feature_count": 38,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "12bbadb3b4ccf9956f072b74131bcda19b59a506003f9748eb257001b9e20258"
+    },
+    {
+      "country_key": "ghana",
+      "display_name_zh": "加纳",
+      "display_name_en": "Ghana",
+      "current_feature_count": 260,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "dcba7d35adfe7e6f116a0ad507875b9d2a96c08f82e0f35016aaeac100736bcf"
+    },
+    {
+      "country_key": "greece",
+      "display_name_zh": "希腊",
+      "display_name_en": "Greece",
+      "current_feature_count": 14,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "730026900b5a94bc2928f52897bc995e4169f80d4ddb5e0d6fd2bd4eb53586a2"
+    },
+    {
+      "country_key": "greenland",
+      "display_name_zh": "格陵兰",
+      "display_name_en": "Greenland",
+      "current_feature_count": 6,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "2e96b47c6e64630c25ef89dd50cecae8d7ce1708453730af4d491376b3ba9443"
+    },
+    {
+      "country_key": "grenada",
+      "display_name_zh": "格林纳达",
+      "display_name_en": "Grenada",
+      "current_feature_count": 7,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "ecd85d31179bac4068727b94e4f97f11b2cb082eabefb5dbb7fee96b29af88d7"
+    },
+    {
+      "country_key": "guatemala",
+      "display_name_zh": "危地马拉",
+      "display_name_en": "Guatemala",
+      "current_feature_count": 342,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "ba384d28f7b1e049a8d68c35a3f81edcd0bb1457cf20290656c8e09be88dce32"
+    },
+    {
+      "country_key": "guinea",
+      "display_name_zh": "几内亚",
+      "display_name_en": "Guinea",
+      "current_feature_count": 34,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "64d53794ef60718abb5cbe8002f6223ec2ccdb903b33a2ca6346f338e8d5268c"
+    },
+    {
+      "country_key": "guineabissau",
+      "display_name_zh": "几内亚比绍",
+      "display_name_en": "Guinea-Bissau",
+      "current_feature_count": 39,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "8161136033ae1bd685c4147952820f36181e1cb053bec09d15fb8b12f1e61a6e"
+    },
+    {
+      "country_key": "guyana",
+      "display_name_zh": "圭亚那",
+      "display_name_en": "Guyana",
+      "current_feature_count": 26,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "8b9841ac3625a87c7f0ea3ec760f82458560366bd219d1a36a46aef97cd6ae71"
+    },
+    {
+      "country_key": "haiti",
+      "display_name_zh": "海地",
+      "display_name_en": "Haiti",
+      "current_feature_count": 42,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "c26742b1b538466ace198a089c284a8522d6db76f4e05df2b061a5cbadae64da"
+    },
+    {
+      "country_key": "honduras",
+      "display_name_zh": "洪都拉斯",
+      "display_name_en": "Honduras",
+      "current_feature_count": 298,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "7f6b57d4cc6fc36b1717cd5268460854f7801045bbee50cd98c7ec7b56a55042"
+    },
+    {
+      "country_key": "hungary",
+      "display_name_zh": "匈牙利",
+      "display_name_en": "Hungary",
+      "current_feature_count": 198,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "282837cb1c43fd70dde0f4493002d652be09abcc3300c50ec6d9c9e1970b95a1"
+    },
+    {
+      "country_key": "iceland",
+      "display_name_zh": "冰岛",
+      "display_name_en": "Iceland",
+      "current_feature_count": 73,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "104d1fec800d2385c8f49bdb85d16ca42ad62c5171ce24a1d2e365959c539bff"
+    },
+    {
+      "country_key": "india",
+      "display_name_zh": "印度",
+      "display_name_en": "India",
+      "current_feature_count": 735,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "16f56784ecdb834b838aaa58e423773f3c696c5260f5d05ffcd1d67f3f12221c"
+    },
+    {
+      "country_key": "indonesia",
+      "display_name_zh": "印度尼西亚",
+      "display_name_en": "Indonesia",
+      "current_feature_count": 518,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "eb9cc9cc874d863234352a2ece63896490b09721782b007a6247d0473fba774a"
+    },
+    {
+      "country_key": "iran",
+      "display_name_zh": "伊朗",
+      "display_name_en": "Iran",
+      "current_feature_count": 431,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "e352e5e4f317fe442d802c474741a08c3a511d3db91fdf200901b2601496a988"
+    },
+    {
+      "country_key": "iraq",
+      "display_name_zh": "伊拉克",
+      "display_name_en": "Iraq",
+      "current_feature_count": 101,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "718be7bbc88aa9dcd602e1313cd4c2aaaff610738ad5fee147e92313133a3bd9"
+    },
+    {
+      "country_key": "ireland",
+      "display_name_zh": "爱尔兰",
+      "display_name_en": "Ireland",
+      "current_feature_count": 166,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "5617765fad2ed791fce4be7d447513f1d4efbf9e27dbadd45601b626c65b317d"
+    },
+    {
+      "country_key": "israel",
+      "display_name_zh": "以色列",
+      "display_name_en": "Israel",
+      "current_feature_count": 15,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "568877dbc76db288f314edb890266aa9677ddf3ab8a9db1f31dafcc378fe8394"
+    },
+    {
+      "country_key": "italy",
+      "display_name_zh": "意大利",
+      "display_name_en": "Italy",
+      "current_feature_count": 20,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "9645b45688c4d7f3e753961136c80258d13d2e04594b387da77ea70f1a6c88ee"
+    },
+    {
+      "country_key": "ivorycoast",
+      "display_name_zh": "科特迪瓦",
+      "display_name_en": "Ivory Coast",
+      "current_feature_count": 33,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "38787bf2e48fa6833b1ff7f33598b2600fb9f997f46de50111dec83d99897de4"
+    },
+    {
+      "country_key": "jamaica",
+      "display_name_zh": "牙买加",
+      "display_name_en": "Jamaica",
+      "current_feature_count": 827,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "e70321c2a415dcf16eab6818bcd712f7abc55936fe631400336d8d4bf2df061c"
+    },
+    {
+      "country_key": "japan",
+      "display_name_zh": "日本",
+      "display_name_en": "Japan",
+      "current_feature_count": 1731,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "dd33ac0acf1aeae436ef477335252b0acd3810bf96d65ad6302a9aa6b3bf51c1"
+    },
+    {
+      "country_key": "jordan",
+      "display_name_zh": "约旦",
+      "display_name_en": "Jordan",
+      "current_feature_count": 52,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "ac230b0fc4161ca26c66684350e5582c967c2ab02e6df1fe79fa3a68d4087866"
+    },
+    {
+      "country_key": "kazakhstan",
+      "display_name_zh": "哈萨克斯坦",
+      "display_name_en": "Kazakhstan",
+      "current_feature_count": 174,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "01f32cd53a1aaab189e0000458bfdc0be7ab2541e998e804db77bb7eeab84df8"
+    },
+    {
+      "country_key": "kenya",
+      "display_name_zh": "肯尼亚",
+      "display_name_en": "Kenya",
+      "current_feature_count": 290,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "112d64ae2d6951b56edaad35b069da4f785cf4987e023cb36ce2bcf5eacc4ad4"
+    },
+    {
+      "country_key": "kiribati",
+      "display_name_zh": "基里巴斯",
+      "display_name_en": "Kiribati",
+      "current_feature_count": 23,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "48fc756d07e77b5e0364d744ddd306b8215aa19ec1cf7cb7ba4358fe3462bd13"
+    },
+    {
+      "country_key": "kosovo",
+      "display_name_zh": "科索沃",
+      "display_name_en": "Kosovo",
+      "current_feature_count": 38,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "4fec466595df69f467216b6f347af341861317e7df5765a7b1e1296ec1e5f920"
+    },
+    {
+      "country_key": "kuwait",
+      "display_name_zh": "科威特",
+      "display_name_en": "Kuwait",
+      "current_feature_count": 137,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "13fd79fba29483c5ecc181eb5c6c803d323fa66ceae14d70afff4cc93838671e"
+    },
+    {
+      "country_key": "kyrgyzstan",
+      "display_name_zh": "吉尔吉斯斯坦",
+      "display_name_en": "Kyrgyzstan",
+      "current_feature_count": 41,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "49ad053d1f29ca48234df21f599fd88af621291d19cc625f12907fbdcf4fae37"
+    },
+    {
+      "country_key": "laos",
+      "display_name_zh": "老挝",
+      "display_name_en": "Laos",
+      "current_feature_count": 148,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "e202a3edc3f2718296c08b33a0de049200bf533da51e94bc38d39e96406785b1"
+    },
+    {
+      "country_key": "latvia",
+      "display_name_zh": "拉脱维亚",
+      "display_name_en": "Latvia",
+      "current_feature_count": 589,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "45dae84cd02ebc49bd84f83724812ee77b95047409a7f88273666fea0d53ecc3"
+    },
+    {
+      "country_key": "lebanon",
+      "display_name_zh": "黎巴嫩",
+      "display_name_en": "Lebanon",
+      "current_feature_count": 26,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "f777304f96e8ae2966a1d6e7348881da7a26cc5fdae17dceaeb949bee3751a8f"
+    },
+    {
+      "country_key": "lesotho",
+      "display_name_zh": "莱索托",
+      "display_name_en": "Lesotho",
+      "current_feature_count": 78,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "feae54d9766df5273f12b5099435e443edd2efe6462c28c8d7031e4d0b051f7c"
+    },
+    {
+      "country_key": "liberia",
+      "display_name_zh": "利比里亚",
+      "display_name_en": "Liberia",
+      "current_feature_count": 136,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "f249395df2bedcec89cd0cdf04cb850c39a3542eb3341c268fa66719f352e144"
+    },
+    {
+      "country_key": "libya",
+      "display_name_zh": "利比亚",
+      "display_name_en": "Libya",
+      "current_feature_count": 22,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "0102f8fd95a2e2cf52ac04905cffe18f0bed9ceb9d9f81facca22946df2e4eb2"
+    },
+    {
+      "country_key": "liechtenstein",
+      "display_name_zh": "列支敦士登",
+      "display_name_en": "Liechtenstein",
+      "current_feature_count": 11,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "d8babf00c34df279fee257b187be7b08257d200f784e09fad9e5d171c87d656e"
+    },
+    {
+      "country_key": "lithuania",
+      "display_name_zh": "立陶宛",
+      "display_name_en": "Lithuania",
+      "current_feature_count": 60,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "d3241bce976a9627b46dd96f6db437a061b4b3fa6ce2cd8e7de5bbaa9e96cf83"
+    },
+    {
+      "country_key": "luxembourg",
+      "display_name_zh": "卢森堡",
+      "display_name_en": "Luxembourg",
+      "current_feature_count": 105,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "d303ae054010150a61fa84e9bbe562216dfdfd11da8ef00d89765c021ffd0c61"
+    },
+    {
+      "country_key": "madagascar",
+      "display_name_zh": "马达加斯加",
+      "display_name_en": "Madagascar",
+      "current_feature_count": 119,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "b769a879986fc6dad15d6be4517a9189fdf66fe7434515cbaab210cfede415de"
+    },
+    {
+      "country_key": "malawi",
+      "display_name_zh": "马拉维",
+      "display_name_en": "Malawi",
+      "current_feature_count": 28,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "7695e36136c406e04eb24973afd9b819b3d4a59e505c2d5f5b48067427df3d3f"
+    },
+    {
+      "country_key": "malaysia",
+      "display_name_zh": "马来西亚",
+      "display_name_en": "Malaysia",
+      "current_feature_count": 159,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "933777d46631a410b89b6ae2952026b63e8343e5882dc7152f00f4da5526115a"
+    },
+    {
+      "country_key": "maldives",
+      "display_name_zh": "马尔代夫",
+      "display_name_en": "Maldives",
+      "current_feature_count": 20,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "2cda3967d097f7ac0b25ea1de4101e6c9421b8272659c3ee90b7376f4638b66e"
+    },
+    {
+      "country_key": "mali",
+      "display_name_zh": "马里",
+      "display_name_en": "Mali",
+      "current_feature_count": 50,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "c8473671dc70af3084920c23209da4568a1d8c44fc361abe14ca05e2cebfd09a"
+    },
+    {
+      "country_key": "malta",
+      "display_name_zh": "马耳他",
+      "display_name_en": "Malta",
+      "current_feature_count": 68,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "24cf834fb62a75ab6de005aaa51d87db14b6787a22309015239a740792b986de"
+    },
+    {
+      "country_key": "marshallislands",
+      "display_name_zh": "马绍尔群岛",
+      "display_name_en": "Marshall Islands",
+      "current_feature_count": 22,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "43a7072cc6e2335f6ccfc97eba18ff603fb7b8809ed37ef41ba6324eb31543f3"
+    },
+    {
+      "country_key": "mauritania",
+      "display_name_zh": "毛里塔尼亚",
+      "display_name_en": "Mauritania",
+      "current_feature_count": 57,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "a65e6d8bb5b05ebbcdebdfc3b9094234d535504c67bf0ce472caf263360c28a0"
+    },
+    {
+      "country_key": "mauritius",
+      "display_name_zh": "毛里求斯",
+      "display_name_en": "Mauritius",
+      "current_feature_count": 12,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "f6cb10b0fabb31bd5b17b431ef8155cca395c2fc00f56619516005175f53b51b"
+    },
+    {
+      "country_key": "mexico",
+      "display_name_zh": "墨西哥",
+      "display_name_en": "Mexico",
+      "current_feature_count": 2457,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "9a6fc5da93a06eab83ffee23c25706c516ed3b0dd9ce287bbe21e47555c33c5f"
+    },
+    {
+      "country_key": "moldova",
+      "display_name_zh": "摩尔多瓦",
+      "display_name_en": "Moldova",
+      "current_feature_count": 37,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "5e2bdf56685f5fe43e8f55f700cc2afdcf1b06d6428380353aebdb70495ade3a"
+    },
+    {
+      "country_key": "monaco",
+      "display_name_zh": "摩纳哥",
+      "display_name_en": "Monaco",
+      "current_feature_count": 9,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "72a9f03fd72fe0451af6fbcadb07acfc679cb5f2faaef1a42e71347b570b4408"
+    },
+    {
+      "country_key": "mongolia",
+      "display_name_zh": "蒙古",
+      "display_name_en": "Mongolia",
+      "current_feature_count": 339,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "b0ed1dd353a2df572890f9686d33b1d341272faa3bd509d6d1926b48b480332f"
+    },
+    {
+      "country_key": "montenegro",
+      "display_name_zh": "黑山",
+      "display_name_en": "Montenegro",
+      "current_feature_count": 23,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "b55bb4fdd07d81f0491ffe2a71bd6d190aeb958b84dccbd0cf7855df96da23f8"
+    },
+    {
+      "country_key": "morocco",
+      "display_name_zh": "摩洛哥",
+      "display_name_en": "Morocco",
+      "current_feature_count": 72,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "1b218cf025ceb014886a6ad8bcbb3f3ce26c9619b9114d4b12582d370f3b8d5e"
+    },
+    {
+      "country_key": "mozambique",
+      "display_name_zh": "莫桑比克",
+      "display_name_en": "Mozambique",
+      "current_feature_count": 156,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "709b91ff6fb17d7a3f145ec64b2480e8ea258a5fe11e2c5148b36611ecdbec0a"
+    },
+    {
+      "country_key": "myanmar",
+      "display_name_zh": "缅甸",
+      "display_name_en": "Myanmar",
+      "current_feature_count": 74,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "f6581b19ba57c48ae4142484ea7780368f570b1b37f1cd72363f2febea811e9d"
+    },
+    {
+      "country_key": "namibia",
+      "display_name_zh": "纳米比亚",
+      "display_name_en": "Namibia",
+      "current_feature_count": 103,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "7b8ed62510060416e03304718cacfce4d658efdc04da9d471d8b94beff6fb59a"
+    },
+    {
+      "country_key": "nauru",
+      "display_name_zh": "瑙鲁",
+      "display_name_en": "Nauru",
+      "current_feature_count": 14,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "3156dcea4f0ac71e407a0bd4f700e41f4123e1d0153561dcb3f41ac78dc87876"
+    },
+    {
+      "country_key": "nepal",
+      "display_name_zh": "尼泊尔",
+      "display_name_en": "Nepal",
+      "current_feature_count": 75,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "dd7a6f89c88b21e32c747435d485a1c87c844affa6fd2d2526acac94aacc1f79"
+    },
+    {
+      "country_key": "netherlands",
+      "display_name_zh": "荷兰",
+      "display_name_en": "Netherlands",
+      "current_feature_count": 344,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "004b97dc48fc5fc0b27a944186bdddc0effba4741e0efc1beb0543c850e2f342"
+    },
+    {
+      "country_key": "newzealand",
+      "display_name_zh": "新西兰",
+      "display_name_en": "New Zealand",
+      "current_feature_count": 88,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "2e5e652d21b5b7c3e230d862d78d1d2864afd2880768aca46ac229d9bdabf004"
+    },
+    {
+      "country_key": "nicaragua",
+      "display_name_zh": "尼加拉瓜",
+      "display_name_en": "Nicaragua",
+      "current_feature_count": 153,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "85ffe55619087a16f31251e9c56feba6070cd6706a68bd2b75ba228eb7017950"
+    },
+    {
+      "country_key": "niger",
+      "display_name_zh": "尼日尔",
+      "display_name_en": "Niger",
+      "current_feature_count": 67,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "7ad00eb3d77e356b5846c399bd91f176bf45ba6c0046bbfcd4e4993f174f645a"
+    },
+    {
+      "country_key": "nigeria",
+      "display_name_zh": "尼日利亚",
+      "display_name_en": "Nigeria",
+      "current_feature_count": 774,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "f19f10597025756a0dd5c5e5fa141d321fa6b569247d5656851a616607b6bd0e"
+    },
+    {
+      "country_key": "northkorea",
+      "display_name_zh": "朝鲜",
+      "display_name_en": "North Korea",
+      "current_feature_count": 179,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "879b86165f93719f492acfedac360cd9a7e609bb141739dd608e5bf6075fef03"
+    },
+    {
+      "country_key": "northmacedonia",
+      "display_name_zh": "北马其顿",
+      "display_name_en": "North Macedonia",
+      "current_feature_count": 84,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "80c352e91561acd9ebd3264152947f33cd8a8d9f6a0e502e6bd946f94d9fd40e"
+    },
+    {
+      "country_key": "norway",
+      "display_name_zh": "挪威",
+      "display_name_en": "Norway",
+      "current_feature_count": 424,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "479f2affc6193a8a1d2f951cb35e47ac4f0caacfa0dde4558ec724d8b5a69772"
+    },
+    {
+      "country_key": "oman",
+      "display_name_zh": "阿曼",
+      "display_name_en": "Oman",
+      "current_feature_count": 61,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "4b939f76c9e46f09282f554982e1b0f64373302167b3a3c80688ec1d8c68af80"
+    },
+    {
+      "country_key": "pakistan",
+      "display_name_zh": "巴基斯坦",
+      "display_name_en": "Pakistan",
+      "current_feature_count": 126,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "119d901cdb5edd4af485ffb684615961deb28cde879efc6f5260a833bf32190e"
+    },
+    {
+      "country_key": "palau",
+      "display_name_zh": "帕劳",
+      "display_name_en": "Palau",
+      "current_feature_count": 77,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "d3a3de5f2c42f6d79530ea3e4b13aae2ad43887bd93ced973fb3a56e2dfbaa74"
+    },
+    {
+      "country_key": "panama",
+      "display_name_zh": "巴拿马",
+      "display_name_en": "Panama",
+      "current_feature_count": 75,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "8fa35c656b91915d87df3f90a6c7235caf2d6d2ebb9c5d183c1ed1387661c83a"
+    },
+    {
+      "country_key": "papuanewguinea",
+      "display_name_zh": "巴布亚新几内亚",
+      "display_name_en": "Papua New Guinea",
+      "current_feature_count": 87,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "f1050f9091f6c9a090292a33db59d60c213782368ad852f87eefe5fe71e398c1"
+    },
+    {
+      "country_key": "paraguay",
+      "display_name_zh": "巴拉圭",
+      "display_name_en": "Paraguay",
+      "current_feature_count": 247,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "5b6d83c85d90e9816935c633ea30fb9478940d7a9d0d71d1fbcf3e10a5a0d112"
+    },
+    {
+      "country_key": "peru",
+      "display_name_zh": "秘鲁",
+      "display_name_en": "Peru",
+      "current_feature_count": 196,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "74461ffdb58d110f6577dac55a4e83ab9a37d88c7dd116bd0de6a186f5990091"
+    },
+    {
+      "country_key": "philippines",
+      "display_name_zh": "菲律宾",
+      "display_name_en": "Philippines",
+      "current_feature_count": 86,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "700a98321038f3a57f604e2396166811bdb471c03af754c8aca0544b2e1874f3"
+    },
+    {
+      "country_key": "poland",
+      "display_name_zh": "波兰",
+      "display_name_en": "Poland",
+      "current_feature_count": 380,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "afce9a4547a7bc69b7e08fd75e18d57bea7931e39ac0497b9f8ae27d6b2e0912"
+    },
+    {
+      "country_key": "portugal",
+      "display_name_zh": "葡萄牙",
+      "display_name_en": "Portugal",
+      "current_feature_count": 311,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "a509fb236963ff11d3680ee2a7dff6194124fcbdcaa86cfbd1b5f1ba696252d0"
+    },
+    {
+      "country_key": "qatar",
+      "display_name_zh": "卡塔尔",
+      "display_name_en": "Qatar",
+      "current_feature_count": 79,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "cebfb71b7e42d1344771722f0c40c03f7b16c5078a0ea6f02e079fd262ef48d2"
+    },
+    {
+      "country_key": "republicofserbia",
+      "display_name_zh": "塞尔维亚",
+      "display_name_en": "Republic of Serbia",
+      "current_feature_count": 145,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "ce24b6e9153a0c0e8640a8d0d4cd4f320cccd18afca395d4450d628c17e9d853"
+    },
+    {
+      "country_key": "republicofthecongo",
+      "display_name_zh": "刚果布",
+      "display_name_en": "Republic of the Congo",
+      "current_feature_count": 46,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "5685c0c5b89bfd5a5b16c1510cdc32069e3b2baf411865b9b9ea029c197ea3dc"
+    },
+    {
+      "country_key": "romania",
+      "display_name_zh": "罗马尼亚",
+      "display_name_en": "Romania",
+      "current_feature_count": 3235,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "436cf79a881e1cc0fc77895b364b7bbc0db28e2b4a592e17ab5fa27525221631"
+    },
+    {
+      "country_key": "russia",
+      "display_name_zh": "俄罗斯",
+      "display_name_en": "Russia",
+      "current_feature_count": 2326,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "173a544edaead3454c1d3a6b9c9f4639a67897ee7e3d439ac7eea7eee47f1116"
+    },
+    {
+      "country_key": "rwanda",
+      "display_name_zh": "卢旺达",
+      "display_name_en": "Rwanda",
+      "current_feature_count": 30,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "eb5f92852e596602badf4cd08a31f3bc4bcbde92a7973a5d0d6443f62081b491"
+    },
+    {
+      "country_key": "saintkittsandnevis",
+      "display_name_zh": "圣基茨和尼维斯",
+      "display_name_en": "Saint Kitts and Nevis",
+      "current_feature_count": 14,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "fee9f376389dc1edcc74363ed688068fd94d2b461644ecd1c16234219bedc808"
+    },
+    {
+      "country_key": "saintlucia",
+      "display_name_zh": "圣卢西亚",
+      "display_name_en": "Saint Lucia",
+      "current_feature_count": 547,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "5dba3f14f64f2cf0a6cc5a5229672dd18c2bf10f5a9784aa609811c90163f3ed"
+    },
+    {
+      "country_key": "saintvincentandthegrenadines",
+      "display_name_zh": "圣文森特和格林纳丁斯",
+      "display_name_en": "Saint Vincent and the Grenadines",
+      "current_feature_count": 6,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "2bcc7385e687f73dc1deafd329f5c35f76a150d64f983e615235f9e79e1e87bf"
+    },
+    {
+      "country_key": "samoa",
+      "display_name_zh": "萨摩亚",
+      "display_name_en": "Samoa",
+      "current_feature_count": 43,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "8109917246906975fa87f396596ef71a5b11daeaa1fb4adf80348c1edce9bd2a"
+    },
+    {
+      "country_key": "sanmarino",
+      "display_name_zh": "圣马力诺",
+      "display_name_en": "San Marino",
+      "current_feature_count": 9,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "e48c1a47422b6959305beddde49474267be07f8413b72d1e5a6f1badc429b184"
+    },
+    {
+      "country_key": "saotomeandprincipe",
+      "display_name_zh": "圣多美和普林西比",
+      "display_name_en": "São Tomé and Principe",
+      "current_feature_count": 7,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "8227bff5869f4b0ecb5eddb4f33e6b9392f56333881abba3779ec0241e747f75"
+    },
+    {
+      "country_key": "saudiarabia",
+      "display_name_zh": "沙特阿拉伯",
+      "display_name_en": "Saudi Arabia",
+      "current_feature_count": 147,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "b54db49b73ef9fb72ba3c9ef81c0822ac9407d5784f89628451dcb93bc7fd88f"
+    },
+    {
+      "country_key": "senegal",
+      "display_name_zh": "塞内加尔",
+      "display_name_en": "Senegal",
+      "current_feature_count": 45,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "f8143f80eaa4768738892ec9317bbddb0dd86080aeddf56cef1ec355d077f1bd"
+    },
+    {
+      "country_key": "seychelles",
+      "display_name_zh": "塞舌尔",
+      "display_name_en": "Seychelles",
+      "current_feature_count": 8,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "e930790f28e2b2c5d0d17a161d3e6570f3167399a97c07df22593f8d37210474"
+    },
+    {
+      "country_key": "sierraleone",
+      "display_name_zh": "塞拉利昂",
+      "display_name_en": "Sierra Leone",
+      "current_feature_count": 14,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "102d2a15df6e73017fbfd3c5e36f588f450025c8fa99319ee68ad6b67983f431"
+    },
+    {
+      "country_key": "singapore",
+      "display_name_zh": "新加坡",
+      "display_name_en": "Singapore",
+      "current_feature_count": 55,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "f936fbf23b97d0b792ddcd1b4e102b1c88dcdac79390acd8ccbfdc6c47fde585"
+    },
+    {
+      "country_key": "slovakia",
+      "display_name_zh": "斯洛伐克",
+      "display_name_en": "Slovakia",
+      "current_feature_count": 79,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "4ca0525b39a1bee0bc83370973990de977b80aa11d1e7d8ef40781146a788e0e"
+    },
+    {
+      "country_key": "slovenia",
+      "display_name_zh": "斯洛文尼亚",
+      "display_name_en": "Slovenia",
+      "current_feature_count": 213,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "8f8f1a2b8cad22ed0cabf8a38d165d8264c971b582f6776b9ae849b990c46155"
+    },
+    {
+      "country_key": "solomonislands",
+      "display_name_zh": "所罗门群岛",
+      "display_name_en": "Solomon Islands",
+      "current_feature_count": 49,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "bfc55f0617c33230854a005089495c2959b19f1eb9bfef397da65e8f5330e165"
+    },
+    {
+      "country_key": "somalia",
+      "display_name_zh": "索马里",
+      "display_name_en": "Somalia",
+      "current_feature_count": 118,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "ef80ed5dd6d63c426fe8f612f65b35435236780df1794b25149c07aeaa995065"
+    },
+    {
+      "country_key": "southafrica",
+      "display_name_zh": "南非",
+      "display_name_en": "South Africa",
+      "current_feature_count": 52,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "91beb81a4d9a6eef4550c04ae647634b2729fea7594fbb1385356e5013af6745"
+    },
+    {
+      "country_key": "southkorea",
+      "display_name_zh": "韩国",
+      "display_name_en": "South Korea",
+      "current_feature_count": 228,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "fd792bbcf6f6918c0848970c18e7e2b8327006153b5e6b87736aac94426dd0c4"
+    },
+    {
+      "country_key": "southsudan",
+      "display_name_zh": "南苏丹",
+      "display_name_en": "South Sudan",
+      "current_feature_count": 78,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "98c4a10d26b375499ee797ea1b52d2090ba8d10ddb1fcf3bd91423eac0fb5192"
+    },
+    {
+      "country_key": "spain",
+      "display_name_zh": "西班牙",
+      "display_name_en": "Spain",
+      "current_feature_count": 52,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "72a9829f76cc3402ddcaee8c816d84167d45a70ffd868f08bddc9561231add6f"
+    },
+    {
+      "country_key": "srilanka",
+      "display_name_zh": "斯里兰卡",
+      "display_name_en": "Sri Lanka",
+      "current_feature_count": 25,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "81ee9a0c1610b6295089452628fd465c24aee904bb254f0da994d04642089819"
+    },
+    {
+      "country_key": "sudan",
+      "display_name_zh": "苏丹",
+      "display_name_en": "Sudan",
+      "current_feature_count": 189,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "03c790e68257d02f1064de39ec834c32efeeabcb36e030aa4bf9aeb9a876393c"
+    },
+    {
+      "country_key": "suriname",
+      "display_name_zh": "苏里南",
+      "display_name_en": "Suriname",
+      "current_feature_count": 58,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "b41d171972ec56759b26b920a669de7892dab18c84fdb04c393772f93db79470"
+    },
+    {
+      "country_key": "sweden",
+      "display_name_zh": "瑞典",
+      "display_name_en": "Sweden",
+      "current_feature_count": 290,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "2918c27485e43b4db26a8f1abf5ac81bf8c48c90dfcb06bb856dda2822ea7e89"
+    },
+    {
+      "country_key": "switzerland",
+      "display_name_zh": "瑞士",
+      "display_name_en": "Switzerland",
+      "current_feature_count": 169,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "7845eee4739dbb84aed7ccaa4bdf229271a41ca88d652c39a41a0c3c95f7f213"
+    },
+    {
+      "country_key": "syria",
+      "display_name_zh": "叙利亚",
+      "display_name_en": "Syria",
+      "current_feature_count": 61,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "cc6718c90223f6243071fede48b9a00ed9bed3d5d86a4959029246ab7ed75d11"
+    },
+    {
+      "country_key": "tajikistan",
+      "display_name_zh": "塔吉克斯坦",
+      "display_name_en": "Tajikistan",
+      "current_feature_count": 58,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "7b463ec06c6f4220cf1004f90e4bf4af17a136f5b24b47a7a58097af48799a2f"
+    },
+    {
+      "country_key": "thailand",
+      "display_name_zh": "泰国",
+      "display_name_en": "Thailand",
+      "current_feature_count": 928,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "4b3f67fce53555e7fdd40ec3f9e0b7c6104728e3d26c3278c835f617d55f25de"
+    },
+    {
+      "country_key": "thebahamas",
+      "display_name_zh": "巴哈马",
+      "display_name_en": "The Bahamas",
+      "current_feature_count": 32,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "5e16ce896a1295a1ab72f7f9cb07265fd1e439e5ad7d9801af25ce9da2ae3a25"
+    },
+    {
+      "country_key": "togo",
+      "display_name_zh": "多哥",
+      "display_name_en": "Togo",
+      "current_feature_count": 37,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "09d9896494f8ddb599c0886ca2f5f0ff231abdb711b677543a1806fbd698c741"
+    },
+    {
+      "country_key": "tonga",
+      "display_name_zh": "汤加",
+      "display_name_en": "Tonga",
+      "current_feature_count": 21,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "35b1633a4675d0f5362cab8fc6f8e1c355d3863deeff447651a3aa65b762fdc3"
+    },
+    {
+      "country_key": "trinidadandtobago",
+      "display_name_zh": "特立尼达和多巴哥",
+      "display_name_en": "Trinidad and Tobago",
+      "current_feature_count": 14,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "2bd8fd436716e42655b46d0ca0d9f5d7692b985789a2cda616ab811ef56d2d65"
+    },
+    {
+      "country_key": "tunisia",
+      "display_name_zh": "突尼斯",
+      "display_name_en": "Tunisia",
+      "current_feature_count": 264,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "cf429efbcefbf38ab274a80e068c4e2d3700ae2112df6b1138985924c6fc8a30"
+    },
+    {
+      "country_key": "turkey",
+      "display_name_zh": "土耳其",
+      "display_name_en": "Turkey",
+      "current_feature_count": 972,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "bfe5ec83621a201e8d1cbf66bb59711e53cfc89cefa28c1beeb798674b645fe9"
+    },
+    {
+      "country_key": "turkmenistan",
+      "display_name_zh": "土库曼斯坦",
+      "display_name_en": "Turkmenistan",
+      "current_feature_count": 59,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "db0bf6a926c40c60cb2d5346f7092411fe6271c8dc34164c974be1775b288f80"
+    },
+    {
+      "country_key": "tuvalu",
+      "display_name_zh": "图瓦卢",
+      "display_name_en": "Tuvalu",
+      "current_feature_count": 6,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "465888371cadb005f1c246f75fd7c308eff80d86bd59489aadd8f5d020c19ee0"
+    },
+    {
+      "country_key": "uganda",
+      "display_name_zh": "乌干达",
+      "display_name_en": "Uganda",
+      "current_feature_count": 151,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "a726c844c4dcbb4cf3acf7cde3491b8fa96cdd6b20d14c567b1e67e81838f11a"
+    },
+    {
+      "country_key": "ukraine",
+      "display_name_zh": "乌克兰",
+      "display_name_en": "Ukraine",
+      "current_feature_count": 494,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "c205da33d2f0efa526b4d47b2d76f9917df145256061d247af30ecd0a1106d08"
+    },
+    {
+      "country_key": "unitedarabemirates",
+      "display_name_zh": "阿拉伯联合酋长国",
+      "display_name_en": "United Arab Emirates",
+      "current_feature_count": 7,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "b3dbfe33af64ad8eaffc18211a5a00cfcd4e70fc444408605c19cf46b4677f3b"
+    },
+    {
+      "country_key": "unitedkingdom",
+      "display_name_zh": "英国",
+      "display_name_en": "United Kingdom",
+      "current_feature_count": 216,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "88a77a0a6d3b7f815729de3b1a101c6ef3edc3ac9e1dde6a717ee64dbf5afedc"
+    },
+    {
+      "country_key": "unitedrepublicoftanzania",
+      "display_name_zh": "坦桑尼亚",
+      "display_name_en": "United Republic of Tanzania",
+      "current_feature_count": 170,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "d89ee081455f16b8b5b72acbe5a37e59e383c8d83112467f592992f54343147f"
+    },
+    {
+      "country_key": "unitedsofamerica",
+      "display_name_zh": "美国",
+      "display_name_en": "United States of America",
+      "current_feature_count": 3231,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "3c935e905368241140046e613213535c1525046bfa57340b16c0789e1d937f01"
+    },
+    {
+      "country_key": "uruguay",
+      "display_name_zh": "乌拉圭",
+      "display_name_en": "Uruguay",
+      "current_feature_count": 124,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "74a52c13bbb1f8d4c00f942210800a760f6b2047cfbab4e2dc04d114fee836c3"
+    },
+    {
+      "country_key": "uzbekistan",
+      "display_name_zh": "乌兹别克斯坦",
+      "display_name_en": "Uzbekistan",
+      "current_feature_count": 198,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "1a44bcd925cd9abda455ed7303f11429317f7dc2a67eca71747ab195b855e0b6"
+    },
+    {
+      "country_key": "vanuatu",
+      "display_name_zh": "瓦努阿图",
+      "display_name_en": "Vanuatu",
+      "current_feature_count": 58,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "1120b3b997be1f7c5b0a4a8cedb7352057628ee891f888397f9d9ff8359635db"
+    },
+    {
+      "country_key": "venezuela",
+      "display_name_zh": "委内瑞拉",
+      "display_name_en": "Venezuela",
+      "current_feature_count": 335,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "aed2b066035a49a404f9132fc7d09fb997ba1e8e6dfb99721b11a8c38d2254f6"
+    },
+    {
+      "country_key": "vietnam",
+      "display_name_zh": "越南",
+      "display_name_en": "Vietnam",
+      "current_feature_count": 705,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "40e59b8cac7366ea97b7be87973f2b61660f1a2c9159e595d26271e548942501"
+    },
+    {
+      "country_key": "yemen",
+      "display_name_zh": "也门",
+      "display_name_en": "Yemen",
+      "current_feature_count": 335,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "875d798e17a5bef5c3b08c4d852ef4ff1f7a6d866fa3ce02d301954c55223d09"
+    },
+    {
+      "country_key": "zambia",
+      "display_name_zh": "赞比亚",
+      "display_name_en": "Zambia",
+      "current_feature_count": 116,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "5fa7e8a7bc8dbf526ebc7f64cbfedeb345ba496323ee9d313feb464ef1329cda"
+    },
+    {
+      "country_key": "zimbabwe",
+      "display_name_zh": "津巴布韦",
+      "display_name_en": "Zimbabwe",
+      "current_feature_count": 91,
+      "current_source_levels": ["CGAZ_ADM2"],
+      "feature_sha256": "147309f8f04f1a6128bee7c2abe48f2b12562c384ecbb6241bcb0f6a4ec2bb76"
+    }
+  ],
+  "protected_assets": {
+    "public/geo/render/world-admin1.geojson": "538dee46e2da4196b43df5fabbae265f101af6c010a4f4e000da1b9a26e625de",
+    "public/geo/render/china-provinces.geojson": "ce85f204a39b93739898f07270ecfa64de14cbb63b23a991bd7f5d07fa0b6e50",
+    "public/geo/render/china-cities.geojson": "8a746b688e0b0776d4525f6d9e212b24953d7dde60a886fc5718e073bc577169"
+  }
+}

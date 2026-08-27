@@ -39,6 +39,7 @@ export interface Icd11SankeyPath {
   biomarker: string
   biomarkerAliases: string[]
   weight: number
+  mappingRows: number
   share: number
   nodeIds: string[]
 }

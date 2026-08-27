@@ -1,0 +1,1173 @@
+{
+  "schema_version": 1,
+  "batch": "europe-caribbean",
+  "retrieved_at": "2026-08-27",
+  "scope": {
+    "country_key_count": 26,
+    "policy": "只研究本批 country_key；不修改现有边界、共享清单或共享构建脚本。ADM2 仅接受法定、官方统计或官方选举边界，并明确区分三者。",
+    "geojson_gate": "只有同时具备可重现且许可明确的 Polygon/MultiPolygon，以及逐要素可追溯的中文名时才生成 GeoJSON。"
+  },
+  "candidates": [
+    {
+      "country_key": "akrotirisovereignbasearea",
+      "display_name_local": "Akrotiri Sovereign Base Area",
+      "display_name_zh": "阿克罗蒂里英属基地区",
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "admin1": { "type": "sovereign base area", "count": 1, "names": ["Akrotiri"] },
+        "admin2": {
+          "exists": false,
+          "reason": "官方法规中的 village、station、married quarters 和 built-up area 是规划/设施范围，不是第二层地方政府。"
+        }
+      },
+      "geometry_source": {
+        "status": "not_applicable",
+        "source_ids": ["sba-built-up-areas"],
+        "reason": "不得把建成区指定伪装成 ADM2。"
+      },
+      "chinese_name_source": {
+        "country": "project-approved scope name",
+        "subdivision_coverage": "not_applicable"
+      },
+      "source_ids": ["sba-built-up-areas"],
+      "notes": ["保留现有实体边界；不新增内部线。"]
+    },
+    {
+      "country_key": "aland",
+      "display_name_local": "Åland",
+      "display_name_zh": "奥兰群岛",
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "municipality",
+          "count": 16,
+          "names": [
+            "Brändö",
+            "Eckerö",
+            "Finström",
+            "Föglö",
+            "Geta",
+            "Hammarland",
+            "Jomala",
+            "Kumlinge",
+            "Kökar",
+            "Lemland",
+            "Lumparland",
+            "Saltvik",
+            "Sottunga",
+            "Sund",
+            "Vårdö",
+            "Mariehamn"
+          ]
+        },
+        "admin2": {
+          "exists": false,
+          "reason": "市镇是唯一地方政府层；村庄和 Mariehamn stadsdelar 是住区/统计单位。"
+        }
+      },
+      "geometry_source": {
+        "status": "not_created",
+        "source_ids": ["aland-government-municipalities"],
+        "reason": "本批只补 ADM2；同时发现现有 ADM1 仅 11/16，需另立受控 ADM1 修复任务。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "CLDR 48 未提供这 16 个市镇的简体中文名"
+      },
+      "source_ids": ["aland-government-municipalities", "cldr-48-zh-territories"],
+      "notes": ["不得把 16 个市镇同时复制为 ADM1 和 ADM2。"]
+    },
+    {
+      "country_key": "northerncyprus",
+      "display_name_local": "Kuzey Kıbrıs",
+      "display_name_zh": "北塞浦路斯",
+      "status": "verified_de_facto_hierarchy_political_review",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "ilçe (district)",
+          "count": 6,
+          "names": ["Lefkoşa", "Gazimağusa", "Girne", "Güzelyurt", "Lefke", "İskele"]
+        },
+        "admin2": {
+          "exists": true,
+          "type": "bucak (subdistrict)",
+          "count": 11,
+          "units": [
+            { "parent": "Lefkoşa", "names": ["Lefkoşa", "Değirmenlik"] },
+            { "parent": "Gazimağusa", "names": ["Gazimağusa", "Geçitkale", "Akdoğan"] },
+            { "parent": "Girne", "names": ["Girne", "Çamlıbel"] },
+            { "parent": "Güzelyurt", "names": ["Güzelyurt"] },
+            { "parent": "Lefke", "names": ["Lefke"] },
+            { "parent": "İskele", "names": ["İskele", "Mehmetçik"] }
+          ],
+          "legal_character": "de facto civil administration"
+        }
+      },
+      "geometry_source": {
+        "status": "unresolved",
+        "source_ids": ["northern-cyprus-districts", "unficyp-political-status"],
+        "reason": "未找到同时具备主管机关精度、公开再分发许可和政治中立元数据的 6/11 边界。"
+      },
+      "chinese_name_source": {
+        "country": "project-approved neutral label",
+        "subdivision_coverage": "未找到 CLDR/中国官方的 11 个 bucak 中文名，禁止自动音译"
+      },
+      "source_ids": ["northern-cyprus-districts", "unficyp-political-status"],
+      "notes": ["集成时必须标注为事实管理范围，不得把数据呈现为主权承认。"]
+    },
+    {
+      "country_key": "dhekeliasovereignbasearea",
+      "display_name_local": "Dhekelia Sovereign Base Area",
+      "display_name_zh": "德凯利亚英属基地区",
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "admin1": { "type": "sovereign base area", "count": 1, "names": ["Dhekelia"] },
+        "admin2": {
+          "exists": false,
+          "reason": "官方 built-up areas 是设施/规划指定，不是民政二级区。"
+        }
+      },
+      "geometry_source": {
+        "status": "not_applicable",
+        "source_ids": ["sba-built-up-areas"],
+        "reason": "不导入 built-up area。"
+      },
+      "chinese_name_source": {
+        "country": "project-approved scope name",
+        "subdivision_coverage": "not_applicable"
+      },
+      "source_ids": ["sba-built-up-areas"],
+      "notes": ["保留现有实体边界。"]
+    },
+    {
+      "country_key": "faroeislands",
+      "display_name_local": "Føroyar",
+      "display_name_zh": "法罗群岛",
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "admin1": { "type": "municipality", "count": 29 },
+        "admin2": {
+          "exists": false,
+          "reason": "官方表列 towns/villages 作为市镇内住区，不是第二层地方政府。"
+        }
+      },
+      "geometry_source": {
+        "status": "not_created",
+        "source_ids": ["faroe-statistics-population"],
+        "reason": "住区没有覆盖全境且不是行政多边形。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "无官方中文市镇/村庄全表"
+      },
+      "source_ids": ["faroe-statistics-population", "cldr-48-zh-territories"],
+      "notes": ["现有 ADM1 只有 Eysturoy，属于另一个 ADM1 完整性问题。"]
+    },
+    {
+      "country_key": "vatican",
+      "display_name_local": "Stato della Città del Vaticano",
+      "display_name_zh": "梵蒂冈",
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "admin1": { "type": "none", "count": 0 },
+        "admin2": { "exists": false, "reason": "官方 Governorate 下设职能机关，未设领土行政分区。" }
+      },
+      "geometry_source": {
+        "status": "not_applicable",
+        "source_ids": ["vatican-government-structure"],
+        "reason": "不得以机关或建筑范围构造 ADM2。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "not_applicable"
+      },
+      "source_ids": ["vatican-government-structure", "cldr-48-zh-territories"],
+      "notes": ["应在界面显示“无下级行政区”，而不是复制国界。"]
+    },
+    {
+      "country_key": "guernsey",
+      "display_name_local": "Guernsey",
+      "display_name_zh": "根西岛",
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "parish on Guernsey island; separate island jurisdictions elsewhere in the Bailiwick",
+          "count": 10,
+          "names": [
+            "Castel",
+            "Forest",
+            "St. Andrew",
+            "St. Martin",
+            "St. Peter Port",
+            "St. Pierre du Bois",
+            "St. Sampson",
+            "St. Saviour",
+            "Torteval",
+            "Vale"
+          ]
+        },
+        "admin2": {
+          "exists": false,
+          "reason": "10 parishes 是根西岛地方层；Bailiwick 内 Alderney/Sark 采用不同制度，没有统一二层体系。"
+        }
+      },
+      "geometry_source": {
+        "status": "not_created",
+        "source_ids": ["guernsey-official-parishes"],
+        "reason": "官方 REST 仅确认 parish；服务元数据未授予再分发许可，且 country_key 范围与 Bailiwick 岛屿需先对齐。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "未找到 10 parish 的规范简体中文名"
+      },
+      "source_ids": ["guernsey-official-parishes", "cldr-48-zh-territories"],
+      "notes": ["现有 ADM1 只有 Sark，与官方根西岛 10 parish 不一致；不能在本 ADM2 批次顺带覆盖。"]
+    },
+    {
+      "country_key": "isleofman",
+      "display_name_local": "Isle of Man / Ellan Vannin",
+      "display_name_zh": "马恩岛",
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "local authority",
+          "count": 21,
+          "names": [
+            "Andreas",
+            "Arbory and Rushen",
+            "Ballaugh",
+            "Braddan",
+            "Bride",
+            "Castletown",
+            "Douglas",
+            "Garff",
+            "German",
+            "Jurby",
+            "Lezayre",
+            "Malew",
+            "Marown",
+            "Michael",
+            "Onchan",
+            "Patrick",
+            "Peel",
+            "Port Erin",
+            "Port St Mary",
+            "Ramsey",
+            "Santon"
+          ]
+        },
+        "admin2": {
+          "exists": false,
+          "reason": "当前地方政府为单层；wards/polling districts 不构成全岛统一的一般行政第二层。"
+        }
+      },
+      "geometry_source": {
+        "status": "licence_and_version_blocked",
+        "source_ids": ["iom-current-local-authorities", "iom-boundaries"],
+        "reason": "官方地图服务仍写 24 个旧地方当局，当前官网为 21 个；测绘数据另需许可。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "未找到 21 个地方当局的规范简体中文名"
+      },
+      "source_ids": ["iom-current-local-authorities", "iom-boundaries", "cldr-48-zh-territories"],
+      "notes": ["不可直接抓取 24 区旧服务后宣称是当前边界。"]
+    },
+    {
+      "country_key": "cyprusnomansarea",
+      "display_name_local": "United Nations Buffer Zone in Cyprus",
+      "display_name_zh": "塞浦路斯缓冲区",
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "admin1": { "type": "ceasefire buffer zone", "count": 0 },
+        "admin2": {
+          "exists": false,
+          "reason": "缓冲区由 UNFICYP 维持，Civil Use Areas 也不是地方行政区。"
+        }
+      },
+      "geometry_source": {
+        "status": "not_applicable",
+        "source_ids": ["unficyp-buffer-zone"],
+        "reason": "不得把联合国 sectors、permit areas 或村庄当 ADM2。"
+      },
+      "chinese_name_source": {
+        "country": "un-zh-buffer-zone",
+        "subdivision_coverage": "not_applicable"
+      },
+      "source_ids": ["unficyp-buffer-zone", "un-zh-buffer-zone"],
+      "notes": ["country_key 本身是特殊地图实体而非国家。"]
+    },
+    {
+      "country_key": "jersey",
+      "display_name_local": "Jersey / Jèrri",
+      "display_name_zh": "泽西岛",
+      "status": "verified_official_hierarchy",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "parish",
+          "count": 12,
+          "names": [
+            "Grouville",
+            "St Brelade",
+            "St Clement",
+            "St Helier",
+            "St John",
+            "St Lawrence",
+            "St Martin",
+            "St Mary",
+            "St Ouen",
+            "St Peter",
+            "St Saviour",
+            "Trinity"
+          ]
+        },
+        "admin2": {
+          "exists": true,
+          "type": "vingtaine; cueillette in St Ouen; canton for Vingtaine de la Ville",
+          "count": 56,
+          "name_record_source": "jersey-vingtaines",
+          "legal_character": "political/parish subdivision"
+        }
+      },
+      "geometry_source": {
+        "status": "licence_blocked",
+        "source_ids": ["jersey-boundaries"],
+        "reason": "官方多边形存在，但 Government of Jersey 声明独占版权并通过商业伙伴授权；未获得再分发许可。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "56 个法语/Jèrriais 单元无 CLDR/中国官方简体中文名；应保留原名并由人工地名审校，不自动翻译"
+      },
+      "source_ids": ["jersey-vingtaines", "jersey-boundaries", "cldr-48-zh-territories"],
+      "notes": ["开放 CSV 可复现名称/父级，但不能替代受版权保护的官方几何。"]
+    },
+    {
+      "country_key": "gibraltar",
+      "display_name_local": "Gibraltar",
+      "display_name_zh": "直布罗陀",
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "admin1": { "type": "single territory", "count": 0 },
+        "admin2": {
+          "exists": false,
+          "reason": "官方治理结构未设领土地方政府层级；住宅区和选区不应作为一般 ADM2。"
+        }
+      },
+      "geometry_source": {
+        "status": "not_applicable",
+        "source_ids": ["gibraltar-factsheet"],
+        "reason": "无官方 ADM2。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "not_applicable"
+      },
+      "source_ids": ["gibraltar-factsheet", "cldr-48-zh-territories"],
+      "notes": ["地图应显示无下级行政区。"]
+    },
+    {
+      "country_key": "aruba",
+      "display_name_local": "Aruba",
+      "display_name_zh": "阿鲁巴",
+      "status": "official_statistical_or_electoral_only",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "GAC statistical region",
+          "count": 8,
+          "names": [
+            "Noord/Tanki Leendert",
+            "Oranjestad West",
+            "Oranjestad East",
+            "Paradera",
+            "Santa Cruz",
+            "Savaneta",
+            "San Nicolas North",
+            "San Nicolas South"
+          ]
+        },
+        "admin2": {
+          "exists": false,
+          "statistical_proxy": { "type": "GAC zone", "count": 54 },
+          "reason": "GAC 是 CBS 地址/统计分类，不是一般地方行政区。"
+        }
+      },
+      "geometry_source": {
+        "status": "map_only_licence_unresolved",
+        "source_ids": ["aruba-gac-2025"],
+        "reason": "2025 官方数字地图可查看，但未找到可再分发矢量端点和许可。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "8/54 单元无规范简体中文表"
+      },
+      "source_ids": ["aruba-gac-2025", "cldr-48-zh-territories"],
+      "notes": ["如产品决定显示统计区，图例和元数据必须明确标“统计区”，不能标“省/市”。"]
+    },
+    {
+      "country_key": "anguilla",
+      "display_name_local": "Anguilla",
+      "display_name_zh": "安圭拉",
+      "status": "official_statistical_or_electoral_only",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "census district",
+          "count": 14,
+          "names": [
+            "West End including Long Bay",
+            "South Hill",
+            "Blowing Point",
+            "Sandy Ground",
+            "North Hill",
+            "George Hill",
+            "The Valley including Upper & South Valley",
+            "North Side",
+            "The Quarter including Rey Hill",
+            "Stoney Ground",
+            "The Farrington",
+            "Sandy Hill",
+            "East End",
+            "Island Harbour"
+          ]
+        },
+        "admin2": {
+          "exists": false,
+          "statistical_proxy": { "type": "enumeration district", "count": 54 },
+          "reason": "district/ED 用于人口普查；另有 7 个法定选区，但都不是一般行政二层。"
+        }
+      },
+      "geometry_source": {
+        "status": "official_map_only",
+        "source_ids": ["anguilla-census-districts"],
+        "reason": "找到统计表和官方选区地图，未找到许可明确的全量 ED 矢量。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "无 14/54 规范简体中文名录"
+      },
+      "source_ids": ["anguilla-census-districts", "cldr-48-zh-territories"],
+      "notes": ["现有 ADM1 已含 14 census districts；不得再次复制为 ADM2。"]
+    },
+    {
+      "country_key": "bermuda",
+      "display_name_local": "Bermuda",
+      "display_name_zh": "百慕大",
+      "status": "official_statistical_or_electoral_only",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "parish",
+          "count": 9,
+          "names": [
+            "Sandys",
+            "Southampton",
+            "Warwick",
+            "Paget",
+            "Pembroke",
+            "Devonshire",
+            "Smith's",
+            "Hamilton",
+            "St. George's"
+          ],
+          "topology_note": "City of Hamilton 和 Town of St. George 是嵌套 municipalities，不能与 9 parishes 作为同层非重叠面。"
+        },
+        "admin2": {
+          "exists": false,
+          "statistical_proxy": {
+            "type": "census district",
+            "count": 246,
+            "populated_count_reported_elsewhere": 245
+          },
+          "reason": "census districts 是官方统计区，不是一般行政区。"
+        }
+      },
+      "geometry_source": {
+        "status": "official_pdf_boundary_descriptions",
+        "source_ids": ["bermuda-census-districts"],
+        "reason": "官方提供 149.71 MB 地图/边界描述包，但未找到明确矢量许可；需先复核 246/245 差异。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "census district 仅编号且无规范中文"
+      },
+      "source_ids": ["bermuda-census-districts", "cldr-48-zh-territories"],
+      "notes": [
+        "现有 ADM1 把 9 parishes 与 2 municipalities 并列会产生嵌套重叠；集成前需另行纠正层级，不能在 ADM2 文件中掩盖。"
+      ]
+    },
+    {
+      "country_key": "puertorico",
+      "display_name_local": "Puerto Rico",
+      "display_name_zh": "波多黎各",
+      "status": "verified_official_hierarchy",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "municipio (county equivalent)",
+          "count": 78,
+          "legal_character": "highest-level legal subdivision"
+        },
+        "admin2": {
+          "exists": true,
+          "type": "barrio / barrio-pueblo (minor civil division)",
+          "legal_character": "primary legal division of municipio",
+          "current_tiger_2025_land_records": 901,
+          "historical_2010_published_count": 902,
+          "count_note": "2025 TIGERweb 查询另含 78 个 municipio subdivision not defined 水域记录，必须排除；901 与 2010 报告 902 的差异需在集成前按 GEOID 变更记录核对。"
+        }
+      },
+      "geometry_source": {
+        "status": "reproducible_public_domain_but_not_created",
+        "source_ids": ["us-census-tiger-2025"],
+        "reason": "TIGER/Line 可合法重现 78/901 多边形，但 979 个层级单元没有 CLDR/中国官方中文名，未通过逐要素中文门槛。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "0/78 municipios 与 0/901 barrios 获得 CLDR 48 中文名；禁止批量机器音译"
+      },
+      "source_ids": [
+        "us-census-tiger-2025",
+        "us-census-geography-glossary",
+        "cldr-48-zh-territories"
+      ],
+      "notes": [
+        "这是本批最成熟的法定几何源；下一步应先建立人工审校中文名表，再运行独立 TIGER 转换脚本。"
+      ]
+    },
+    {
+      "country_key": "saintmartin",
+      "display_name_local": "Saint-Martin",
+      "display_name_zh": "法属圣马丁",
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "single overseas collectivity / COG equivalent",
+          "count": 1,
+          "codes": ["97801"]
+        },
+        "admin2": {
+          "exists": false,
+          "reason": "2007 后为单一海外集体；quartiers/IRIS 不构成一般行政第二层。"
+        }
+      },
+      "geometry_source": {
+        "status": "not_applicable",
+        "source_ids": ["french-overseas-cog"],
+        "reason": "只有单一 COG 单元。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "not_applicable"
+      },
+      "source_ids": ["french-overseas-cog", "cldr-48-zh-territories"],
+      "notes": ["不要用旅游街区制造 ADM2。"]
+    },
+    {
+      "country_key": "usnavalbaseguantanamobay",
+      "display_name_local": "Naval Station Guantanamo Bay",
+      "display_name_zh": "关塔那摩湾美国海军基地",
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "admin1": { "type": "military installation", "count": 1 },
+        "admin2": {
+          "exists": false,
+          "reason": "tenant commands、housing areas、operational zones 是设施管理单元，不是民政行政区。"
+        }
+      },
+      "geometry_source": {
+        "status": "not_applicable",
+        "source_ids": ["us-navy-guantanamo"],
+        "reason": "不得把基地功能区作为 ADM2。"
+      },
+      "chinese_name_source": {
+        "country": "project-approved scope name; Chinese government documents also use 关塔那摩军事基地",
+        "subdivision_coverage": "not_applicable"
+      },
+      "source_ids": ["us-navy-guantanamo"],
+      "notes": ["country_key 是特殊设施实体，不是国家。"]
+    },
+    {
+      "country_key": "caymanislands",
+      "display_name_local": "Cayman Islands",
+      "display_name_zh": "开曼群岛",
+      "status": "official_statistical_or_electoral_only",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "district",
+          "count": 6,
+          "names": [
+            "George Town",
+            "West Bay",
+            "Bodden Town",
+            "North Side",
+            "East End",
+            "Sister Islands"
+          ]
+        },
+        "admin2": {
+          "exists": false,
+          "statistical_proxy": {
+            "type": "electoral district",
+            "coverage": "official but election-specific"
+          },
+          "reason": "未确认第二层一般行政区。"
+        }
+      },
+      "geometry_source": {
+        "status": "not_created",
+        "source_ids": ["cayman-districts"],
+        "reason": "统计公报核实名录，但未找到许可明确的官方区界矢量；选区不能默认替代 ADM2。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "6 district 无完整规范简体中文来源"
+      },
+      "source_ids": ["cayman-districts", "cldr-48-zh-territories"],
+      "notes": ["现有 ADM1 只有全境单面，属于另一个 ADM1 缺口。"]
+    },
+    {
+      "country_key": "curacao",
+      "display_name_local": "Curaçao / Kòrsou",
+      "display_name_zh": "库拉索",
+      "status": "official_statistical_or_electoral_only",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "CBS deelgebied",
+          "count": 5,
+          "names": [
+            "Bandabou",
+            "Westelijk Willemstad",
+            "Oostelijk Willemstad",
+            "Binnenstad",
+            "Bandariba"
+          ]
+        },
+        "admin2": {
+          "exists": false,
+          "statistical_proxy": { "type": "geozone", "count": 65, "nested_level": "neighbourhood" },
+          "reason": "CBS 明确将其用于人口普查和地理编码，不是地方政府层级。"
+        }
+      },
+      "geometry_source": {
+        "status": "viewer_only_licence_unresolved",
+        "source_ids": ["curacao-census-2023"],
+        "reason": "官方 viewer/表格可用，未找到许可明确的 GeoJSON 下载。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "5/65/社区级无规范简体中文名表"
+      },
+      "source_ids": ["curacao-census-2023", "cldr-48-zh-territories"],
+      "notes": ["如使用 geozone，必须在 UI 显示“统计区”。"]
+    },
+    {
+      "country_key": "unitedsvirginislands",
+      "display_name_local": "United States Virgin Islands",
+      "display_name_zh": "美属维尔京群岛",
+      "status": "verified_official_hierarchy",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "island / county equivalent",
+          "count": 3,
+          "units": [
+            { "code": "010", "name": "St. Croix" },
+            { "code": "020", "name": "St. John" },
+            { "code": "030", "name": "St. Thomas" }
+          ]
+        },
+        "admin2": {
+          "exists": true,
+          "type": "census subdistrict (legal minor civil division)",
+          "count": 20,
+          "units": [
+            {
+              "parent": "St. Croix",
+              "names": [
+                "Anna's Hope Village",
+                "Christiansted",
+                "East End",
+                "Frederiksted",
+                "Northcentral",
+                "Northwest",
+                "Sion Farm",
+                "Southcentral",
+                "Southwest"
+              ]
+            },
+            { "parent": "St. John", "names": ["Central", "Coral Bay", "Cruz Bay", "East End"] },
+            {
+              "parent": "St. Thomas",
+              "names": [
+                "Charlotte Amalie",
+                "East End",
+                "Northside",
+                "Southside",
+                "Tutu",
+                "Water Island",
+                "West End"
+              ]
+            }
+          ],
+          "exclusions": "排除 3 个 COUSUB=00000 的 territorial-water-only undefined records。"
+        }
+      },
+      "geometry_source": {
+        "status": "reproducible_public_domain_but_not_created",
+        "source_ids": ["usvi-tiger-cousub", "us-census-tiger-2025"],
+        "reason": "官方多边形和父级 GEOID 可重现，但 20 个 subdistrict 无 CLDR/中国官方简体中文名，未通过逐要素中文门槛。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "0/20；禁止自行把 Anna's Hope Village 等直译成中文"
+      },
+      "source_ids": [
+        "usvi-tiger-cousub",
+        "us-census-geography-glossary",
+        "us-census-tiger-2025",
+        "cldr-48-zh-territories"
+      ],
+      "notes": [
+        "现有 ADM1 的 Saint Croix/John/Thomas 可作为父级，但集成前必须用 GEOID 对齐并验证无重叠。"
+      ]
+    },
+    {
+      "country_key": "montserrat",
+      "display_name_local": "Montserrat",
+      "display_name_zh": "蒙特塞拉特",
+      "status": "official_statistical_or_electoral_only",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "parish",
+          "count": 3,
+          "names": ["Saint Anthony", "Saint George", "Saint Peter"]
+        },
+        "admin2": {
+          "exists": false,
+          "statistical_proxy": {
+            "type": "enumeration area / enumeration district",
+            "version_sensitive": true
+          },
+          "reason": "统计局发布至 2023 的 ED/EA 数据，但它们不是一般行政区且火山区变化使边界具有版本性。"
+        }
+      },
+      "geometry_source": {
+        "status": "unresolved",
+        "source_ids": ["montserrat-census"],
+        "reason": "有官方统计表，未找到 2023 许可明确的全岛 ED 矢量。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "无 ED/EA 规范简体中文名"
+      },
+      "source_ids": ["montserrat-census", "cldr-48-zh-territories"],
+      "notes": ["不得沿用 2001 的 20 ED 作为 2023 当前边界。"]
+    },
+    {
+      "country_key": "saintbarthelemy",
+      "display_name_local": "Saint-Barthélemy",
+      "display_name_zh": "圣巴泰勒米",
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "single overseas collectivity / COG equivalent",
+          "count": 1,
+          "codes": ["97701"]
+        },
+        "admin2": {
+          "exists": false,
+          "reason": "2007 后为单一海外集体；quartiers 不构成一般行政第二层。"
+        }
+      },
+      "geometry_source": {
+        "status": "not_applicable",
+        "source_ids": ["french-overseas-cog"],
+        "reason": "只有单一 COG 单元。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "not_applicable"
+      },
+      "source_ids": ["french-overseas-cog", "cldr-48-zh-territories"],
+      "notes": ["不导入 40 quartiers 作为 ADM2。"]
+    },
+    {
+      "country_key": "saintpierreandmiquelon",
+      "display_name_local": "Saint-Pierre-et-Miquelon",
+      "display_name_zh": "圣皮埃尔和密克隆群岛",
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "commune",
+          "count": 2,
+          "units": [
+            { "code": "97501", "name": "Miquelon-Langlade" },
+            { "code": "97502", "name": "Saint-Pierre" }
+          ]
+        },
+        "admin2": { "exists": false, "reason": "海外集体只含两个 communes，没有下一层一般行政区。" }
+      },
+      "geometry_source": {
+        "status": "not_applicable",
+        "source_ids": ["french-overseas-cog"],
+        "reason": "现有 ADM1 已表达两个 communes，不应复制到 ADM2。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "两个 commune 可保留法语原名，未找到规范简体中文个名"
+      },
+      "source_ids": ["french-overseas-cog", "cldr-48-zh-territories"],
+      "notes": ["地图应显示“无下级行政区”。"]
+    },
+    {
+      "country_key": "turksandcaicosislands",
+      "display_name_local": "Turks and Caicos Islands",
+      "display_name_zh": "特克斯和凯科斯群岛",
+      "status": "official_statistical_or_electoral_only",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "island district",
+          "count": 6,
+          "names": [
+            "Grand Turk",
+            "Salt Cay",
+            "South Caicos",
+            "Middle Caicos",
+            "North Caicos",
+            "Providenciales and West Caicos"
+          ]
+        },
+        "admin2": {
+          "exists": false,
+          "statistical_proxy": { "type": "census settlement / enumeration district" },
+          "reason": "统计局发布住区，选举办公室发布 10 个选区；都不是一般行政第二层。"
+        }
+      },
+      "geometry_source": {
+        "status": "unresolved",
+        "source_ids": ["tci-statistics"],
+        "reason": "未找到许可明确的现行 census settlement 全覆盖矢量。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "住区无规范简体中文全表"
+      },
+      "source_ids": ["tci-statistics", "cldr-48-zh-territories"],
+      "notes": ["现有 6 个 ADM1 可保留；不把 2026 electoral districts 当市县。"]
+    },
+    {
+      "country_key": "britishvirginislands",
+      "display_name_local": "Virgin Islands",
+      "display_name_zh": "英属维尔京群岛",
+      "status": "official_statistical_or_electoral_only",
+      "official_hierarchy": {
+        "admin1": { "type": "electoral district", "count": 9 },
+        "admin2": {
+          "exists": false,
+          "statistical_proxy": { "type": "polling division", "count": 18 },
+          "reason": "9/18 层级由 Elections Office 发布，仅服务选举，不是一般行政区。"
+        }
+      },
+      "geometry_source": {
+        "status": "approximate_map_only",
+        "source_ids": ["bvi-election-divisions"],
+        "reason": "官网明确称选区地图为 approximation，不能满足精确、无重叠法定 ADM2 要求。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "9/18 无规范简体中文名录"
+      },
+      "source_ids": ["bvi-election-divisions", "cldr-48-zh-territories"],
+      "notes": ["不得把近似选举边界投入精确行政底图。"]
+    },
+    {
+      "country_key": "sintmaarten",
+      "display_name_local": "Sint Maarten",
+      "display_name_zh": "荷属圣马丁",
+      "status": "official_statistical_or_electoral_only",
+      "official_hierarchy": {
+        "admin1": {
+          "type": "official statistical district (zone)",
+          "count": 8,
+          "names": [
+            "Cole Bay",
+            "Cul de Sac",
+            "Great Bay/Philipsburg",
+            "Little Bay",
+            "Lowlands",
+            "Lower Princess Quarter",
+            "Simpson Bay",
+            "Upper Princess Quarter"
+          ]
+        },
+        "admin2": {
+          "exists": false,
+          "statistical_proxy": {
+            "type": "enumeration district",
+            "count": 29,
+            "vintage": "2011 field system"
+          },
+          "reason": "8 zones 和 29 ED 均为 STAT 人口普查分区，不是一般行政区。"
+        }
+      },
+      "geometry_source": {
+        "status": "official_atlas_only",
+        "source_ids": ["sint-maarten-census-atlas"],
+        "reason": "2022 Atlas 可核对 8 zones；未发现许可明确的 29 ED 当前矢量。"
+      },
+      "chinese_name_source": {
+        "country": "cldr-48-zh-territories",
+        "subdivision_coverage": "8/29 无规范简体中文名；现有英文 Sint Maarten 应修正为 CLDR“荷属圣马丁”"
+      },
+      "source_ids": ["sint-maarten-census-atlas", "cldr-48-zh-territories"],
+      "notes": ["如果仅修国家名，可安全使用 CLDR；统计区是否显示需产品明确授权。"]
+    }
+  ],
+  "summary": {
+    "candidate_count": 26,
+    "verified_official_hierarchy_count": 3,
+    "verified_de_facto_hierarchy_political_review_count": 1,
+    "official_statistical_or_electoral_only_count": 9,
+    "no_official_adm2_count": 13,
+    "geojson_created": false,
+    "geojson_reason": "可公开重现的 TIGER 几何仅覆盖波多黎各和美属维尔京群岛，但缺少逐 ADM1/ADM2 的权威中文名；其他候选受许可、版本、政治表达或非行政性质限制。",
+    "ready_for_next_stage": ["puertorico", "unitedsvirginislands"],
+    "next_stage_gate": "先由人工地名专家建立可追溯中文名表；随后可用独立 europe-caribbean-* 脚本下载 2025 TIGER 并生成只含白名单 country_key 的 GeoJSON。"
+  },
+  "status_definitions": {
+    "verified_official_hierarchy": "已由主管机关确认国家/属地—一级区划—二级区划层级。",
+    "verified_de_facto_hierarchy_political_review": "存在事实管理层级，但政治地位和边界表达必须在集成前审查。",
+    "official_statistical_or_electoral_only": "存在完整官方统计或选举分区，但不是一般行政区，不得冒充法定 ADM2。",
+    "no_official_adm2": "主管机关资料只确认一层地方区划，或该实体本身不是可继续划分的民政辖区。"
+  },
+  "source_catalog": {
+    "cldr-48-zh-territories": {
+      "authority": "Unicode Consortium, Common Locale Data Repository",
+      "url": "https://raw.githubusercontent.com/unicode-org/cldr/release-48/common/main/zh.xml",
+      "retrieved_at": "2026-08-27",
+      "license": "Unicode License v3",
+      "version": "CLDR 48",
+      "usage": "ISO 3166 实体中文名；不覆盖本批 ADM1/ADM2 名称。"
+    },
+    "aland-government-municipalities": {
+      "authority": "Government of Åland",
+      "url": "https://www.regeringen.ax/sites/default/files/attachments/protocol/nr9-2024-plenum-rk1a.pdf",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated",
+      "version": "2024",
+      "usage": "确认奥兰分为 16 个市镇。"
+    },
+    "faroe-statistics-population": {
+      "authority": "Statistics Faroe Islands",
+      "url": "https://www.hagstova.fo/en/population/population/population",
+      "retrieved_at": "2026-08-27",
+      "license": "copyright stated; reuse terms not established",
+      "version": "June 2026 table",
+      "usage": "29 个市镇及其城镇/村庄名录；村庄不是第二层地方政府。"
+    },
+    "guernsey-official-parishes": {
+      "authority": "States of Guernsey / Guernsey Water official ArcGIS service",
+      "url": "https://gwonline.gov.gg/arcgis/rest/services/Basemapping/gwBaseMapTile2/MapServer/2",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated in service metadata",
+      "version": "live service queried 2026-08-27",
+      "usage": "确认根西岛 10 个 parish 名称和边界服务；不代表奥尔德尼、萨克存在同构层级。"
+    },
+    "iom-current-local-authorities": {
+      "authority": "Isle of Man Government Elections",
+      "url": "https://elections.gov.im/elections/local-authority-elections/",
+      "retrieved_at": "2026-08-27",
+      "license": "OGL applies to page content except where stated",
+      "version": "2025 local elections",
+      "usage": "确认当前 21 个地方当局。"
+    },
+    "iom-boundaries": {
+      "authority": "Isle of Man Government Mapping",
+      "url": "https://ppmaps.gov.im/manngispubserver/rest/services/CorporateDynamicServices/PPDemocracy/MapServer/1",
+      "retrieved_at": "2026-08-27",
+      "license": "separate mapping licence required",
+      "version": "service describes 24 pre-consolidation authorities",
+      "usage": "仅证明官方几何存在；数量已落后于 2025 的 21 个地方当局，不可直接导入。"
+    },
+    "jersey-vingtaines": {
+      "authority": "Government of Jersey Open Data",
+      "url": "https://opendata.gov.je/dataset/2021-census/resource/8a69b1b1-2675-44a1-93e4-a5b346959032",
+      "retrieved_at": "2026-08-27",
+      "license": "Open Government Licence – Jersey v1.0",
+      "version": "2021 Census; updated 2022-08-31",
+      "usage": "确认 12 parish 下 56 个 vingtaine/cueillette/canton 记录。"
+    },
+    "jersey-boundaries": {
+      "authority": "Government of Jersey Mapping Services",
+      "url": "https://www.gov.je/PlanningBuilding/JerseyMappingService/pages/digital.aspx",
+      "retrieved_at": "2026-08-27",
+      "license": "Government of Jersey sole copyright; commercial licence required",
+      "version": "current page",
+      "usage": "确认 parish 和 vingtaine 官方多边形存在，但未获可再分发许可。"
+    },
+    "vatican-government-structure": {
+      "authority": "Governorate of Vatican City State",
+      "url": "https://www.vaticanstate.va/en/state-and-government/structure-of-the-government/governatorate.html",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated",
+      "version": "page dated 2024-06-25",
+      "usage": "政府结构是职能机关而非领土行政分区。"
+    },
+    "gibraltar-factsheet": {
+      "authority": "HM Government of Gibraltar",
+      "url": "https://www.gibraltar.gov.gi/press/gibraltar-fact-sheets",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated",
+      "version": "current page",
+      "usage": "确认直布罗陀为单一自治辖区；未公布次级地方政府层级。"
+    },
+    "sba-built-up-areas": {
+      "authority": "Sovereign Base Areas Administration",
+      "url": "https://www.sbaadministration.org/home/legislation/01_02_09_06_PIs/01_02_09_06_49_PI_2008/20080101_PI-41_u.pdf",
+      "retrieved_at": "2026-08-27",
+      "license": "official legislation; reuse terms not stated",
+      "version": "Public Instrument 41 of 2008",
+      "usage": "列出 Akrotiri/Dhekelia built-up areas；这些是规划/建成区指定，不是 ADM2。"
+    },
+    "unficyp-buffer-zone": {
+      "authority": "United Nations Peacekeeping Force in Cyprus",
+      "url": "https://unficyp.unmissions.org/en/about-buffer-zone",
+      "retrieved_at": "2026-08-27",
+      "license": "United Nations website terms; no boundary redistribution grant identified",
+      "version": "updated 2025-11-22",
+      "usage": "确认缓冲区是联合国控制的停火安排，不是国家或地方行政区。"
+    },
+    "un-zh-buffer-zone": {
+      "authority": "United Nations Peacekeeping Chinese site",
+      "url": "https://peacekeeping.un.org/zh/factsheet/unficyp",
+      "retrieved_at": "2026-08-27",
+      "license": "United Nations website terms",
+      "version": "current page",
+      "usage": "确认中文用语“缓冲区”。"
+    },
+    "northern-cyprus-districts": {
+      "authority": "Turkish Cypriot administration, Ministry of Interior",
+      "url": "https://icisleri.gov.ct.tr/BAKANLIK/Kaymakamlıklar",
+      "retrieved_at": "2026-08-27",
+      "license": "copyright; no reuse licence stated",
+      "version": "live page 2026",
+      "usage": "事实管理资料确认 6 ilçe 和 11 bucak；不表示对政治地位或主权主张的认可。"
+    },
+    "unficyp-political-status": {
+      "authority": "United Nations Peacekeeping Force in Cyprus",
+      "url": "https://unficyp.unmissions.org/en/operations-1974",
+      "retrieved_at": "2026-08-27",
+      "license": "United Nations website terms",
+      "version": "updated 2025",
+      "usage": "记录联合国对 1983 年单方面宣布的政治地位表述，供边界集成审查。"
+    },
+    "aruba-gac-2025": {
+      "authority": "Central Bureau of Statistics Aruba",
+      "url": "https://cbs.aw/wp/index.php/category/environment-space/",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated for downloadable map",
+      "version": "GAC 2025, published 2025-01-14",
+      "usage": "官方统计地址分类：8 regions → 54 zones；不是地方政府区划。"
+    },
+    "anguilla-census-districts": {
+      "authority": "Anguilla Statistics Department",
+      "url": "https://statistics.gov.ai/PublishedDocuments/1.3.0.0%20The%20Fabric%20of%20our%20Households%2C%202015.pdf",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated",
+      "version": "2011 Population and Housing Census",
+      "usage": "14 个统计 district 及 54 个 enumeration district 编号。"
+    },
+    "bermuda-census-districts": {
+      "authority": "Government of Bermuda, Department of Statistics",
+      "url": "https://www.gov.bm/bermuda-census",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated for map package",
+      "version": "2016 Census",
+      "usage": "9 parishes、2 embedded municipalities，以及 246 个 census districts；统计区不是一般行政区。"
+    },
+    "french-overseas-cog": {
+      "authority": "Institut national de la statistique et des études économiques (INSEE)",
+      "url": "https://www.insee.fr/fr/information/7929495",
+      "retrieved_at": "2026-08-27",
+      "license": "Licence Ouverte 2.0 for INSEE open data; page terms apply",
+      "version": "updated 2025-03-04",
+      "usage": "确认 Saint-Barthélemy 97701、Saint-Martin 97801 各为单一单位，Saint-Pierre-et-Miquelon 仅含 2 communes。"
+    },
+    "us-census-tiger-2025": {
+      "authority": "U.S. Census Bureau, Geography Division",
+      "url": "https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html",
+      "retrieved_at": "2026-08-27",
+      "license": "United States Government work; public domain under 17 U.S.C. §105; attribution requested",
+      "version": "2025 TIGER/Line, legal boundaries as of 2025-01-01",
+      "usage": "波多黎各 municipio/barrio 与美属维尔京群岛 county/subdistrict 官方法定边界。"
+    },
+    "us-census-geography-glossary": {
+      "authority": "U.S. Census Bureau",
+      "url": "https://www.census.gov/programs-surveys/geography/about/glossary.html",
+      "retrieved_at": "2026-08-27",
+      "license": "United States Government work; public domain",
+      "version": "current 2026 page",
+      "usage": "确认 USVI census subdistrict 是 legal subdivisions；Puerto Rico barrio 是 legal MCD。"
+    },
+    "us-navy-guantanamo": {
+      "authority": "U.S. Navy, Commander Navy Installations Command",
+      "url": "https://cnrse.cnic.navy.mil/Installations/NS-Guantanamo-Bay/",
+      "retrieved_at": "2026-08-27",
+      "license": "United States Government work; logos excluded",
+      "version": "current page",
+      "usage": "确认该 country_key 实际为单一军事设施，不是民政辖区。"
+    },
+    "cayman-districts": {
+      "authority": "Cayman Islands Economics and Statistics Office",
+      "url": "https://www.gov.ky/content/published/api/v1.1/assets/CONT84ACEE0B217045D098A3A83E9226CD52/native/The%2BCayman%2BIslands%27%2BCompendium%2Bof%2BStatistics%2B2021.pdf",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated",
+      "version": "Compendium of Statistics 2021",
+      "usage": "6 个统计/行政 district；其下边界为选区用途。"
+    },
+    "curacao-census-2023": {
+      "authority": "Central Bureau of Statistics Curaçao",
+      "url": "https://www.cbs.cw/geozone-and-neighborhood-information-census-2023",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated",
+      "version": "Census 2023",
+      "usage": "5 deelgebieden → 65 geozones → neighbourhoods 的统计层级。"
+    },
+    "usvi-tiger-cousub": {
+      "authority": "U.S. Census Bureau TIGERweb",
+      "url": "https://tigerweb.geo.census.gov/tigerwebmain/Files/bas25/tigerweb_bas25_cousub_vi.html",
+      "retrieved_at": "2026-08-27",
+      "license": "United States Government work; public domain",
+      "version": "BAS25, data as of 2024-11-30",
+      "usage": "3 island/county equivalents 下 20 个 land subdistrict；另有 3 个 water-only undefined 记录应排除。"
+    },
+    "montserrat-census": {
+      "authority": "Statistics Department Montserrat",
+      "url": "https://statistics.gov.ms/subjects/social-and-demographic-statistics/population-and-demography/",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated",
+      "version": "tables through 2023 Census",
+      "usage": "3 parishes 下存在 enumeration areas/districts，仅为统计分区。"
+    },
+    "tci-statistics": {
+      "authority": "Turks and Caicos Islands Statistics Authority",
+      "url": "https://www.dmhsd.gov.tc/stats/",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated",
+      "version": "current portal; 2012/2022 census resources",
+      "usage": "6 岛群 district 和 census settlements；未发现一般行政 ADM2。"
+    },
+    "bvi-election-divisions": {
+      "authority": "Government of the Virgin Islands, Elections Office",
+      "url": "https://bvi.gov.vg/elections",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated",
+      "version": "2025 revised voters list",
+      "usage": "9 electoral districts 下 18 polling divisions，仅限选举用途。"
+    },
+    "sint-maarten-census-atlas": {
+      "authority": "Sint Maarten Department of Statistics",
+      "url": "https://stats.sintmaartengov.org/download.php?nummer=18&section=CEN&type=rep",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated",
+      "version": "Census Atlas 2022",
+      "usage": "8 个 official statistical districts；2011 field system had 29 enumeration districts。"
+    }
+  }
+}

@@ -1,0 +1,826 @@
+{
+  "schema_version": 1,
+  "batch": {
+    "id": "pacific-polar",
+    "title_zh": "太平洋、南大西洋、印度洋与极地国家—省州—市县区研究",
+    "retrieved_at": "2026-08-27",
+    "country_keys": [
+      "northernmarianaislands",
+      "frenchpolynesia",
+      "guam",
+      "cookislands",
+      "unitedsminoroutlyingislands",
+      "americansamoa",
+      "niue",
+      "norfolkisland",
+      "pitcairnislands",
+      "coralseaislands",
+      "wallisandfutuna",
+      "newcaledonia",
+      "ashmoreandcartierislands",
+      "frenchsouthernandantarcticlands",
+      "falklandislands",
+      "heardislandandmcdonaldislands",
+      "antarctica",
+      "southgeorgiaandtheislands",
+      "sainthelena",
+      "indianoceanterritories",
+      "britishindianoceanterritory"
+    ],
+    "status_counts": {
+      "official_adm2_available": 5,
+      "official_adm2_partial": 1,
+      "no_official_adm2": 15
+    },
+    "scope_rule_zh": "只研究列出的 country_key；不修改已有其他国家、共享构建脚本或共享名称表。",
+    "classification_rule_zh": "ADM2 指位于正式 ADM1 之下、有真实不重叠边界的法定或官方统计市县区同层级。只有一层地方区划、无常住人口或官方不设下级的实体标记 no_official_adm2，不虚构边界。"
+  },
+  "sources": [
+    {
+      "id": "unicode-cldr-48-zh-territories",
+      "authority": "Unicode Consortium",
+      "title": "CLDR 48 Chinese territory names",
+      "url": "https://raw.githubusercontent.com/unicode-org/cldr-json/48.0.0/cldr-json/cldr-localenames-full/main/zh/territories.json",
+      "retrieved_at": "2026-08-27",
+      "license": "Unicode License v3",
+      "version": "48.0.0",
+      "usage": "country-name-zh"
+    },
+    {
+      "id": "existing-geoboundaries-cgaz-adm2",
+      "authority": "William & Mary geoLab / geoBoundaries",
+      "title": "geoBoundaries CGAZ ADM2 source used by the existing preview",
+      "url": "https://github.com/wmgeolab/geoBoundaries/raw/5c25134028196d43ce97b5071934fd0cfc92f09f/releaseData/CGAZ/geoBoundariesCGAZ_ADM2.zip",
+      "retrieved_at": "2026-08-27",
+      "license": "CC BY 4.0",
+      "version": "5c25134028196d43ce97b5071934fd0cfc92f09f",
+      "sha256": "598f6c70893d60a35b96eb0dc31fd1c045e69177e4b8203407710306f6585de1",
+      "usage": "existing-data-audit-only"
+    },
+    {
+      "id": "us-census-2020-iac-dhc-geography",
+      "authority": "United States Census Bureau",
+      "title": "2020 Island Areas Censuses DHC and Demographic Profile Technical Documentation",
+      "url": "https://www2.census.gov/programs-surveys/decennial/2020/technical-documentation/complete-tech-docs/demographic-and-housing-characteristics-file-and-demographic-profile/2020census-demographic-and-housing-characteristics-file-and-demographic-profile-techdoc.pdf",
+      "retrieved_at": "2026-08-27",
+      "license": "U.S. federal government work; public domain",
+      "version": "2020 Census, issued 2023",
+      "usage": "official-hierarchy"
+    },
+    {
+      "id": "us-census-tiger-2020-as-cousub",
+      "authority": "United States Census Bureau",
+      "title": "2020 TIGER/Line American Samoa county subdivisions",
+      "url": "https://www2.census.gov/geo/tiger/TIGER2020/COUSUB/tl_2020_60_cousub.zip",
+      "retrieved_at": "2026-08-27",
+      "license": "U.S. federal government work; public domain",
+      "version": "2020",
+      "sha256": "8dbd2da4dc77649c061bc665bd05f75661467273c23cce4e17fad7e0f73d0ecf",
+      "usage": "candidate-geometry"
+    },
+    {
+      "id": "us-census-tiger-2020-gu-cousub",
+      "authority": "United States Census Bureau",
+      "title": "2020 TIGER/Line Guam county subdivisions",
+      "url": "https://www2.census.gov/geo/tiger/TIGER2020/COUSUB/tl_2020_66_cousub.zip",
+      "retrieved_at": "2026-08-27",
+      "license": "U.S. federal government work; public domain",
+      "version": "2020",
+      "sha256": "47522fc395247e22cae807122fe459224f60ee4eb475ba37026d25b2f63bb2b5",
+      "usage": "candidate-geometry"
+    },
+    {
+      "id": "us-census-tiger-2020-mp-cousub",
+      "authority": "United States Census Bureau",
+      "title": "2020 TIGER/Line Northern Mariana Islands county subdivisions",
+      "url": "https://www2.census.gov/geo/tiger/TIGER2020/COUSUB/tl_2020_69_cousub.zip",
+      "retrieved_at": "2026-08-27",
+      "license": "U.S. federal government work; public domain",
+      "version": "2020",
+      "sha256": "2065ab34369cda4208b9ec06d9b5ab135da959a776cdb86cf10495a2073f773a",
+      "usage": "candidate-geometry"
+    },
+    {
+      "id": "insee-overseas-codification-2026",
+      "authority": "Institut national de la statistique et des études économiques (INSEE)",
+      "title": "Codification des collectivités et territoires français d’outre-mer",
+      "url": "https://www.insee.fr/fr/information/7929495",
+      "retrieved_at": "2026-08-27",
+      "license": "Licence Ouverte / Open Licence 2.0",
+      "version": "page current on 2026-08-27",
+      "usage": "official-hierarchy"
+    },
+    {
+      "id": "pf-cadastre-admin-geography-2022",
+      "authority": "Section Cadastre-Topographie de la Polynésie française",
+      "title": "Géographie administrative de la Polynésie-française",
+      "url": "https://www.data.gouv.fr/datasets/geographie-administrative-de-la-polynesie-francaise/",
+      "retrieved_at": "2026-08-27",
+      "license": "CC BY",
+      "version": "2022-02-28",
+      "resource_url": "https://static.data.gouv.fr/resources/geographie-administrative-de-la-polynesie-francaise/20220228-205331/loc-commune-associee.zip",
+      "resource_sha1": "0df3bbb5d384060e557a394a7eb6113bd566adef",
+      "usage": "candidate-geometry"
+    },
+    {
+      "id": "nc-government-provinces",
+      "authority": "Gouvernement de la Nouvelle-Calédonie",
+      "title": "Les provinces",
+      "url": "https://gouv.nc/gouvernement-et-institutions-les-autres-institutions/les-provinces",
+      "retrieved_at": "2026-08-27",
+      "license": "official-page; research-only",
+      "version": "page current on 2026-08-27",
+      "usage": "official-hierarchy"
+    },
+    {
+      "id": "nc-communes-boundaries-2024",
+      "authority": "Gouvernement de la Nouvelle-Calédonie",
+      "title": "Communes de la Nouvelle-Calédonie (limites communales terrestres simplifiées)",
+      "url": "https://data.gouv.nc/explore/dataset/communes-nc-limites-terrestres-simplifiees/",
+      "retrieved_at": "2026-08-27",
+      "license": "Licence Ouverte 2.0",
+      "version": "data processed 2024-12-06",
+      "resource_url": "https://data.gouv.nc/api/explore/v2.1/catalog/datasets/communes-nc-limites-terrestres-simplifiees/exports/geojson?lang=fr&timezone=Pacific%2FNoumea",
+      "usage": "candidate-geometry"
+    },
+    {
+      "id": "cook-islands-island-government-act-2012",
+      "authority": "Parliament of the Cook Islands",
+      "title": "Island Government Act 2012-13",
+      "url": "https://parliament.gov.ck/wp-content/uploads/2022/06/Island-Govt-No.-20-1.pdf",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated; research-only",
+      "version": "2012-13 No. 20",
+      "usage": "official-hierarchy"
+    },
+    {
+      "id": "cook-islands-census-2021",
+      "authority": "Cook Islands Statistics Office",
+      "title": "Census of Population and Dwellings 2021",
+      "url": "https://stats.gov.ck/download/83/census-2021/1497/2021-census-report-with-tables-and-questionnaire.pdf",
+      "retrieved_at": "2026-08-27",
+      "license": "partial reproduction for scientific, educational or research use with attribution; no boundary reuse grant",
+      "version": "updated 2023-07-05",
+      "usage": "official-hierarchy-and-statistics-only"
+    },
+    {
+      "id": "niue-laws-2022-consolidation",
+      "authority": "Government of Niue",
+      "title": "Niue Laws, including 14 village constituencies",
+      "url": "https://www.gov.nu/media/pages/information/e9850be131-1764012770/niue_laws_vol3_ul2022.pdf",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated; research-only",
+      "version": "2022 consolidation",
+      "usage": "official-hierarchy"
+    },
+    {
+      "id": "australia-norfolk-governance",
+      "authority": "Australian Government, Department of Infrastructure, Transport, Regional Development, Communications, Sport and the Arts",
+      "title": "Norfolk Island governance and administration",
+      "url": "https://www.infrastructure.gov.au/territories-regions-cities/territories/norfolk-island/governance-administration",
+      "retrieved_at": "2026-08-27",
+      "license": "Commonwealth website material; research-only for this audit",
+      "version": "page current on 2026-08-27",
+      "usage": "official-hierarchy"
+    },
+    {
+      "id": "australia-ashmore-cartier",
+      "authority": "Australian Government, Department of Infrastructure, Transport, Regional Development, Communications, Sport and the Arts",
+      "title": "Ashmore and Cartier Islands",
+      "url": "https://www.infrastructure.gov.au/territories-regions/territories/ashmore-and-cartier-islands",
+      "retrieved_at": "2026-08-27",
+      "license": "Commonwealth website material; research-only for this audit",
+      "version": "page current on 2026-08-27",
+      "usage": "official-hierarchy"
+    },
+    {
+      "id": "australia-coral-sea-islands",
+      "authority": "Australian Government, Department of Infrastructure, Transport, Regional Development, Communications, Sport and the Arts",
+      "title": "Coral Sea Islands",
+      "url": "https://www.infrastructure.gov.au/territories-regions/territories/coral-sea-islands",
+      "retrieved_at": "2026-08-27",
+      "license": "Commonwealth website material; research-only for this audit",
+      "version": "page current on 2026-08-27",
+      "usage": "official-hierarchy"
+    },
+    {
+      "id": "australia-himi-territory",
+      "authority": "Australian Antarctic Division",
+      "title": "The territory of Heard Island and McDonald Islands",
+      "url": "https://www.antarctica.gov.au/about-antarctica/australia-in-antarctica/the-territory-of-heard-island-and-mcdonald-islands/",
+      "retrieved_at": "2026-08-27",
+      "license": "Commonwealth website material; research-only for this audit",
+      "version": "updated 2026-06-26",
+      "usage": "official-hierarchy"
+    },
+    {
+      "id": "australia-indian-ocean-territories",
+      "authority": "Australian Government, Department of Infrastructure, Transport, Regional Development, Communications, Sport and the Arts",
+      "title": "Indian Ocean Territories of Christmas Island and Cocos (Keeling) Islands",
+      "url": "https://www.infrastructure.gov.au/territories-regions/territories/indian-ocean-territories-christmas-island-and-cocos-keeling-islands",
+      "retrieved_at": "2026-08-27",
+      "license": "Commonwealth website material; research-only for this audit",
+      "version": "page current on 2026-08-27",
+      "usage": "official-hierarchy"
+    },
+    {
+      "id": "taaf-official-presentation",
+      "authority": "Terres australes et antarctiques françaises (TAAF)",
+      "title": "Présentation des TAAF",
+      "url": "https://taaf.fr/collectivites/presentation/",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated; research-only",
+      "version": "page current on 2026-08-27",
+      "usage": "official-hierarchy"
+    },
+    {
+      "id": "antarctic-treaty-article-iv",
+      "authority": "Secretariat of the Antarctic Treaty",
+      "title": "The Antarctic Treaty",
+      "url": "https://www.ats.aq/e/antarctictreaty.html",
+      "retrieved_at": "2026-08-27",
+      "license": "treaty text; research-only",
+      "version": "1959 treaty, current parties page",
+      "usage": "status-and-sovereignty"
+    },
+    {
+      "id": "uk-biot-governance",
+      "authority": "Foreign, Commonwealth & Development Office",
+      "title": "British Indian Ocean Territory",
+      "url": "https://www.gov.uk/world/organisations/british-indian-ocean-territory",
+      "retrieved_at": "2026-08-27",
+      "license": "Open Government Licence 3.0",
+      "version": "page current on 2026-08-27",
+      "usage": "official-hierarchy"
+    },
+    {
+      "id": "pitcairn-government-home",
+      "authority": "Government of the Pitcairn Islands",
+      "title": "Pitcairn Islands official government site",
+      "url": "https://www.government.pn/home",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated; research-only",
+      "version": "page current on 2026-08-27",
+      "usage": "official-hierarchy"
+    },
+    {
+      "id": "saint-helena-census-2021",
+      "authority": "St Helena Statistics Office",
+      "title": "St Helena 2021 Population and Housing Census",
+      "url": "https://www.sainthelena.gov.sh/documents/Census-2021-Main-Report.pdf",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated; research-only",
+      "version": "2021 Census, issued July 2021",
+      "usage": "official-hierarchy-and-district-names"
+    },
+    {
+      "id": "sgssi-government-faq",
+      "authority": "Government of South Georgia & the South Sandwich Islands",
+      "title": "Frequently Asked Questions",
+      "url": "https://gov.gs/frequently-asked-questions/",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated; research-only",
+      "version": "page current on 2026-08-27",
+      "usage": "official-hierarchy-and-population-status"
+    },
+    {
+      "id": "falklands-census-2021",
+      "authority": "Falkland Islands Government",
+      "title": "Census 2021 Findings",
+      "url": "https://falklands.gov.fk/policy/2021-census/census",
+      "retrieved_at": "2026-08-27",
+      "license": "not stated; research-only",
+      "version": "2021 Census",
+      "usage": "settlement-statistics-not-administrative-boundaries"
+    }
+  ],
+  "candidates": [
+    {
+      "country_key": "northernmarianaislands",
+      "display_name_zh": "北马里亚纳群岛",
+      "display_name_en": "Northern Mariana Islands",
+      "existing_adm2_feature_count": 4,
+      "status": "official_adm2_available",
+      "official_hierarchy": {
+        "adm1": "4 个法定市镇：北部群岛、罗塔、塞班、天宁",
+        "adm2": "7 个编号选区的 8 个实际多边形；第 4 区分别位于北部群岛和塞班两个父级",
+        "official_terms": "municipality → election district",
+        "coverage": "全部陆地；4 条 COUSUBFP=00000 仅覆盖水域，必须排除"
+      },
+      "geometry_source": {
+        "status": "reproducible_open_boundary_available",
+        "source_ids": ["us-census-tiger-2020-mp-cousub"],
+        "expected_kept_features": 8,
+        "filter": "COUSUBFP != '00000'"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "无 CLDR/中国官方的编号选区专名；可安全显示为“第1选区”至“第7选区”，但合并前仍需中文名称验收"
+      },
+      "notes": [
+        "现有 4 个特征数恰好是 ADM1 市镇数，不是 ADM2。",
+        "TIGER 同一个 District 4 在北部群岛和塞班两个市镇下有两个不重叠特征，不可跨父级合并。",
+        "仓库 world-countries.geojson 的 CNMI 国家面是显示用泛化海岸线，与 TIGER 法定边界口径不一致；验收以同一 Census COUSUB 包全部 12 个面的官方领土覆盖为准，不裁剪官方选区。"
+      ]
+    },
+    {
+      "country_key": "frenchpolynesia",
+      "display_name_zh": "法属波利尼西亚",
+      "display_name_en": "French Polynesia",
+      "existing_adm2_feature_count": 5,
+      "status": "official_adm2_available",
+      "official_hierarchy": {
+        "adm1": "5 个行政分区：马克萨斯群岛、向风群岛、土阿莫土-甘比尔群岛、南方群岛、背风群岛",
+        "adm2": "48 个法定市镇（communes）",
+        "official_terms": "subdivision administrative → commune",
+        "coverage": "官方地籍边界包含 communes 与 communes associées；ADM2 只取 48 个主市镇"
+      },
+      "geometry_source": {
+        "status": "reproducible_open_boundary_available",
+        "source_ids": ["pf-cadastre-admin-geography-2022"],
+        "expected_kept_features": 48,
+        "filter": "仅保留 commune 层，不将 commune associée 当作并列 ADM2"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "48 个市镇无完整 CLDR 中文子区划表；本批不写入未审核音译"
+      },
+      "notes": [
+        "现有 5 个特征数恰好是 ADM1 行政分区数，证明当前 ADM2 实际上放入了上一层。",
+        "INSEE 已明确列出每个行政分区所属的市镇，父子关系可稳定复现。"
+      ]
+    },
+    {
+      "country_key": "guam",
+      "display_name_zh": "关岛",
+      "display_name_en": "Guam",
+      "existing_adm2_feature_count": 1,
+      "status": "official_adm2_available",
+      "official_hierarchy": {
+        "adm1": "关岛整体为 1 个 county-equivalent（与国家实体边界重合，不应额外画内边界）",
+        "adm2": "19 个法定市镇（municipalities）",
+        "official_terms": "single county-equivalent → municipality",
+        "coverage": "全部陆地；COUSUBFP=00000 仅覆盖水域，必须排除"
+      },
+      "geometry_source": {
+        "status": "reproducible_open_boundary_available",
+        "source_ids": ["us-census-tiger-2020-gu-cousub"],
+        "expected_kept_features": 19,
+        "filter": "COUSUBFP != '00000'"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "19 个 Chamorro/英文市镇名无完整 CLDR 中文表；本批不写入未经权威核定的音译"
+      },
+      "notes": [
+        "市镇是 Census Bureau 认可的法定 minor civil divisions，不是 CDP。",
+        "现有单特征仅表示整个关岛，不含 19 个内部边界。"
+      ]
+    },
+    {
+      "country_key": "cookislands",
+      "display_name_zh": "库克群岛",
+      "display_name_en": "Cook Islands",
+      "existing_adm2_feature_count": 9,
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "adm1": "外岛依 Island Government Act 设岛屿政府；拉罗汤加的制度不同",
+        "adm2": "未找到全国一致、位于岛屿政府之下的法定市县区分区",
+        "official_terms": "island government; electoral constituency is not a uniform administrative ADM2",
+        "coverage": "不适用"
+      },
+      "geometry_source": {
+        "status": "none",
+        "source_ids": ["cook-islands-island-government-act-2012", "cook-islands-census-2021"],
+        "reason": "不能把选区或人口表的岛屿名虚构成统一 ADM2"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "not_applicable"
+      },
+      "notes": [
+        "2021 Census 主要以岛屿统计；国会选区虽有边界，但不是国家—省州—市县区行政层级。"
+      ]
+    },
+    {
+      "country_key": "unitedsminoroutlyingislands",
+      "display_name_zh": "美国本土外小岛屿",
+      "display_name_en": "United States Minor Outlying Islands",
+      "existing_adm2_feature_count": 5,
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "adm1": "ISO 聚合的 9 个小岛/珊瑚礁，分别受美国不同部门管理",
+        "adm2": "无共同的法定下级行政区",
+        "official_terms": "aggregate statistical territory",
+        "coverage": "不适用"
+      },
+      "geometry_source": {
+        "status": "none",
+        "source_ids": ["us-census-2020-iac-dhc-geography"],
+        "reason": "岛屿通常无全年人口，且不在岛区人口普查标准层级内"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "not_applicable"
+      },
+      "notes": [
+        "现有 5 个特征是岛群聚合结果，不是 ADM2 行政区。"
+      ]
+    },
+    {
+      "country_key": "americansamoa",
+      "display_name_zh": "美属萨摩亚",
+      "display_name_en": "American Samoa",
+      "existing_adm2_feature_count": 5,
+      "status": "official_adm2_available",
+      "official_hierarchy": {
+        "adm1": "3 个区（东区、西区、马努阿区）与 2 个不属任何区的岛（斯温斯岛、罗斯岛）",
+        "adm2": "14 个有名法定县（counties）；斯温斯岛和罗斯岛下无有名县",
+        "official_terms": "district/island → county",
+        "coverage": "14 个县覆盖 3 个区；2 个外岛本身未再细分"
+      },
+      "geometry_source": {
+        "status": "reproducible_open_boundary_available",
+        "source_ids": ["us-census-tiger-2020-as-cousub"],
+        "expected_kept_features": 14,
+        "filter": "排除 FUNCSTAT='N' 的 Swains Island 与 Rose Island 单体占位，保留 14 个 FUNCSTAT='A' 县"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "14 个 Samoan 县名无完整 CLDR/中国官方译名表；本批不写入未审核音译"
+      },
+      "notes": [
+        "现有 5 个特征数恰好是 ADM1 的 3 区+2 岛，不是 ADM2。",
+        "村庄也有官方普查边界，但为避免与县层重叠，本批选择法定 county 作 ADM2。"
+      ]
+    },
+    {
+      "country_key": "niue",
+      "display_name_zh": "纽埃",
+      "display_name_en": "Niue",
+      "existing_adm2_feature_count": 1,
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "adm1": "14 个村庄/村选区",
+        "adm2": "村庄之下无全国法定市县区层级",
+        "official_terms": "village constituency only",
+        "coverage": "不适用"
+      },
+      "geometry_source": {
+        "status": "none",
+        "source_ids": ["niue-laws-2022-consolidation"],
+        "reason": "14 个村是第一且唯一地方层级，不可虚构下级"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "not_applicable"
+      },
+      "notes": [
+        "纽埃政府明确国会 14 席来自 14 个村选区，但这不形成三级行政链。"
+      ]
+    },
+    {
+      "country_key": "norfolkisland",
+      "display_name_zh": "诺福克岛",
+      "display_name_en": "Norfolk Island",
+      "existing_adm2_feature_count": 1,
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "adm1": "整岛单一地方治理实体",
+        "adm2": "无法定市县区下级分区",
+        "official_terms": "single territory/local government area",
+        "coverage": "不适用"
+      },
+      "geometry_source": {
+        "status": "none",
+        "source_ids": ["australia-norfolk-governance"],
+        "reason": "澳大利亚政府对整岛采用单一治理模式"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "not_applicable"
+      },
+      "notes": []
+    },
+    {
+      "country_key": "pitcairnislands",
+      "display_name_zh": "皮特凯恩群岛",
+      "display_name_en": "Pitcairn Islands",
+      "existing_adm2_feature_count": 1,
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "adm1": "领地由皮特凯恩、亨德森、迪西和奥恩诺四岛组成，仅皮特凯恩有常住人口",
+        "adm2": "无法定市县区分区",
+        "official_terms": "single Island Council jurisdiction",
+        "coverage": "不适用"
+      },
+      "geometry_source": {
+        "status": "none",
+        "source_ids": ["pitcairn-government-home"],
+        "reason": "岛屿地理分组不是市县区行政层级"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "not_applicable"
+      },
+      "notes": []
+    },
+    {
+      "country_key": "coralseaislands",
+      "display_name_zh": "珊瑚海群岛",
+      "display_name_en": "Coral Sea Islands",
+      "existing_adm2_feature_count": 1,
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "adm1": "澳大利亚外部领地，除威利斯岛气象人员外无常住人口",
+        "adm2": "无法定市县区分区",
+        "official_terms": "single external territory",
+        "coverage": "不适用"
+      },
+      "geometry_source": {
+        "status": "none",
+        "source_ids": ["australia-coral-sea-islands"],
+        "reason": "礁群、保护区和气象站不是行政 ADM2"
+      },
+      "chinese_name_source": {
+        "country": "australia-coral-sea-islands",
+        "adm2": "not_applicable"
+      },
+      "notes": [
+        "本实体无独立 ISO 3166-1 代码，中文名沿用现有国家索引与澳大利亚官方英文标题的规范译名。"
+      ]
+    },
+    {
+      "country_key": "wallisandfutuna",
+      "display_name_zh": "瓦利斯和富图纳",
+      "display_name_en": "Wallis and Futuna",
+      "existing_adm2_feature_count": 3,
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "adm1": "3 个领地区/传统王国：Alo、Sigave、Uvea",
+        "adm2": "三个区之下无全领地一致的法定市县区层级",
+        "official_terms": "circonscription territoriale only",
+        "coverage": "不适用"
+      },
+      "geometry_source": {
+        "status": "none",
+        "source_ids": ["insee-overseas-codification-2026"],
+        "reason": "现有 3 个特征已是全部正式区划，不存在可补的 ADM2"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "not_applicable"
+      },
+      "notes": [
+        "不得把村落点位或传统聚落范围伪装成市县区边界。"
+      ]
+    },
+    {
+      "country_key": "newcaledonia",
+      "display_name_zh": "新喀里多尼亚",
+      "display_name_en": "New Caledonia",
+      "existing_adm2_feature_count": 3,
+      "status": "official_adm2_available",
+      "official_hierarchy": {
+        "adm1": "3 个省：北部省、洛亚蒂群岛省、南部省",
+        "adm2": "33 个法定市镇（communes）",
+        "official_terms": "province → commune",
+        "coverage": "33 个市镇全覆盖；Poya 唯一横跨北部省和南部省"
+      },
+      "geometry_source": {
+        "status": "reproducible_open_boundary_available",
+        "source_ids": ["nc-communes-boundaries-2024"],
+        "expected_kept_features": 33,
+        "filter": "全部 33 个市镇；不将非官方 customary areas 加入 ADM2"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "33 个市镇无完整 CLDR 中文子区划表；本批不写入未审核音译"
+      },
+      "notes": [
+        "现有 3 个特征数恰好是 ADM1 省数，不是 ADM2。",
+        "Poya 不能被简单指派给单一父级省；若构建器强制唯一 parent_geo_key，需按官方省界裁切为两个展示部分，但保留同一 COG 市镇代码并去重标签。"
+      ]
+    },
+    {
+      "country_key": "ashmoreandcartierislands",
+      "display_name_zh": "阿什莫尔和卡捷群岛",
+      "display_name_en": "Ashmore and Cartier Islands",
+      "existing_adm2_feature_count": 1,
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "adm1": "澳大利亚直接管理的无人外部领地",
+        "adm2": "无法定市县区分区",
+        "official_terms": "single uninhabited external territory",
+        "coverage": "不适用"
+      },
+      "geometry_source": {
+        "status": "none",
+        "source_ids": ["australia-ashmore-cartier"],
+        "reason": "West/Middle/East/Ashmore Reef/Cartier Island 是自然地理实体，不是 ADM2"
+      },
+      "chinese_name_source": {
+        "country": "australia-ashmore-cartier",
+        "adm2": "not_applicable"
+      },
+      "notes": []
+    },
+    {
+      "country_key": "frenchsouthernandantarcticlands",
+      "display_name_zh": "法属南部领地",
+      "display_name_en": "French Southern and Antarctic Lands",
+      "existing_adm2_feature_count": 4,
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "adm1": "5 个正式行政区：克罗泽群岛、凯尔盖朗群岛、圣保罗和阿姆斯特丹群岛、阿德雷地、法属印度洋诸岛",
+        "adm2": "各行政区之下无法定市县区层级",
+        "official_terms": "district only",
+        "coverage": "不适用"
+      },
+      "geometry_source": {
+        "status": "none",
+        "source_ids": ["taaf-official-presentation"],
+        "reason": "基地、岛屿和保护区均不是 ADM2"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "not_applicable"
+      },
+      "notes": [
+        "现有报告只有 4 个特征，比官方 5 区少 1，但这属 ADM1 完整性问题，不可在 ADM2 补一个伪边界。"
+      ]
+    },
+    {
+      "country_key": "falklandislands",
+      "display_name_zh": "福克兰群岛",
+      "display_name_en": "Falkland Islands",
+      "existing_adm2_feature_count": 1,
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "adm1": "官方统计可区分 Stanley 与 Camp/聚落，但不是全覆盖法定行政省州",
+        "adm2": "无国家—ADM1—ADM2 法定市县区层级",
+        "official_terms": "settlement/census geography only",
+        "coverage": "不适用"
+      },
+      "geometry_source": {
+        "status": "none",
+        "source_ids": ["falklands-census-2021"],
+        "reason": "聚落统计不可转换为不重叠市县区行政边界"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "not_applicable"
+      },
+      "notes": [
+        "中文展示名沿用 CLDR。政治争议表述不在本批边界补丁中改写。"
+      ]
+    },
+    {
+      "country_key": "heardislandandmcdonaldislands",
+      "display_name_zh": "赫德岛和麦克唐纳群岛",
+      "display_name_en": "Heard Island and McDonald Islands",
+      "existing_adm2_feature_count": 1,
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "adm1": "澳大利亚南极局管理的无人外部领地",
+        "adm2": "无法定市县区分区",
+        "official_terms": "single unoccupied external territory",
+        "coverage": "不适用"
+      },
+      "geometry_source": {
+        "status": "none",
+        "source_ids": ["australia-himi-territory"],
+        "reason": "赫德岛与麦克唐纳岛是自然岛群组成，不是 ADM2"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "not_applicable"
+      },
+      "notes": []
+    },
+    {
+      "country_key": "antarctica",
+      "display_name_zh": "南极洲",
+      "display_name_en": "Antarctica",
+      "existing_adm2_feature_count": 1,
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "adm1": "不是单一主权国家；《南极条约》第 IV 条保留并冻结各方主权立场",
+        "adm2": "不存在全洲统一法定市县区行政层级",
+        "official_terms": "Antarctic Treaty Area, not a national administrative hierarchy",
+        "coverage": "不适用"
+      },
+      "geometry_source": {
+        "status": "none",
+        "source_ids": ["antarctic-treaty-article-iv"],
+        "reason": "科考站、条约保护区或主张扇区不可当作全球中立 ADM2"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "not_applicable"
+      },
+      "notes": [
+        "严禁以任一声索国国内区划覆盖全洲。"
+      ]
+    },
+    {
+      "country_key": "southgeorgiaandtheislands",
+      "display_name_zh": "南乔治亚和南桑威奇群岛",
+      "display_name_en": "South Georgia and the South Sandwich Islands",
+      "existing_adm2_feature_count": 1,
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "adm1": "单一英国海外领地，无常住人口",
+        "adm2": "无法定市县区分区",
+        "official_terms": "single overseas territory",
+        "coverage": "不适用"
+      },
+      "geometry_source": {
+        "status": "none",
+        "source_ids": ["sgssi-government-faq"],
+        "reason": "科研站和访客点不是 ADM2"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "not_applicable"
+      },
+      "notes": []
+    },
+    {
+      "country_key": "sainthelena",
+      "display_name_zh": "圣赫勒拿",
+      "display_name_en": "Saint Helena, Ascension and Tristan da Cunha",
+      "existing_adm2_feature_count": 3,
+      "status": "official_adm2_partial",
+      "official_hierarchy": {
+        "adm1": "3 个构成部分：圣赫勒拿岛、阿森松岛、特里斯坦-达库尼亚",
+        "adm2": "圣赫勒拿岛有 8 个官方选区/统计区：Jamestown、Half Tree Hollow、St Pauls、Blue Hill、Sandy Bay、Levelwood、Longwood、Alarm Forest；其余两个 ADM1 无同层级完整分区",
+        "official_terms": "constituent part → electoral/statistical district on St Helena only",
+        "coverage": "仅圣赫勒拿岛部分覆盖"
+      },
+      "geometry_source": {
+        "status": "official_units_confirmed_but_reusable_vector_not_located",
+        "source_ids": ["saint-helena-census-2021"],
+        "reason": "2021 Census 提供官方区名和地图，但本次未找到带明确开放许可的可重现矢量边界"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "8 个区无完整 CLDR/中国官方译名表；本批不根据普查 PDF 截图手工勾边或自创中文名"
+      },
+      "notes": [
+        "现有 3 个特征数恰好是 ADM1 构成部分数，不是 ADM2。",
+        "圣赫勒拿岛的 8 区是真实官方统计单元，但不能把其边界外推到阿森松或特里斯坦-达库尼亚。"
+      ]
+    },
+    {
+      "country_key": "indianoceanterritories",
+      "display_name_zh": "印度洋领地",
+      "display_name_en": "Indian Ocean Territories",
+      "existing_adm2_feature_count": 2,
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "adm1": "澳大利亚对圣诞岛和科科斯（基林）群岛两个独立领地的管理合称",
+        "adm2": "不存在跨两领地的共同法定市县区层级",
+        "official_terms": "administrative grouping of two external territories",
+        "coverage": "不适用"
+      },
+      "geometry_source": {
+        "status": "none",
+        "source_ids": ["australia-indian-ocean-territories"],
+        "reason": "现有 2 个特征已是两个领地本身，不是 ADM2"
+      },
+      "chinese_name_source": {
+        "country": "australia-indian-ocean-territories",
+        "adm2": "not_applicable"
+      },
+      "notes": [
+        "圣诞岛和科科斯（基林）群岛各有地方政府，但并不构成聚合实体下的三级行政链。"
+      ]
+    },
+    {
+      "country_key": "britishindianoceanterritory",
+      "display_name_zh": "英属印度洋领地",
+      "display_name_en": "British Indian Ocean Territory",
+      "existing_adm2_feature_count": 1,
+      "status": "no_official_adm2",
+      "official_hierarchy": {
+        "adm1": "由驻伦敦专员统一管理的单一海外领地",
+        "adm2": "无法定市县区分区",
+        "official_terms": "single overseas territory administration",
+        "coverage": "不适用"
+      },
+      "geometry_source": {
+        "status": "none",
+        "source_ids": ["uk-biot-governance"],
+        "reason": "58 个岛屿和 Diego Garcia 军事设施不是 ADM2"
+      },
+      "chinese_name_source": {
+        "country": "unicode-cldr-48-zh-territories",
+        "adm2": "not_applicable"
+      },
+      "notes": [
+        "领地主权与条约状态处于变动期；本批仅判断其不存在可用市县区层级，不改写政治边界。"
+      ]
+    }
+  ]
+}

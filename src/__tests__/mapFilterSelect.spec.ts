@@ -42,6 +42,8 @@ describe('MapFilterSelect', () => {
     await wrapper.get('.map-filter-select-trigger').trigger('click')
 
     const search = wrapper.get('input[type="search"]')
+    expect(document.activeElement).toBe(search.element)
+    expect(document.activeElement).not.toBe(wrapper.get('.map-filter-select-trigger').element)
     await search.setValue('beta')
     expect(wrapper.findAll('.map-filter-select-option')).toHaveLength(1)
     expect(wrapper.text()).toContain('Beta marker')

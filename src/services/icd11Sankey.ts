@@ -33,6 +33,7 @@ export function normalizeIcd11SankeyGraph(graph: Icd11SankeyGraph): Icd11SankeyG
   if (cached) return cached
   const paths = graph.paths.map((path) => ({
     ...path,
+    mappingRows: Math.max(1, Number(path.mappingRows ?? 1)),
     level3: path.level3 || null,
     mappingLevel: path.level3 ? 'Level3' as const : 'Level2' as const,
   }))

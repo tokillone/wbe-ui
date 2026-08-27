@@ -35,8 +35,20 @@ const cityReport = readJson(resolve(generatedDir, 'world-cities-report.json'))
 const regionReport = readJson(resolve(generatedDir, 'wbe_regions_report.json'))
 
 assert(existsSync(archivePath), 'Missing public/tiles/wbe-regions.pmtiles')
-assert(cityReport.countryCount === cityReport.expectedCountryCount, 'Incomplete country coverage')
-assert(cityReport.missingCountryKeys.length === 0, 'Missing city-equivalent country keys')
+assert(
+  cityReport.countryCount + cityReport.reviewedWithoutGeometryCountryKeys.length ===
+    cityReport.expectedCountryCount,
+  'ADM2 coverage and reviewed no-geometry classifications do not cover every country key',
+)
+assert(
+  JSON.stringify(cityReport.missingCountryKeys) ===
+    JSON.stringify(cityReport.reviewedWithoutGeometryCountryKeys),
+  'Missing city-equivalent country keys were not explicitly reviewed',
+)
+assert(
+  cityReport.unexpectedMissingCountryKeys.length === 0,
+  'Unreviewed city-equivalent country gaps remain',
+)
 assert(cityReport.featureCount >= 45_000, 'Unexpectedly small global city layer')
 assert(
   cityReport.edgeTopology?.partitionField === 'country_key',
@@ -45,8 +57,14 @@ assert(
 assert(regionReport.duplicateRegionIds.length === 0, 'Duplicate region IDs')
 assert(regionReport.missingGeoKey.length === 0, 'Missing region geo keys')
 assert(regionReport.geometryCleaning.droppedFeatures.length === 0, 'Dropped region features')
-assert(regionReport.featureCountByLevel.country === cityReport.expectedCountryCount, 'Country layer coverage mismatch')
-assert(regionReport.featureCountByLevel.city >= cityReport.featureCount, 'City layer coverage mismatch')
+assert(
+  regionReport.featureCountByLevel.country === cityReport.expectedCountryCount,
+  'Country layer coverage mismatch',
+)
+assert(
+  regionReport.featureCountByLevel.city >= cityReport.featureCount,
+  'City layer coverage mismatch',
+)
 assert(regionReport.geometryCleaning.rules.city.maxParts === 1, 'City fragment policy changed')
 assert(
   Object.values(regionReport.topologyPolicy).every(Boolean),
@@ -62,7 +80,8 @@ assert(
   'Polygon layer count mismatch',
 )
 assert(
-  regionReport.featureCountByLayer.wbe_region_labels === regionReport.featureCountByLayer.wbe_regions,
+  regionReport.featureCountByLayer.wbe_region_labels ===
+    regionReport.featureCountByLayer.wbe_regions,
   'Every region must have one label point',
 )
 assert(
@@ -95,10 +114,11 @@ for (const option of [
 ]) {
   assert(generatorOptions.includes(option), `Required Tippecanoe option missing: ${option}`)
 }
-const tileStats = new Map(
-  (metadata.tilestats?.layers ?? []).map((layer) => [layer.layer, layer]),
+const tileStats = new Map((metadata.tilestats?.layers ?? []).map((layer) => [layer.layer, layer]))
+assert(
+  tileStats.get('wbe_regions')?.count === regionReport.featureCountByLayer.wbe_regions,
+  'PMTiles polygon count mismatch',
 )
-assert(tileStats.get('wbe_regions')?.count === regionReport.featureCountByLayer.wbe_regions, 'PMTiles polygon count mismatch')
 assert(
   tileStats.get('wbe_region_boundaries')?.count ===
     regionReport.featureCountByLayer.wbe_region_boundaries,
@@ -109,13 +129,21 @@ assert(
     regionReport.featureCountByLayer.wbe_boundary_edges,
   'PMTiles topology edge count mismatch',
 )
-assert(tileStats.get('wbe_region_labels')?.count === regionReport.featureCountByLayer.wbe_region_labels, 'PMTiles label count mismatch')
-assert(tileStats.get('wbe_boundary_edges')?.geometry === 'LineString', 'Topology edges are not real line geometry')
+assert(
+  tileStats.get('wbe_region_labels')?.count === regionReport.featureCountByLayer.wbe_region_labels,
+  'PMTiles label count mismatch',
+)
+assert(
+  tileStats.get('wbe_boundary_edges')?.geometry === 'LineString',
+  'Topology edges are not real line geometry',
+)
 assert(tileStats.get('wbe_region_labels')?.geometry === 'Point', 'Labels are not point geometry')
 
 console.log(
   `Verified ${regionReport.featureCountByLayer.wbe_regions} regions, ` +
-    `${cityReport.countryCount} country keys, and four PMTiles source layers.`,
+    `${cityReport.countryCount} rendered ADM2 country keys, ` +
+    `${cityReport.reviewedWithoutGeometryCountryKeys.length} reviewed no-geometry keys, ` +
+    'and four PMTiles source layers.',
 )
 
 function readJson(path) {

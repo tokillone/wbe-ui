@@ -4,6 +4,9 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { MapFilterSelectOption } from '../components/MapFilterSelect.vue'
 import MapFilterPanel from '../components/map/MapFilterPanel.vue'
+import MapOperationGuide, {
+  type MapOperationGuideStep,
+} from '../components/map/MapOperationGuide.vue'
 import MapPageHeader from '../components/map/MapPageHeader.vue'
 import {
   buildSelectionKey,
@@ -14,6 +17,7 @@ import {
 } from '../services/map'
 import type {
   MapBiomarkerOption,
+  MapBiomarkerPath,
   MapClusterLocationRequest,
   MapDetailResponse,
   MapFilterResponse,
@@ -28,10 +32,17 @@ import type {
   MapTopBiomarker,
   MapTrendSeries,
 } from '../types/map'
+import {
+  ALL_BIOMARKER_PATH_KEY,
+  biomarkerFilterOptions as buildBiomarkerFilterOptions,
+  biomarkerPathKey,
+  selectionForAllBiomarkers,
+  selectionForBiomarkerPath,
+  selectionForCategory,
+} from '../utils/mapFilters'
 
 import type {
   GeoJSONSource,
-  LngLatBoundsLike,
   LngLatLike,
   Map as MapLibreMap,
   MapLayerMouseEvent,
@@ -39,11 +50,14 @@ import type {
   Popup,
 } from 'maplibre-gl'
 import {
+  adaptiveHeatColor,
+  adaptiveHeatPercentile,
   biomarkerExplorerMetricKeys,
+  buildAdaptiveHeatScale,
   canExploreBiomarker,
   compactExplorerSummaryCards,
   countryLabelStyleForArea,
-  declutterScreenSpaceCandidates,
+  declutterScreenSpacePlacements,
   detailFilterContext,
   displayLevelForZoom,
   excludeUnassignedCityRows,
@@ -59,14 +73,13 @@ import {
   pndlComparisonsForRegion,
   progressiveDeclutterGap,
   regionFillOpacityExpression,
-  resolveStableHeatRange,
   selectRowsForDisplayLevel,
   selectionYearRange,
   sortBiomarkersByLiterature,
-  temperatureBandIndex,
   usesCompactHeatFootprint,
   visibleLevelsForZoom,
 } from '../utils/mapVisualization'
+import type { AdaptiveHeatScale, ScreenSpaceBounds } from '../utils/mapVisualization'
 import {
   boundaryCollectionForParents,
   filterBoundaryFeatures,
@@ -79,6 +92,9 @@ import {
   buildPreviewBasemapLayers,
   PREVIEW_ADMIN1_LEVEL_END,
   PREVIEW_BOUNDARY_LAYER_IDS,
+  PREVIEW_CITY_BOUNDARY_FADE_START,
+  PREVIEW_COUNTRY_BOUNDARY_FADE_START,
+  PREVIEW_COUNTRY_BOUNDARY_MAJOR_VISIBLE_ZOOM,
   PREVIEW_COUNTRY_LEVEL_END,
   PREVIEW_LABEL_LAYER_IDS,
   PREVIEW_LABEL_LAYER_IDS_BY_LEVEL,
@@ -110,7 +126,6 @@ import {
   MAP_POINT_COUNT_THRESHOLDS,
 } from '../utils/mapLabelTypography'
 
-type MapMode = 'globe' | 'flat'
 type DetailMode = 'none' | 'compact' | 'full'
 type DetailOrigin = 'none' | 'region' | 'cluster'
 type BasemapMode = 'vector' | 'geojson'
@@ -119,6 +134,10 @@ type MapDisplayLevel = 'country' | 'admin1' | 'city'
 type BoundaryName = 'countries' | 'admin1' | 'chinaProvinces' | 'chinaCities'
 type ViewLayerKey = 'labels' | 'boundaries' | 'pndl' | 'ambience'
 type Locale = 'zh' | 'en'
+type MapVisualizationSnapshot = {
+  selection: MapFilterSelection
+  stats: MapStatsResponse | null
+}
 type GeoJsonFeature = {
   type: 'Feature'
   id?: string | number
@@ -157,21 +176,19 @@ type ClusterGeoJSONSource = GeoJSONSource & {
   getClusterExpansionZoom?: (clusterId: number) => Promise<number>
   getClusterLeaves?: (clusterId: number, limit: number, offset: number) => Promise<GeoJsonFeature[]>
 }
-type MapSearchResult = {
-  id: string
-  label: string
-  meta: string
-  level: MapRegionStat['level']
-  geoKey: string
-  center?: [number, number]
-  bbox?: [number, number, number, number]
-}
 type RegionIndexEntry = {
   level: MapRegionStat['level']
   geo_key: string
   parent_geo_key: string
   country_key: string
   display_name: string
+  display_name_zh?: string
+  display_name_en?: string
+  display_name_local?: string
+  name_zh_source?: string
+  search_aliases?: string[]
+  boundary_min_zoom?: number
+  label_min_zoom?: number
   name?: string
   center: [number, number]
   label_point?: [number, number]
@@ -222,13 +239,6 @@ const BASEMAP_GLYPHS_URL =
 const USE_LOCAL_PM_TILES_BASEMAP = true
 const REGION_VECTOR_SOURCE_ID = 'protomaps'
 const REGION_VECTOR_SOURCE_LAYER = PREVIEW_REGION_POLYGON_SOURCE_LAYER
-const REGION_VECTOR_LINE_SOURCE_LAYER = 'preview_region_display_outlines'
-const PREVIEW_REGION_OUTLINE_SOURCE_LAYER = 'preview_region_display_outlines'
-const PREVIEW_REGION_OUTLINE_LAYER_IDS = [
-  'preview-region-selected-halo',
-  'preview-region-selected-line',
-  'preview-region-hover-line',
-] as const
 const BOUNDARY_URLS: Record<BoundaryName, string> = {
   countries: '/geo/render/world-countries.geojson',
   admin1: '/geo/render/world-admin1.geojson',
@@ -248,24 +258,16 @@ const DEFAULT_SELECTION: MapFilterSelection = {
   biomarkerKey: 'ALL',
   year: '全部年份',
 }
+const MAP_OPERATION_GUIDE_STORAGE_KEY = 'wbe:map-operation-guide:v1'
+const MAP_OPERATION_GUIDE_DELAY_MS = 600
 const ALL_CATEGORY_LABEL = DEFAULT_SELECTION.category
 const ALL_SUBCATEGORY_LABEL = DEFAULT_SELECTION.subcategory
 const ALL_BIOMARKER_KEY = DEFAULT_SELECTION.biomarkerKey
 const ALL_BIOMARKER_LABEL = '全部生物标记物'
 const ALL_YEAR_LABEL = DEFAULT_SELECTION.year
-const SPECIAL_ADMIN_SEARCH_ALIASES: Record<string, string[]> = {
-  'china|hongkong': ['香港', 'Hong Kong', 'HongKong'],
-  'china|aomen': ['澳门', 'Macao', 'Macau', 'Aomen'],
-}
 const REGION_HOVER_PRIORITY_LAYERS = [
-  'region-city-selected-fill',
-  'region-city-data-fill',
-  'region-city-selected-line',
-  'region-city-data-line',
   'region-selected-fill',
   'region-data-fill',
-  'region-selected-line',
-  'region-data-line',
   'wbe-city-boundary-hit',
   'wbe-admin1-boundary-hit',
   'wbe-country-boundary-hit',
@@ -282,23 +284,20 @@ const POINT_INTERACTIVE_LAYERS = [
 ] as const
 const FLAT_CENTER: [number, number] = [104, 35]
 const FLAT_INITIAL_ZOOM = 1.75
+const DEV_MAP_QA_QUERY_FLAG = '__mapqa'
 const FLAT_MIN_ZOOM = PREVIEW_MAP_MIN_ZOOM
 const VECTOR_MAX_ZOOM = PREVIEW_MAP_MAX_ZOOM
 const FALLBACK_MAX_ZOOM = 9.2
-const GLOBE_MIN_ZOOM = 2.64
-const GLOBE_INITIAL_ZOOM = 2.66
 const FLAT_BACKGROUND_COLOR = '#d7e0e4'
-const GLOBE_BACKGROUND_COLOR = '#d7e0e4'
 const LEVEL_FADE_COUNTRY_START = PREVIEW_COUNTRY_LEVEL_END
 const LEVEL_FADE_COUNTRY_END = PREVIEW_COUNTRY_LEVEL_END
 const LEVEL_FADE_CITY_START = CITY_LEVEL_ENTER_ZOOM
 const LEVEL_FADE_CITY_END = CITY_LEVEL_ENTER_ZOOM
-const CITY_BOUNDARY_MIN_ZOOM = 6.1
+const CITY_BOUNDARY_MIN_ZOOM = PREVIEW_CITY_BOUNDARY_FADE_START
 const COUNTRY_BOUNDARY_FADE_START = 5.2
 const COUNTRY_BOUNDARY_FADE_END = 5.8
 const VECTOR_REGION_FADE_START_ZOOM = 4.65
 const VECTOR_REGION_FADE_END_ZOOM = 5.25
-const DENSE_POINT_RADIUS_DEGREES = 38
 const COUNTRY_STATUS_UPDATE_DELAY = 280
 const LABEL_LAYER_IDS = [
   'wbe-country-label',
@@ -318,42 +317,18 @@ const BOUNDARY_LAYER_IDS = [
   'country-line',
   'admin1-line',
   'china-province-line',
-  'china-active-province-line',
   'china-city-line',
   'china-special-admin-line',
 ] as const
 const REGION_HIGHLIGHT_LAYER_IDS = [
   'region-data-fill',
-  'region-data-line',
-  'region-city-data-fill',
-  'region-city-data-line',
   'region-selected-fill',
-  'region-selected-halo',
-  'region-selected-line',
-  'region-city-selected-fill',
-  'region-city-selected-line',
   'region-hover-fill',
-  'region-hover-line',
-  'region-city-hover-fill',
-  'region-city-hover-line',
-  ...PREVIEW_REGION_OUTLINE_LAYER_IDS,
 ] as const
 const REGION_FILL_LAYER_IDS = [
   'region-data-fill',
-  'region-city-data-fill',
   'region-selected-fill',
-  'region-city-selected-fill',
   'region-hover-fill',
-  'region-city-hover-fill',
-] as const
-const REGION_LINE_LAYER_IDS = [
-  'region-data-line',
-  'region-city-data-line',
-  'region-selected-halo',
-  'region-selected-line',
-  'region-city-selected-line',
-  'region-hover-line',
-  'region-city-hover-line',
 ] as const
 const MAP_DISPLAY_LEVELS = ['country', 'admin1', 'city'] as const
 const PNDL_LAYER_IDS = MAP_DISPLAY_LEVELS.flatMap((level) => [
@@ -378,12 +353,8 @@ const BOUNDARY_NOISE_AREA_THRESHOLDS: Record<BoundaryName, number> = {
 const MAP_HIGHLIGHT_STYLE = {
   dataFill: '#eef0f0',
   coverageFill: '#b8c8d1',
-  dataLine: '#7b858b',
-  hoverFill: '#eef0f0',
-  hoverLine: '#3e5967',
-  selectedFill: '#eef0f0',
-  selectedLine: '#173f55',
-  selectedHalo: '#ffffff',
+  hoverFill: '#b8c8d1',
+  selectedFill: '#4f8bc9',
   bubble: '#4f8bc9',
   bubbleHover: '#2f73b7',
   bubbleSelected: '#174f8a',
@@ -392,7 +363,15 @@ const MAP_HIGHLIGHT_STYLE = {
   bubbleSelectedLine: '#123e6f',
   bubbleSelectedOuter: '#ffffff',
 } as const
-const MAP_HEAT_COLORS = ['#ffff8c', '#fdae61', '#f46d43', '#d73027'] as const
+const MAP_HEAT_COLORS = [
+  '#FFFF8C',
+  '#FEE08B',
+  '#FDD17A',
+  '#FDAE61',
+  '#F98A51',
+  '#F46D43',
+  '#D73027',
+] as const
 const BUBBLE_IMAGE_BUCKETS: Record<MapDisplayLevel, readonly number[]> = {
   country: [28, 38, 52, 68, 82],
   admin1: [18, 25, 34, 45, 58],
@@ -530,17 +509,12 @@ const UI_TEXT = {
     brandHome: '污水信息因子数据库首页',
     brandTitle: '污水信息因子数据库',
     brandSubtitle: 'Wastewater Biomarker Evidence',
-    pageTitle: '地图可视化',
-    searchPlaceholder: '搜索国家、省州、城市',
-    searchLabel: '搜索地图地点',
-    clearSearch: '清空搜索',
-    noSearchResults: '未找到匹配地点',
+    pageTitle: '空间分布查询',
     backHome: '返回首页',
     resetView: '复位',
     resetTitle: '复位到当前数据总览',
-    switchToFlat: '切换到平面地图',
-    switchToGlobe: '切换到球形地图',
     mapLayers: '地图图层显示',
+    operationGuide: '操作指引',
     language: '语言',
     languageMenu: '切换界面语言',
     chinese: '中文',
@@ -560,8 +534,8 @@ const UI_TEXT = {
     subcategory: '物质子类',
     biomarker: '生物标记物',
     year: '年份',
-    refresh: '刷新',
-    refreshing: '刷新中',
+    applyFilters: '应用',
+    applyingFilters: '应用中…',
     resetFilters: '重置',
     collapseFilters: '收起筛选条件',
     expandFilters: '展开筛选条件',
@@ -569,11 +543,12 @@ const UI_TEXT = {
     loadingStats: '正在更新地图数据',
     mapInitFailed: '地图初始化失败',
     filterLoadFailed: '筛选项加载失败',
+    categoryParentRequired: '该物质类别无法唯一匹配目标类别，请先选择目标类别。',
     statsLoadFailed: '地图统计加载失败',
     detailLoadFailed: '详情加载失败',
     detailExploreTitle: '生物标记物探索',
     detailExploreNote:
-      '点击生物标记物会同步筛选条件并刷新地图；无 PNDL 时仍展示数据覆盖轮廓和气泡。',
+      '点击生物标记物会直接应用对应筛选并更新地图；无 PNDL 时仍展示数据覆盖轮廓和气泡。',
     detailExploreEmpty: '当前筛选下该区域没有可展示的生物标记物。',
     pndlRegionAvailable: '有 PNDL 区域',
     pndlRegionUnavailable: '暂无 PNDL',
@@ -648,7 +623,8 @@ const UI_TEXT = {
     heatLegendLow: '低',
     heatLegendMedium: '中',
     heatLegendHigh: '高',
-    heatLegendNote: '黄 → 红：PNDL 由低到高',
+    heatLegendNote: '按数值分布动态着色',
+    heatLegendRegionCount: '个有效地区',
     heatLegendCoverageOnly: '有数据，无可换算 PNDL',
     heatLegendUnit: 'mg/day/1000 inh',
     pndlTrend: 'PNDL 年度趋势',
@@ -672,16 +648,11 @@ const UI_TEXT = {
     brandTitle: 'Wastewater Biomarker Evidence',
     brandSubtitle: 'Wastewater Biomarker Evidence',
     pageTitle: 'Map Visualization',
-    searchPlaceholder: 'Search countries, states, cities',
-    searchLabel: 'Search map locations',
-    clearSearch: 'Clear search',
-    noSearchResults: 'No matching locations',
     backHome: 'Home',
     resetView: 'Reset',
     resetTitle: 'Reset to current data overview',
-    switchToFlat: 'Switch to flat map',
-    switchToGlobe: 'Switch to globe map',
     mapLayers: 'Map layer display',
+    operationGuide: 'Map guide',
     language: 'Language',
     languageMenu: 'Change interface language',
     chinese: '中文',
@@ -701,8 +672,8 @@ const UI_TEXT = {
     subcategory: 'Substance subclass',
     biomarker: 'biomarker',
     year: 'Year',
-    refresh: 'Refresh',
-    refreshing: 'Refreshing',
+    applyFilters: 'Apply',
+    applyingFilters: 'Applying…',
     resetFilters: 'Reset',
     collapseFilters: 'Collapse filters',
     expandFilters: 'Expand filters',
@@ -710,11 +681,13 @@ const UI_TEXT = {
     loadingStats: 'Updating map data',
     mapInitFailed: 'Map initialization failed',
     filterLoadFailed: 'Failed to load filters',
+    categoryParentRequired:
+      'This substance category does not have one unique target class. Select a target class first.',
     statsLoadFailed: 'Failed to load map statistics',
     detailLoadFailed: 'Failed to load detail',
     detailExploreTitle: 'biomarker explorer',
     detailExploreNote:
-      'Selecting a biomarker updates the filters and map. Biomarkers without PNDL still show coverage outlines and bubbles.',
+      'Selecting a biomarker applies its filters and updates the map immediately. Biomarkers without PNDL still show coverage outlines and bubbles.',
     detailExploreEmpty: 'No biomarker is available for this region under the current filters.',
     pndlRegionAvailable: 'PNDL available',
     pndlRegionUnavailable: 'No PNDL',
@@ -792,7 +765,8 @@ const UI_TEXT = {
     heatLegendLow: 'Low',
     heatLegendMedium: 'Medium',
     heatLegendHigh: 'High',
-    heatLegendNote: 'Yellow → red: lower to higher PNDL',
+    heatLegendNote: 'Distribution-aware percentile colors',
+    heatLegendRegionCount: 'regions with PNDL',
     heatLegendCoverageOnly: 'Data coverage, no convertible PNDL',
     heatLegendUnit: 'mg/day/1000 inh',
     pndlTrend: 'PNDL yearly trend',
@@ -813,6 +787,53 @@ const UI_TEXT = {
     dataRows: 'Data rows',
   },
 } as const
+
+const MAP_OPERATION_GUIDE_STEPS: Record<Locale, MapOperationGuideStep[]> = {
+  zh: [
+    {
+      title: '先筛选证据范围',
+      description: '按目标类别、物质类别、子类、生物标记物和年份逐级选择，再应用筛选更新地图。',
+      targetSelectors: ['.filter-shell:not(.collapsed)'],
+      placement: 'right',
+    },
+    {
+      title: '查看并进入地区',
+      description:
+        '悬停查看摘要，单击打开标记物探索，双击进入完整详情；缩放可切换国家、省州和城市层级。',
+      targetSelectors: ['.map-canvas'],
+      placement: 'bottom',
+    },
+    {
+      title: '调整地图显示',
+      description: '使用缩放查看不同空间层级；需要时可复位视图，或显示、隐藏边界与 PNDL 图层。',
+      targetSelectors: ['.maplibregl-ctrl-top-right', '.map-tool-stack'],
+      placement: 'left',
+    },
+  ],
+  en: [
+    {
+      title: 'Narrow the evidence range',
+      description:
+        'Choose a target class, category, subclass, biomarker, and year, then apply the filters to update the map.',
+      targetSelectors: ['.filter-shell:not(.collapsed)'],
+      placement: 'right',
+    },
+    {
+      title: 'Open a region',
+      description:
+        'Hover for a summary, click to explore biomarkers, or double-click for full detail. Zoom changes the spatial level.',
+      targetSelectors: ['.map-canvas'],
+      placement: 'bottom',
+    },
+    {
+      title: 'Adjust the map display',
+      description:
+        'Use zoom to change spatial level, reset the view when needed, and show or hide boundaries and PNDL layers.',
+      targetSelectors: ['.maplibregl-ctrl-top-right', '.map-tool-stack'],
+      placement: 'left',
+    },
+  ],
+}
 
 const BACKEND_LABEL_TRANSLATIONS: Record<Locale, Record<string, string>> = {
   zh: {
@@ -910,6 +931,7 @@ const PNDL_COMPARISON_LABELS: Record<Locale, Record<string, string>> = {
   },
 }
 
+const mapStage = ref<HTMLElement | null>(null)
 const mapContainer = ref<HTMLElement | null>(null)
 const pndlChartScrollRef = ref<HTMLElement | null>(null)
 const pndlColumnTooltipState = ref<PndlColumnTooltipState>({
@@ -933,7 +955,12 @@ const trendPointTooltipState = ref<PndlColumnTooltipState>({
   y: 0,
 })
 const filters = ref<MapFilterResponse | null>(null)
-const stats = ref<MapStatsResponse | null>(null)
+const appliedSnapshot = ref<MapVisualizationSnapshot>({
+  selection: { ...DEFAULT_SELECTION },
+  stats: null,
+})
+const appliedSelection = computed(() => appliedSnapshot.value.selection)
+const stats = computed(() => appliedSnapshot.value.stats)
 const selectedDetail = ref<MapDetailResponse | null>(null)
 const activePndlComparisonKey = ref('')
 const mapError = ref('')
@@ -942,23 +969,22 @@ const detailError = ref('')
 const isLoadingFilters = ref(false)
 const isLoadingStats = ref(false)
 const isLoadingDetail = ref(false)
-const mapMode = ref<MapMode>('flat')
 const mapReady = ref(false)
 const mapZoomLevel = ref(FLAT_INITIAL_ZOOM)
 const activeMapLevel = ref<MapDisplayLevel>(mapDisplayLevelForZoom(FLAT_INITIAL_ZOOM))
 const mapRenderPhase = ref<MapRenderPhase>('settled')
 const boundaryVersion = ref(0)
-const regionIndexVersion = ref(0)
-const globeAvailable = ref(false)
 const detailMode = ref<DetailMode>('none')
 const detailOrigin = ref<DetailOrigin>('none')
 const fullDetailShouldRestoreCompact = ref(false)
 const isFilterOpen = ref(true)
 const isLayerPanelOpen = ref(false)
-const isLanguageMenuOpen = ref(false)
 const isMapStyleSwitching = ref(false)
-const searchQuery = ref('')
-const isSearchFocused = ref(false)
+const mapGuideOpen = ref(false)
+const mapGuideStep = ref(0)
+const mapGuideSeen = ref(readMapOperationGuideSeen())
+const mapGuideSuppressedForVisit = ref(false)
+const mapGuideShownThisVisit = ref(false)
 const locale = ref<Locale>(readInitialLocale())
 const loadingBoundaryNames = ref<BoundaryName[]>([])
 const selectedRegionFeature = ref<GeoJsonFeature | null>(null)
@@ -979,6 +1005,15 @@ const viewLayers = reactive<Record<ViewLayerKey, boolean>>({
   ambience: true,
 })
 
+type MapGuideUiSnapshot = {
+  filterOpen: boolean
+  layerPanelOpen: boolean
+  detailMode: DetailMode
+}
+
+let mapGuideUiSnapshot: MapGuideUiSnapshot | null = null
+let mapGuideTimer: number | undefined
+
 let maplibregl: MapLibreModule | null = null
 let map: MapLibreMap | null = null
 let basemapMode: BasemapMode = 'geojson'
@@ -988,10 +1023,9 @@ let hoverPopup: Popup | null = null
 let hoverPopupFeatureKey = ''
 let statsController: AbortController | null = null
 let detailController: AbortController | null = null
+let statsRequestId = 0
 let detailRequestId = 0
-let fetchTimer: number | undefined
 let clickTimer: number | undefined
-let searchBlurTimer: number | undefined
 let resizeTimer: number | undefined
 let regionTooltipTimer: number | undefined
 let mapStatusFrame: number | undefined
@@ -1012,14 +1046,10 @@ let selectedPointId: string | number | null = null
 let hoveredPointSourceId = ''
 let selectedPointSourceId = ''
 let hoveredRegionFeature: GeoJsonFeature | null = null
-let previewHoveredRegionId = ''
-let previewSelectedRegionId = ''
 let cameraMoving = false
 let pointLayerEventsBound = false
 let regionLayerEventsBound = false
 let isBasemapFallbackInProgress = false
-let projectionSwitchInProgress = false
-let preserveSelectionOnNextSelectionChange = false
 let programmaticSelectionUpdateInProgress = false
 const boundaryCache = new Map<BoundaryName, FeatureCollection>()
 const cleanedBoundaryCache = new Map<BoundaryName, FeatureCollection>()
@@ -1028,16 +1058,25 @@ const boundaryHitIndexCache = new Map<BoundaryName, BoundaryHitIndex>()
 const boundaryLineCollectionCache = new Map<BoundaryName, FeatureCollection>()
 const activePolygonStateIds = new Map<MapDisplayLevel, Set<string>>()
 const cityLineCollectionCache = new Map<string, FeatureCollection>()
-const activeProvinceLineCollectionCache = new Map<string, FeatureCollection>()
 let specialAdminEnvelopeCollection: FeatureCollection | null = null
 let specialAdminLineCollection: FeatureCollection | null = null
 let activeCityLineParentKey = ''
 let displayRegionRowsCache: { stats: MapStatsResponse | null; rows: MapRegionStat[] } | null = null
 let displayMapRowsStats: MapStatsResponse | null = null
 const displayMapRowsCache = new Map<MapDisplayLevel, MapRegionStat[]>()
+let adaptiveHeatScaleStats: MapStatsResponse | null = null
+const adaptiveHeatScaleCache = new Map<MapDisplayLevel, AdaptiveHeatScale>()
 let regionDataCollectionCache: CachedFeatureCollection | null = null
 const labelPointCollectionCache = new Map<BoundaryName, CachedFeatureCollection>()
 const pointCollectionCache = new Map<MapDisplayLevel, CachedFeatureCollection>()
+const pointLabelPlacementByRegionId = new Map<
+  string,
+  { offset: [number, number]; placement: 'bottom' | 'top' | 'right' | 'left' }
+>()
+const acceptedPointRegionIdsByLevel = new Map<MapDisplayLevel, Set<string>>()
+let visiblePointGroupBounds: ScreenSpaceBounds[] = []
+let runtimeStaticLabelExclusions = new Set<string>()
+let pointOverlayLayoutVersion = 0
 const missingBusinessLabelKeys = new Set<string>()
 let reportedMissingBusinessLabelSignature = ''
 let missingBusinessLabelsStats: MapStatsResponse | null = null
@@ -1053,6 +1092,9 @@ let regionIndexPromise: Promise<void> | null = null
 const regionIndexByKey = new Map<string, RegionIndexEntry>()
 
 const ui = computed(() => UI_TEXT[locale.value])
+const filtersDirty = computed(
+  () => !stats.value || !filterSelectionsEqual(selection, appliedSelection.value),
+)
 const isCompactDetailOpen = computed(() => detailMode.value === 'compact')
 const isFullDetailOpen = computed(() => detailMode.value === 'full')
 const isDetailOpen = computed(() => detailMode.value !== 'none')
@@ -1128,34 +1170,80 @@ const categoryFilterOptions = computed(() =>
 const subcategoryFilterOptions = computed(() =>
   toFilterSelectOptions(currentSubcategories.value, (value) => displayOptionLabel(value)),
 )
-const biomarkerFilterOptions = computed<MapFilterSelectOption[]>(() =>
-  currentBiomarkers.value.map((option) => ({
-    value: option.key,
-    label: displayOptionLabel(option.label),
-  })),
-)
+const supportsGlobalBiomarkerPaths = computed(() => Array.isArray(filters.value?.biomarkerPaths))
+const biomarkerPathByKey = computed(() => {
+  const paths = filters.value?.biomarkerPaths ?? []
+  return new Map(paths.map((path) => [biomarkerPathKey(path), path]))
+})
+const selectedBiomarkerPath = computed<MapBiomarkerPath | undefined>(() => {
+  if (!supportsGlobalBiomarkerPaths.value || selection.biomarkerKey === ALL_BIOMARKER_KEY) {
+    return undefined
+  }
+  return biomarkerPathByKey.value.get(
+    biomarkerPathKey({
+      targetClass: selection.targetClass,
+      category: selection.category,
+      subcategory: selection.subcategory,
+      biomarkerKey: selection.biomarkerKey,
+      biomarkerLabel: '',
+    }),
+  )
+})
+const selectedBiomarkerPathKey = computed(() => {
+  if (selection.biomarkerKey === ALL_BIOMARKER_KEY) return ALL_BIOMARKER_PATH_KEY
+  return selectedBiomarkerPath.value
+    ? biomarkerPathKey(selectedBiomarkerPath.value)
+    : selection.biomarkerKey
+})
+const biomarkerFilterOptions = computed<MapFilterSelectOption[]>(() => {
+  return buildBiomarkerFilterOptions(
+    filters.value?.biomarkerPaths,
+    currentBiomarkers.value,
+    ui.value.allBiomarkers,
+    displayOptionLabel,
+  )
+})
 const yearFilterOptions = computed(() =>
   toFilterSelectOptions(currentYears.value, (value) => displayOptionLabel(value)),
 )
+const appliedBiomarkerPath = computed<MapBiomarkerPath | undefined>(() => {
+  if (
+    !supportsGlobalBiomarkerPaths.value ||
+    appliedSelection.value.biomarkerKey === ALL_BIOMARKER_KEY
+  ) {
+    return undefined
+  }
+  return biomarkerPathByKey.value.get(
+    biomarkerPathKey({
+      ...appliedSelection.value,
+      biomarkerLabel: '',
+    }),
+  )
+})
 const selectedBiomarkerLabel = computed(
   () =>
     displayOptionLabel(
-      currentBiomarkers.value.find((item) => item.key === selection.biomarkerKey)?.label,
+      filters.value?.biomarkersByCategorySubcategory[
+        buildSelectionKey(appliedSelection.value.category, appliedSelection.value.subcategory)
+      ]?.find((item) => item.key === appliedSelection.value.biomarkerKey)?.label,
     ) ||
-    (selection.biomarkerKey === ALL_BIOMARKER_KEY
+    displayOptionLabel(appliedBiomarkerPath.value?.biomarkerLabel) ||
+    (appliedSelection.value.biomarkerKey === ALL_BIOMARKER_KEY
       ? ui.value.allBiomarkers
-      : selection.biomarkerKey),
+      : appliedSelection.value.biomarkerKey),
 )
-const hasSpecificBiomarker = computed(() => selection.biomarkerKey !== ALL_BIOMARKER_KEY)
+const hasSpecificBiomarker = computed(
+  () => appliedSelection.value.biomarkerKey !== ALL_BIOMARKER_KEY,
+)
 const effectiveFilterContext = computed(() =>
   detailFilterContext({
     hasSpecificBiomarker: hasSpecificBiomarker.value,
     biomarkerLabel: selectedBiomarkerLabel.value,
-    year: displayOptionLabel(selection.year),
+    year: displayOptionLabel(appliedSelection.value.year),
     fallbackParts: [
-      displayOptionLabel(selection.targetClass),
-      displayOptionLabel(selection.category),
-      displayOptionLabel(selection.subcategory),
+      displayOptionLabel(appliedSelection.value.targetClass),
+      displayOptionLabel(appliedSelection.value.category),
+      displayOptionLabel(appliedSelection.value.subcategory),
     ],
   }),
 )
@@ -1192,7 +1280,19 @@ const compactSummaryCards = computed(() =>
 const compactBiomarkers = computed(() =>
   sortBiomarkersByLiterature(selectedDetail.value?.topBiomarkers ?? []).slice(0, 20),
 )
-const availableYearRange = computed(() => selectionYearRange(currentYears.value))
+const appliedYears = computed(() =>
+  withFallbackOption(
+    filters.value?.yearsBySelection[
+      buildSelectionKey(
+        appliedSelection.value.category,
+        appliedSelection.value.subcategory,
+        appliedSelection.value.biomarkerKey,
+      )
+    ],
+    ALL_YEAR_LABEL,
+  ),
+)
+const availableYearRange = computed(() => selectionYearRange(appliedYears.value))
 const fullDetailSummaryCards = computed(() =>
   overviewSummaryCards(
     selectedDetail.value?.summaryCards ?? [],
@@ -1291,45 +1391,31 @@ const renderableTrendSeries = computed(() =>
     : [],
 )
 const canRenderTrendChart = computed(() => renderableTrendSeries.value.length > 0)
-const allLevelHeatValues = computed(() =>
-  (stats.value?.regions ?? [])
-    .map((row) => Number(row.pndlMedianMgD1000inh ?? 0))
-    .filter((value) => Number.isFinite(value) && value > 0),
-)
-const stableHeatRange = computed(() =>
-  resolveStableHeatRange(
-    stats.value?.legend.min,
-    stats.value?.legend.max,
-    allLevelHeatValues.value,
-  ),
-)
-const regionHeatMin = computed(() => stableHeatRange.value.min)
-const regionHeatMax = computed(() => stableHeatRange.value.max)
+const activeHeatScale = computed(() => heatScaleForLevel(activeMapLevel.value))
 const hasCoverageWithoutPndl = computed(() =>
   displayHeatRegionRows().some(
     (row) => statHasCoverage(row) && Number(row.pndlMedianMgD1000inh ?? 0) <= 0,
   ),
 )
-const canShowPndlGradient = computed(() => hasSpecificBiomarker.value && regionHeatMax.value > 0)
+const canShowPndlGradient = computed(
+  () => hasSpecificBiomarker.value && activeHeatScale.value.count > 0,
+)
 const canShowHeatLegend = computed(
   () => hasSpecificBiomarker.value && (canShowPndlGradient.value || hasCoverageWithoutPndl.value),
 )
-const heatLegendGradient = computed(
-  () =>
-    `linear-gradient(90deg, ${MAP_HEAT_COLORS.map(
-      (color, index) => `${color} ${(index / Math.max(MAP_HEAT_COLORS.length - 1, 1)) * 100}%`,
-    ).join(', ')})`,
-)
+const heatLegendUnit = computed(() => stats.value?.legend.unit || ui.value.heatLegendUnit)
+const heatLegendGradient = computed(() => segmentedHeatGradient(activeHeatScale.value.colors))
 const heatLegendBands = computed(() => {
-  const min = regionHeatMin.value
-  const max = regionHeatMax.value
-  const middle = heatLegendMiddleValue(min, max)
   return [
-    { label: ui.value.heatLegendLow, value: formatCompact(min) },
-    { label: ui.value.heatLegendMedium, value: formatCompact(middle) },
-    { label: ui.value.heatLegendHigh, value: formatCompact(max) },
+    { label: ui.value.heatLegendLow, value: formatCompact(activeHeatScale.value.min) },
+    { label: ui.value.heatLegendMedium, value: formatCompact(activeHeatScale.value.median) },
+    { label: ui.value.heatLegendHigh, value: formatCompact(activeHeatScale.value.max) },
   ]
 })
+const heatLegendContext = computed(
+  () =>
+    `${locationPrecisionLabel(activeMapLevel.value)} · ${ui.value.heatLegendNote} · ${activeHeatScale.value.count} ${ui.value.heatLegendRegionCount}`,
+)
 const trendChartPoints = computed(() => {
   const points = activeTrendSeries.value?.points ?? []
   const values = points
@@ -1438,7 +1524,7 @@ const hasNoStatsData = computed(
     Boolean(stats.value) &&
     !isLoadingStats.value &&
     !filterError.value &&
-    Boolean(selection.category) &&
+    Boolean(appliedSelection.value.category) &&
     displayRegionRows().length === 0 &&
     displayPointRows().length === 0,
 )
@@ -1446,10 +1532,10 @@ const activeMapMessage = computed(() => {
   if (mapError.value || filterError.value) {
     return { type: 'error', text: mapError.value || filterError.value }
   }
-  if (isLoadingFilters.value || isLoadingStats.value) {
+  if (isLoadingFilters.value) {
     return {
       type: 'loading',
-      text: isLoadingFilters.value ? ui.value.loadingFilters : ui.value.loadingStats,
+      text: ui.value.loadingFilters,
     }
   }
   if (hasEmptyFilterData.value) {
@@ -1469,15 +1555,6 @@ const activeMapMessage = computed(() => {
 const boundaryLoadingMessage = computed(() =>
   loadingBoundaryNames.value.length ? ui.value.boundaryLoading : '',
 )
-const searchResults = computed(() => {
-  boundaryVersion.value
-  regionIndexVersion.value
-  const query = normalizeSearch(searchQuery.value)
-  if (!query) return []
-  return buildSearchCandidates()
-    .filter((item) => searchCandidateMatches(item, query))
-    .slice(0, 8)
-})
 const formattedMapStatus = computed(() => ({
   latitude: formatCoordinate(mapStatus.value.latitude, 'latitude'),
   longitude: formatCoordinate(mapStatus.value.longitude, 'longitude'),
@@ -1488,6 +1565,105 @@ const formattedMapStatus = computed(() => ({
       : mapStatus.value.country,
   label: mapStatus.value.mode === 'cursor' ? ui.value.cursor : ui.value.center,
 }))
+const mapOperationGuideSteps = computed(() => MAP_OPERATION_GUIDE_STEPS[locale.value])
+const canAutoOpenMapGuide = computed(
+  () =>
+    mapReady.value &&
+    Boolean(filters.value) &&
+    Boolean(stats.value) &&
+    !isLoadingFilters.value &&
+    !isLoadingStats.value &&
+    !isLoadingDetail.value &&
+    !isMapStyleSwitching.value &&
+    mapRenderPhase.value === 'settled' &&
+    !activeMapMessage.value &&
+    !boundaryLoadingMessage.value &&
+    !mapGuideSeen.value &&
+    !mapGuideSuppressedForVisit.value &&
+    !mapGuideShownThisVisit.value,
+)
+
+function readMapOperationGuideSeen() {
+  if (typeof window === 'undefined') return false
+  try {
+    return Boolean(window.localStorage.getItem(MAP_OPERATION_GUIDE_STORAGE_KEY))
+  } catch {
+    return false
+  }
+}
+
+function markMapOperationGuideSeen() {
+  mapGuideSeen.value = true
+  try {
+    window.localStorage.setItem(MAP_OPERATION_GUIDE_STORAGE_KEY, 'shown')
+  } catch {
+    // In-memory state still prevents another automatic guide during this visit.
+  }
+}
+
+function clearMapGuideTimer() {
+  if (mapGuideTimer == null) return
+  window.clearTimeout(mapGuideTimer)
+  mapGuideTimer = undefined
+}
+
+function handleMapStageInteraction() {
+  if (mapGuideOpen.value || mapGuideShownThisVisit.value) return
+  mapGuideSuppressedForVisit.value = true
+  clearMapGuideTimer()
+}
+
+async function openMapOperationGuide(source: 'auto' | 'manual' = 'manual') {
+  if (mapGuideOpen.value) return
+  clearMapGuideTimer()
+  if (source === 'auto') {
+    mapGuideShownThisVisit.value = true
+    markMapOperationGuideSeen()
+  }
+  mapGuideUiSnapshot = {
+    filterOpen: isFilterOpen.value,
+    layerPanelOpen: isLayerPanelOpen.value,
+    detailMode: detailMode.value,
+  }
+  isFilterOpen.value = true
+  isLayerPanelOpen.value = false
+  detailMode.value = 'none'
+  mapGuideStep.value = 0
+  await nextTick()
+  mapGuideOpen.value = true
+}
+
+function closeMapOperationGuide() {
+  mapGuideOpen.value = false
+  const snapshot = mapGuideUiSnapshot
+  mapGuideUiSnapshot = null
+  if (!snapshot) return
+  isFilterOpen.value = snapshot.filterOpen
+  isLayerPanelOpen.value = snapshot.layerPanelOpen
+  detailMode.value = snapshot.detailMode
+}
+
+function previousMapGuideStep() {
+  mapGuideStep.value = Math.max(0, mapGuideStep.value - 1)
+}
+
+function nextMapGuideStep() {
+  mapGuideStep.value = Math.min(mapOperationGuideSteps.value.length - 1, mapGuideStep.value + 1)
+}
+
+watch(
+  canAutoOpenMapGuide,
+  (eligible) => {
+    clearMapGuideTimer()
+    if (!eligible) return
+    mapGuideTimer = window.setTimeout(() => {
+      mapGuideTimer = undefined
+      if (!canAutoOpenMapGuide.value) return
+      void openMapOperationGuide('auto')
+    }, MAP_OPERATION_GUIDE_DELAY_MS)
+  },
+  { immediate: true },
+)
 
 watch(locale, (value) => {
   window.localStorage.setItem(MAP_LOCALE_STORAGE_KEY, value)
@@ -1552,10 +1728,6 @@ watch(
   () => {
     if (programmaticSelectionUpdateInProgress) return
     pinnedBiomarkerOption.value = null
-    const preserveSelection = preserveSelectionOnNextSelectionChange
-    preserveSelectionOnNextSelectionChange = false
-    closeDetail({ clearSelection: !preserveSelection })
-    if (selection.category) scheduleStatsFetch()
   },
   { deep: true },
 )
@@ -1586,6 +1758,17 @@ watch(
   },
   { deep: true },
 )
+watch(
+  [isFilterOpen, isLayerPanelOpen, detailMode, canShowHeatLegend],
+  async () => {
+    await nextTick()
+    pointOverlayLayoutVersion += 1
+    pointCollectionCache.clear()
+    labelPointCollectionCache.clear()
+    schedulePointSourceRefresh(0)
+  },
+  { flush: 'post' },
+)
 
 onMounted(async () => {
   await loadFilters()
@@ -1593,13 +1776,12 @@ onMounted(async () => {
   await initMap()
   window.addEventListener('resize', handleMapResize)
   window.addEventListener('keydown', handleMapKeydown)
-  if (selection.category) scheduleStatsFetch(0)
+  if (selection.category) await applyFilters({ force: true })
 })
 
 onBeforeUnmount(() => {
-  if (fetchTimer) window.clearTimeout(fetchTimer)
+  clearMapGuideTimer()
   if (clickTimer) window.clearTimeout(clickTimer)
-  if (searchBlurTimer) window.clearTimeout(searchBlurTimer)
   if (resizeTimer) window.clearTimeout(resizeTimer)
   if (regionTooltipTimer) window.clearTimeout(regionTooltipTimer)
   if (pointSourceRefreshTimer) window.clearTimeout(pointSourceRefreshTimer)
@@ -1621,6 +1803,7 @@ onBeforeUnmount(() => {
   }
   window.removeEventListener('resize', handleMapResize)
   window.removeEventListener('keydown', handleMapKeydown)
+  statsRequestId += 1
   statsController?.abort()
   detailController?.abort()
   hoverPopup?.remove()
@@ -1639,19 +1822,34 @@ async function loadFilters() {
   try {
     const result = await fetchMapFilters(controller.signal)
     filters.value = result
-    Object.assign(selection, {
+    const initialSelection = {
       ...DEFAULT_SELECTION,
       ...result.defaultSelection,
       targetClass: result.defaultSelection?.targetClass ?? 'ALL',
       category: ALL_CATEGORY_LABEL,
       subcategory: ALL_SUBCATEGORY_LABEL,
       biomarkerKey: ALL_BIOMARKER_KEY,
-    })
+    }
+    Object.assign(selection, initialSelection)
+    appliedSnapshot.value = {
+      selection: { ...initialSelection },
+      stats: null,
+    }
   } catch (error) {
     filterError.value = getUserErrorMessage(error, ui.value.filterLoadFailed)
   } finally {
     isLoadingFilters.value = false
   }
+}
+
+function filterSelectionsEqual(left: MapFilterSelection, right: MapFilterSelection) {
+  return (
+    left.targetClass === right.targetClass &&
+    left.category === right.category &&
+    left.subcategory === right.subcategory &&
+    left.biomarkerKey === right.biomarkerKey &&
+    left.year === right.year
+  )
 }
 
 function withFallbackOption(items: string[] | undefined, option: string) {
@@ -1688,17 +1886,16 @@ async function initMap() {
   try {
     const module = await import('maplibre-gl')
     maplibregl = ((module as MapLibreModule).default ?? module) as MapLibreModule
-    globeAvailable.value = canUseGlobe(maplibregl)
-    mapMode.value = 'flat'
     const basemapConfig = await resolveBasemapConfig(maplibregl)
     basemapMode = basemapConfig.mode
     regionSourceMode = basemapConfig.mode === 'vector' ? 'vector' : 'geojson'
     activeBasemapConfig = basemapConfig
+    const initialCamera = devMapQaInitialCamera()
     map = new maplibregl.Map({
       container: mapContainer.value,
-      style: buildMapStyle(mapMode.value, basemapConfig) as never,
-      center: FLAT_CENTER as LngLatLike,
-      zoom: FLAT_INITIAL_ZOOM,
+      style: buildMapStyle(basemapConfig) as never,
+      center: initialCamera.center as LngLatLike,
+      zoom: initialCamera.zoom,
       minZoom: currentMapMinZoom(),
       maxZoom: currentMapMaxZoom(),
       attributionControl: false,
@@ -1725,7 +1922,6 @@ async function initMap() {
       })
       void ensureBoundary('countries', true)
       updateMapData()
-      enforceGlobeSafeZoom(false)
       updateMapStatus()
     })
     map.on('zoomend', () => {
@@ -1772,13 +1968,28 @@ async function initMap() {
     updateMapCoordinates()
   } catch (error) {
     mapError.value = getUserErrorMessage(error, ui.value.mapInitFailed)
-    mapMode.value = 'flat'
   }
 }
 
-function canUseGlobe(_module: MapLibreModule) {
-  const canvas = document.createElement('canvas')
-  return Boolean(canvas.getContext('webgl2') || canvas.getContext('webgl'))
+function devMapQaInitialCamera() {
+  if (!import.meta.env.DEV) return { center: FLAT_CENTER, zoom: FLAT_INITIAL_ZOOM }
+  const query = new URLSearchParams(window.location.search)
+  if (query.get(DEV_MAP_QA_QUERY_FLAG) !== '1') {
+    return { center: FLAT_CENTER, zoom: FLAT_INITIAL_ZOOM }
+  }
+  const longitude = Number(query.get('lng'))
+  const latitude = Number(query.get('lat'))
+  const zoom = Number(query.get('zoom'))
+  if (![longitude, latitude, zoom].every(Number.isFinite)) {
+    return { center: FLAT_CENTER, zoom: FLAT_INITIAL_ZOOM }
+  }
+  return {
+    center: [Math.max(-180, Math.min(180, longitude)), Math.max(-85, Math.min(85, latitude))] as [
+      number,
+      number,
+    ],
+    zoom: clampZoom(zoom),
+  }
 }
 
 function currentMapMaxZoom() {
@@ -1786,16 +1997,14 @@ function currentMapMaxZoom() {
 }
 
 function currentMapMinZoom() {
-  if (mapMode.value === 'globe') return GLOBE_MIN_ZOOM
   const width = map?.getCanvas().clientWidth ?? mapContainer.value?.clientWidth ?? window.innerWidth
   return Math.min(currentMapMaxZoom(), wrappedWorldMinZoom(width, FLAT_MIN_ZOOM))
 }
 
 function applyFlatWorldWrapConstraints() {
   if (!map) return
-  const flat = mapMode.value === 'flat'
-  map.setRenderWorldCopies(flat)
-  map.setMinZoom(flat ? currentMapMinZoom() : GLOBE_MIN_ZOOM)
+  map.setRenderWorldCopies(true)
+  map.setMinZoom(currentMapMinZoom())
 }
 
 function mapDisplayLevelForZoom(zoom: number): MapDisplayLevel {
@@ -1817,7 +2026,6 @@ function handleActiveMapLevelTransition() {
   clearHoverForCameraMove()
   clearSelectedPointVisualState()
   pointCollectionCache.clear()
-  updatePreviewRegionOutlineLevelFilters()
   applyViewLayerVisibility()
   mapRenderPhase.value = 'settled'
 }
@@ -1862,6 +2070,8 @@ function invalidateMapDisplayCaches() {
   displayRegionRowsCache = null
   displayMapRowsStats = null
   displayMapRowsCache.clear()
+  adaptiveHeatScaleStats = null
+  adaptiveHeatScaleCache.clear()
   regionDataCollectionCache = null
   labelPointCollectionCache.clear()
   pointCollectionCache.clear()
@@ -1874,11 +2084,7 @@ function clampNumber(value: number, min: number, max: number) {
 }
 
 function clampZoom(zoom: number) {
-  return clampNumber(
-    zoom,
-    mapMode.value === 'globe' ? getGlobeSafeZoom() : FLAT_MIN_ZOOM,
-    currentMapMaxZoom(),
-  )
+  return clampNumber(zoom, FLAT_MIN_ZOOM, currentMapMaxZoom())
 }
 
 function configureMapGestureSmoothness() {
@@ -2037,8 +2243,7 @@ function fallbackRegionSourceToGeoJson() {
   clearHoveredPoint()
   setHoveredRegion(null)
   unbindLayerEvents()
-  resetPreviewRegionFeatureStateTracking()
-  map.setStyle(buildMapStyle(mapMode.value, activeBasemapConfig) as never)
+  map.setStyle(buildMapStyle(activeBasemapConfig) as never)
   const restore = () => {
     if (!isBasemapFallbackInProgress) return
     restoreGeoJsonBasemapLayers()
@@ -2059,8 +2264,7 @@ function fallbackToGeoJsonBasemap() {
   clearHoveredPoint()
   setHoveredRegion(null)
   unbindLayerEvents()
-  resetPreviewRegionFeatureStateTracking()
-  map.setStyle(buildMapStyle(mapMode.value, activeBasemapConfig) as never)
+  map.setStyle(buildMapStyle(activeBasemapConfig) as never)
   const restore = () => {
     if (!isBasemapFallbackInProgress) return
     restoreGeoJsonBasemapLayers()
@@ -2070,7 +2274,7 @@ function fallbackToGeoJsonBasemap() {
 }
 
 function reloadCurrentMapStyle() {
-  if (!map || projectionSwitchInProgress || isBasemapFallbackInProgress) return
+  if (!map || isBasemapFallbackInProgress) return
   isMapStyleSwitching.value = true
   const camera = {
     center: map.getCenter(),
@@ -2083,8 +2287,7 @@ function reloadCurrentMapStyle() {
   setHoveredRegion(null)
   unbindLayerEvents()
   mapReady.value = false
-  resetPreviewRegionFeatureStateTracking()
-  map.setStyle(buildMapStyle(mapMode.value, activeBasemapConfig) as never)
+  map.setStyle(buildMapStyle(activeBasemapConfig) as never)
   const restore = () => {
     if (!map) return
     if (!map.isStyleLoaded()) {
@@ -2100,7 +2303,6 @@ function reloadCurrentMapStyle() {
     void ensureBoundary('countries', true)
     ensureFallbackBoundaries(true)
     updateMapData()
-    syncAtmosphereStyle()
     map.setMaxZoom(currentMapMaxZoom())
     isMapStyleSwitching.value = false
   }
@@ -2127,14 +2329,13 @@ function restoreGeoJsonBasemapLayers() {
   void ensureBoundary('countries', true)
   ensureFallbackBoundaries(true)
   updateMapData()
-  enforceGlobeSafeZoom(false)
 }
 
-function buildMapStyle(mode: MapMode, basemapConfig: BasemapConfig) {
+function buildMapStyle(basemapConfig: BasemapConfig) {
   if (basemapConfig.mode === 'vector') {
     return {
       version: 8,
-      projection: { type: mode === 'globe' ? 'globe' : 'mercator' },
+      projection: { type: 'mercator' },
       glyphs: basemapConfig.glyphs,
       sources: {
         protomaps: {
@@ -2143,7 +2344,6 @@ function buildMapStyle(mode: MapMode, basemapConfig: BasemapConfig) {
             '<a href="https://github.com/protomaps/basemaps">Protomaps</a> · <a href="https://osm.org/copyright">OpenStreetMap</a> · geoBoundaries CC BY 4.0',
           url: basemapConfig.styleSourceUrl,
           promoteId: {
-            [PREVIEW_REGION_OUTLINE_SOURCE_LAYER]: 'region_id',
             [PREVIEW_REGION_POLYGON_SOURCE_LAYER]: 'region_id',
           },
         },
@@ -2154,14 +2354,14 @@ function buildMapStyle(mode: MapMode, basemapConfig: BasemapConfig) {
 
   return {
     version: 8,
-    projection: { type: mode === 'globe' ? 'globe' : 'mercator' },
+    projection: { type: 'mercator' },
     sources: {},
     layers: [
       {
         id: 'background',
         type: 'background',
         paint: {
-          'background-color': mode === 'globe' ? GLOBE_BACKGROUND_COLOR : FLAT_BACKGROUND_COLOR,
+          'background-color': FLAT_BACKGROUND_COLOR,
         },
       },
     ],
@@ -2191,8 +2391,11 @@ function regionLayerBeforeId(layer: unknown) {
   const id = String((layer as { id?: string }).id ?? '')
   const layers = map?.getStyle().layers ?? []
   if (id.endsWith('-fill')) {
+    // Keep business fills above base-map detail (including roads and water)
+    // but below administrative boundaries and labels. This is a pure GPU
+    // layer-order change and avoids any client-side land/water clipping.
     return (
-      layers.find((item) => /^roads_|^pois|^places|^transit|^transport/i.test(item.id))?.id ??
+      PREVIEW_BOUNDARY_LAYER_IDS.find((layerId) => map?.getLayer(layerId)) ??
       mapLabelLayerBeforeId()
     )
   }
@@ -2216,8 +2419,9 @@ function addPndlLabelLayer(level: MapDisplayLevel) {
       'text-size': businessLabelTextSizeExpression(level),
       'text-anchor': 'center',
       'text-justify': 'center',
-      'text-allow-overlap': true,
-      'text-ignore-placement': true,
+      'text-offset': ['get', 'labelOffset'],
+      'text-allow-overlap': false,
+      'text-ignore-placement': false,
       'text-padding': 2,
       'text-optional': false,
       'text-line-height': 1.1,
@@ -2246,12 +2450,6 @@ function addBubbleImages() {
       if (!map?.hasImage(ringId)) {
         map?.addImage(ringId, createBubbleRingImage(diameter), { pixelRatio: 2 })
       }
-      BUBBLE_HEAT_COLORS.forEach((color, colorIndex) => {
-        const heatId = bubbleHeatImageId(level, index, colorIndex)
-        if (!map?.hasImage(heatId)) {
-          map?.addImage(heatId, createBubbleHeatImage(diameter, color), { pixelRatio: 2 })
-        }
-      })
     })
   })
 }
@@ -2266,6 +2464,15 @@ function bubbleRingImageId(level: MapDisplayLevel, bucketIndex: number) {
 
 function bubbleHeatImageId(level: MapDisplayLevel, bucketIndex: number, colorIndex: number) {
   return `wbe-bubble-heat-${level}-${bucketIndex}-${colorIndex}`
+}
+
+function ensureBubbleHeatImage(level: MapDisplayLevel, bucketIndex: number, colorIndex: number) {
+  if (!map) return
+  const id = bubbleHeatImageId(level, bucketIndex, colorIndex)
+  if (map.hasImage(id)) return
+  const diameter = BUBBLE_IMAGE_BUCKETS[level][bucketIndex] ?? BUBBLE_IMAGE_BUCKETS[level][0] ?? 28
+  const color = BUBBLE_HEAT_COLORS[colorIndex] ?? MAP_HIGHLIGHT_STYLE.dataFill
+  map.addImage(id, createBubbleHeatImage(diameter, color), { pixelRatio: 2 })
 }
 
 function createBubbleImage(diameter: number, variant: BubblePinVariant) {
@@ -2474,23 +2681,13 @@ function addMapSourcesAndLayers() {
     addGeoSource('admin1-boundary-lines')
     addGeoSource('china-province-boundary-lines')
     addGeoSource('china-city-boundary-lines')
-    addGeoSource('china-active-province-boundary-lines')
     addGeoSource('china-special-admin-boundary-lines')
   }
   if (regionSourceMode === 'geojson') {
     addGeoSource('region-data')
-    addGeoSource('region-data-lines')
     addGeoSource('region-hover')
-    addGeoSource('region-hover-lines')
     addGeoSource('region-selected')
-    addGeoSource('region-selected-lines')
   }
-  addGeoSource('region-city-data')
-  addGeoSource('region-city-data-lines')
-  addGeoSource('region-city-hover')
-  addGeoSource('region-city-hover-lines')
-  addGeoSource('region-city-selected')
-  addGeoSource('region-city-selected-lines')
 
   if (usesControlledLowZoomLabels()) {
     addGeoSource('continent-label-points')
@@ -2556,8 +2753,6 @@ function addMapSourcesAndLayers() {
   }
   addRegionDataLayers()
   addRegionHighlightLayers()
-  addPreviewRegionOutlineLayers()
-  addCityFallbackRegionLayers()
   if (basemapMode === 'geojson') addBoundaryLineLayers()
 
   addBubbleImages()
@@ -2705,8 +2900,9 @@ function addSpecialAdminPointLayers() {
       'text-size': businessLabelTextSizeExpression('admin1'),
       'text-anchor': 'center',
       'text-justify': 'center',
-      'text-allow-overlap': true,
-      'text-ignore-placement': true,
+      'text-offset': ['get', 'labelOffset'],
+      'text-allow-overlap': false,
+      'text-ignore-placement': false,
       'text-padding': 2,
       'text-optional': false,
       'text-line-height': 1.1,
@@ -2859,17 +3055,8 @@ function addBaseFillLayer(
 }
 
 function addBoundaryLineLayers() {
-  addLineLayer('country-line', 'country-boundary-lines', '#657681', 0.76, 0, 0.78)
-  addLineLayer('admin1-line', 'admin1-boundary-lines', '#7f8d95', 0.66, 3.3, 0.64)
-  addLineLayer('china-province-line', 'china-province-boundary-lines', '#73838c', 0.7, 3.3, 0.68)
-  addLineLayer(
-    'china-active-province-line',
-    'china-active-province-boundary-lines',
-    '#687983',
-    0.82,
-    CITY_BOUNDARY_MIN_ZOOM,
-    0.78,
-  )
+  // Draw the finer hierarchy first so persistent parent boundaries remain
+  // visually continuous and authoritative at city zoom.
   addLineLayer(
     'china-city-line',
     'china-city-boundary-lines',
@@ -2877,6 +3064,16 @@ function addBoundaryLineLayers() {
     0.46,
     CITY_BOUNDARY_MIN_ZOOM,
     0.56,
+  )
+  addLineLayer('admin1-line', 'admin1-boundary-lines', '#7f8d95', 0.66, 3.3, 0.64)
+  addLineLayer('china-province-line', 'china-province-boundary-lines', '#73838c', 0.7, 3.3, 0.68)
+  addLineLayer(
+    'country-line',
+    'country-boundary-lines',
+    '#657681',
+    0.76,
+    0,
+    countryBoundaryFadeOpacity(0.78),
   )
   addLineLayer(
     'china-special-admin-line',
@@ -2894,7 +3091,8 @@ function addLineLayer(
   color: string,
   width: number,
   minzoom = 0,
-  opacity = 0.62,
+  opacity: unknown = 0.62,
+  maxzoom?: number,
   filter?: unknown,
 ) {
   addMapLayer({
@@ -2902,6 +3100,7 @@ function addLineLayer(
     type: 'line',
     source,
     minzoom,
+    ...(maxzoom != null ? { maxzoom } : {}),
     ...(filter ? { filter } : {}),
     layout: {
       'line-cap': 'round',
@@ -2917,181 +3116,37 @@ function addLineLayer(
 }
 
 function addRegionDataLayers() {
-  addRegionOverlayLayers(
-    'region-data',
-    regionDataFillColorExpression(),
-    MAP_HIGHLIGHT_STYLE.dataLine,
-    {
-      fillOpacity: regionDataFillOpacityExpression(),
-      lineOpacity: regionDataLineOpacityExpression(),
-      lineWidth: regionDataLineWidthExpression(),
-      filter:
-        regionSourceMode === 'vector'
-          ? previewRegionPolygonLevelFilter()
-          : regionVectorFilter(vectorRegionIds(dataRegionIds())),
-    },
-  )
+  addRegionFillLayer('region-data', regionDataFillColorExpression(), {
+    fillOpacity: regionDataFillOpacityExpression(),
+    filter:
+      regionSourceMode === 'vector'
+        ? previewRegionPolygonLevelFilter()
+        : regionVectorFilter(vectorRegionIds(dataRegionIds())),
+  })
 }
 
 function addRegionHighlightLayers() {
-  addRegionOverlayLayers(
-    'region-selected',
-    selectedRegionFillColorExpression(),
-    MAP_HIGHLIGHT_STYLE.selectedLine,
-    {
-      fillOpacity: selectedRegionFillOpacityExpression(),
-      lineOpacity:
-        regionSourceMode === 'vector'
-          ? ['case', regionLevelEqualsExpression('city'), 0, 0.94]
-          : regionOverlayOpacityExpression(0.92),
-      lineWidth: regionHighlightLineWidthExpression('selected'),
-      filter: regionVectorFilter(
-        selectedRegionId() ? vectorRegionIds([selectedRegionId() as string]) : [],
-      ),
-      halo: {
-        color: MAP_HIGHLIGHT_STYLE.selectedHalo,
-        opacity:
-          regionSourceMode === 'vector'
-            ? ['case', regionLevelEqualsExpression('city'), 0, 0.36]
-            : regionOverlayOpacityExpression(0.34),
-        width: regionSelectedHaloWidthExpression(),
-      },
-    },
-  )
-  addRegionOverlayLayers(
-    'region-hover',
-    hoveredRegionFillColorExpression(),
-    MAP_HIGHLIGHT_STYLE.hoverLine,
-    {
-      fillOpacity: 0,
-      lineOpacity: regionOverlayOpacityExpression(1),
-      lineWidth: regionHighlightLineWidthExpression('hover'),
-      filter: regionVectorFilter(
-        activeHoveredRegionId() ? vectorRegionIds([activeHoveredRegionId() as string]) : [],
-      ),
-    },
-  )
-}
-
-function addPreviewRegionOutlineLayers() {
-  if (basemapMode !== 'vector') return
-  const levelFilter = previewRegionOutlineLevelFilter()
-  addRegionLayer({
-    id: 'preview-region-selected-halo',
-    type: 'line',
-    source: 'protomaps',
-    'source-layer': PREVIEW_REGION_OUTLINE_SOURCE_LAYER,
-    filter: levelFilter,
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: {
-      'line-color': MAP_HIGHLIGHT_STYLE.selectedHalo,
-      'line-width': regionSelectedHaloWidthExpression(),
-      'line-opacity': ['case', ['boolean', ['feature-state', 'selected'], false], 0.34, 0],
-    },
+  addRegionFillLayer('region-hover', hoveredRegionFillColorExpression(), {
+    fillOpacity: 0.16,
+    filter: regionVectorFilter(
+      activeHoveredRegionId() ? vectorRegionIds([activeHoveredRegionId() as string]) : [],
+    ),
   })
-  addRegionLayer({
-    id: 'preview-region-selected-line',
-    type: 'line',
-    source: 'protomaps',
-    'source-layer': PREVIEW_REGION_OUTLINE_SOURCE_LAYER,
-    filter: levelFilter,
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: {
-      'line-color': MAP_HIGHLIGHT_STYLE.selectedLine,
-      'line-width': regionHighlightLineWidthExpression('selected'),
-      'line-opacity': ['case', ['boolean', ['feature-state', 'selected'], false], 0.94, 0],
-    },
-  })
-  addRegionLayer({
-    id: 'preview-region-hover-line',
-    type: 'line',
-    source: 'protomaps',
-    'source-layer': PREVIEW_REGION_OUTLINE_SOURCE_LAYER,
-    filter: levelFilter,
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: {
-      'line-color': MAP_HIGHLIGHT_STYLE.hoverLine,
-      'line-width': regionHighlightLineWidthExpression('hover'),
-      'line-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 1, 0],
-    },
+  // Selected is added after hover so it always has visual priority.
+  addRegionFillLayer('region-selected', selectedRegionFillColorExpression(), {
+    fillOpacity: selectedRegionFillOpacityExpression(),
+    filter: regionVectorFilter(
+      selectedRegionId() ? vectorRegionIds([selectedRegionId() as string]) : [],
+    ),
   })
 }
 
-function addCityFallbackRegionLayers() {
-  addCityFallbackLayerPair(
-    'region-city-data',
-    regionDataFillColorExpression(),
-    MAP_HIGHLIGHT_STYLE.dataLine,
-    regionDataFillOpacityExpression(),
-    regionDataLineOpacityExpression(),
-    regionDataLineWidthExpression(),
-  )
-  addCityFallbackLayerPair(
-    'region-city-selected',
-    selectedRegionFillColorExpression(),
-    MAP_HIGHLIGHT_STYLE.selectedLine,
-    selectedRegionFillOpacityExpression(),
-    0.92,
-    regionHighlightLineWidthExpression('selected'),
-  )
-  addCityFallbackLayerPair(
-    'region-city-hover',
-    hoveredRegionFillColorExpression(),
-    MAP_HIGHLIGHT_STYLE.hoverLine,
-    0,
-    1,
-    regionHighlightLineWidthExpression('hover'),
-  )
-}
-
-function addCityFallbackLayerPair(
-  sourceId: 'region-city-data' | 'region-city-selected' | 'region-city-hover',
-  fillColor: unknown,
-  lineColor: string,
-  fillOpacity: unknown,
-  lineOpacity: unknown,
-  lineWidth: unknown,
-) {
-  addRegionLayer({
-    id: `${sourceId}-fill`,
-    type: 'fill',
-    source: sourceId,
-    paint: {
-      'fill-color': fillColor,
-      'fill-opacity': fillOpacity,
-      'fill-antialias': true,
-    },
-  })
-  addRegionLayer({
-    id: `${sourceId}-line`,
-    type: 'line',
-    source: `${sourceId}-lines`,
-    layout: {
-      'line-cap': 'round',
-      'line-join': 'round',
-    },
-    paint: {
-      'line-color': lineColor,
-      'line-width': lineWidth,
-      'line-opacity': lineOpacity,
-    },
-  })
-}
-
-function addRegionOverlayLayers(
+function addRegionFillLayer(
   sourceId: 'region-data' | 'region-selected' | 'region-hover',
   fillColor: unknown,
-  lineColor: string,
   options: {
     fillOpacity: unknown
-    lineOpacity: unknown
-    lineWidth: unknown
     filter: unknown
-    halo?: {
-      color: string
-      opacity: unknown
-      width: unknown
-    }
   },
 ) {
   const fillLayer = {
@@ -3107,45 +3162,7 @@ function addRegionOverlayLayers(
       'fill-antialias': true,
     },
   }
-  const haloLayer = options.halo
-    ? {
-        id: `${sourceId}-halo`,
-        type: 'line',
-        source: regionSourceMode === 'vector' ? REGION_VECTOR_SOURCE_ID : `${sourceId}-lines`,
-        ...(regionSourceMode === 'vector'
-          ? { 'source-layer': REGION_VECTOR_LINE_SOURCE_LAYER, filter: options.filter }
-          : {}),
-        layout: {
-          'line-cap': 'round',
-          'line-join': 'round',
-        },
-        paint: {
-          'line-color': options.halo.color,
-          'line-width': options.halo.width,
-          'line-opacity': options.halo.opacity,
-        },
-      }
-    : null
-  const lineLayer = {
-    id: `${sourceId}-line`,
-    type: 'line',
-    source: regionSourceMode === 'vector' ? REGION_VECTOR_SOURCE_ID : `${sourceId}-lines`,
-    ...(regionSourceMode === 'vector'
-      ? { 'source-layer': REGION_VECTOR_LINE_SOURCE_LAYER, filter: options.filter }
-      : {}),
-    layout: {
-      'line-cap': 'round',
-      'line-join': 'round',
-    },
-    paint: {
-      'line-color': lineColor,
-      'line-width': options.lineWidth,
-      'line-opacity': options.lineOpacity,
-    },
-  }
   addRegionLayer(fillLayer)
-  if (haloLayer) addRegionLayer(haloLayer)
-  addRegionLayer(lineLayer)
 }
 
 function regionDataFillOpacityExpression() {
@@ -3154,38 +3171,7 @@ function regionDataFillOpacityExpression() {
 }
 
 function selectedRegionFillOpacityExpression() {
-  // GeoJSON selection uses the original outline-only interaction style.
-  return 0
-}
-
-function regionDataLineOpacityExpression() {
-  if (!hasSpecificBiomarker.value) {
-    return [
-      'interpolate',
-      ['linear'],
-      ['zoom'],
-      0,
-      0.08,
-      LEVEL_FADE_COUNTRY_END,
-      0.2,
-      LEVEL_FADE_CITY_END,
-      0.34,
-      currentMapMaxZoom(),
-      0.42,
-    ]
-  }
-  return [
-    'case',
-    ['==', ['get', 'hasPndlValue'], true],
-    0.34,
-    ['==', ['get', 'hasCoverage'], true],
-    0.28,
-    0.18,
-  ]
-}
-
-function regionDataLineWidthExpression() {
-  return ['interpolate', ['linear'], ['zoom'], 0, 0.48, 8, 1.08]
+  return 0.28
 }
 
 function regionDataFillColorExpression() {
@@ -3202,55 +3188,11 @@ function regionDataFillColorExpression() {
 }
 
 function selectedRegionFillColorExpression() {
-  return regionDataFillColorExpression()
+  return MAP_HIGHLIGHT_STYLE.selectedFill
 }
 
 function hoveredRegionFillColorExpression() {
-  return regionDataFillColorExpression()
-}
-
-function regionOverlayOpacityExpression(opacity: number) {
-  if (regionSourceMode === 'vector') {
-    return [
-      'case',
-      ['==', ['get', 'selected'], true],
-      opacity,
-      regionLevelEqualsExpression('city'),
-      Math.min(opacity, 0.32),
-      Math.min(opacity, 0.42),
-    ]
-  }
-  return opacity
-}
-
-function regionLevelEqualsExpression(level: string) {
-  return ['any', ['==', ['get', 'boundaryLevel'], level], ['==', ['get', 'level'], level]]
-}
-
-function regionHighlightLineWidthExpression(kind: 'selected' | 'hover') {
-  const widths =
-    kind === 'selected'
-      ? { country: 1.45, admin1: 1.2, city: 0.92 }
-      : { country: 1.55, admin1: 1.28, city: 1 }
-  return [
-    'case',
-    regionLevelEqualsExpression('country'),
-    widths.country,
-    regionLevelEqualsExpression('admin1'),
-    widths.admin1,
-    widths.city,
-  ]
-}
-
-function regionSelectedHaloWidthExpression() {
-  return [
-    'case',
-    regionLevelEqualsExpression('country'),
-    2.15,
-    regionLevelEqualsExpression('admin1'),
-    1.72,
-    1.32,
-  ]
+  return MAP_HIGHLIGHT_STYLE.hoverFill
 }
 
 function regionVectorFadeExpression(opacity: number | unknown[]) {
@@ -3296,11 +3238,7 @@ function addLabelLayer(
               minzoom,
               ['to-number', ['coalesce', ['get', 'countryLabelSize'], textSize]],
               8,
-              [
-                '+',
-                ['to-number', ['coalesce', ['get', 'countryLabelSize'], textSize]],
-                1.1,
-              ],
+              ['+', ['to-number', ['coalesce', ['get', 'countryLabelSize'], textSize]], 1.1],
             ]
           : gentleZoomTextSize(minzoom, textSize, 8, 1.4),
       ...(id === 'country-label'
@@ -3433,7 +3371,6 @@ async function ensureBoundary(name: BoundaryName, refreshCached = false) {
     displayMapRowsCache.clear()
     if (name === 'chinaCities' || name === 'chinaProvinces') {
       cityLineCollectionCache.clear()
-      activeProvinceLineCollectionCache.clear()
       activeCityLineParentKey = ''
     }
     boundaryVersion.value += 1
@@ -3515,14 +3452,10 @@ function updateBoundarySource(name: BoundaryName) {
 function updateVisibleCityBoundaryLines(force = false) {
   if (!map) return
   const citySource = map.getSource('china-city-boundary-lines') as GeoJSONSource | undefined
-  const parentSource = map.getSource('china-active-province-boundary-lines') as
-    | GeoJSONSource
-    | undefined
-  if (!citySource || !parentSource) return
+  if (!citySource) return
   if (activeMapLevel.value !== 'city') {
     if (force || activeCityLineParentKey) {
       citySource.setData(EMPTY_COLLECTION as never)
-      parentSource.setData(EMPTY_COLLECTION as never)
       activeCityLineParentKey = ''
     }
     return
@@ -3548,16 +3481,7 @@ function updateVisibleCityBoundaryLines(force = false) {
     }
     cityLineCollectionCache.set(cacheKey, cityLines)
   }
-  const visibleProvinces = filterBoundaryFeatures(provinces, (feature) =>
-    parentKeys.includes(featureGeoKey(feature, 'admin1')),
-  ) as FeatureCollection
-  let provinceLines = activeProvinceLineCollectionCache.get(cacheKey)
-  if (!provinceLines) {
-    provinceLines = boundaryOutlinesForFeatures(visibleProvinces)
-    activeProvinceLineCollectionCache.set(cacheKey, provinceLines)
-  }
   citySource.setData(cityLines as never)
-  parentSource.setData(provinceLines as never)
   activeCityLineParentKey = cacheKey
 }
 
@@ -3573,20 +3497,6 @@ function scopedTopologyLines(
     )
     return keys.has(parent)
   }) as FeatureCollection
-}
-
-function boundaryOutlinesForFeatures(collection: FeatureCollection): FeatureCollection {
-  const features = collection.features.flatMap((feature) => {
-    const geoKey = featureGeoKey(feature, 'admin1')
-    if (SPECIAL_ADMIN_GEO_KEYS.has(geoKey)) return []
-    return (
-      polygonBoundariesToLines({
-        type: 'FeatureCollection',
-        features: [feature],
-      }) as FeatureCollection
-    ).features
-  })
-  return { type: 'FeatureCollection', features }
 }
 
 function updateLabelSource(name: BoundaryName, collection: FeatureCollection) {
@@ -3855,12 +3765,14 @@ function updatePointSource() {
   }
   const activeLevel = activeMapLevel.value
   const collection = buildPointCollection(activeLevel)
+  ensureBubbleHeatImagesForCollection(collection)
   const source = map?.getSource(pointSourceId(activeLevel)) as GeoJSONSource | undefined
   source?.setData(collection as never)
   const specialSource = map?.getSource('map-points-special-admin') as GeoJSONSource | undefined
-  specialSource?.setData(
-    (activeLevel === 'city' ? buildSpecialAdminPointCollection() : EMPTY_COLLECTION) as never,
-  )
+  const specialCollection =
+    activeLevel === 'city' ? buildSpecialAdminPointCollection() : EMPTY_COLLECTION
+  ensureBubbleHeatImagesForCollection(specialCollection)
+  specialSource?.setData(specialCollection as never)
   scheduleNextPointLevelPreparation(activeLevel, pointPreparationRevision)
   reportMissingBusinessLabels()
 }
@@ -3876,6 +3788,7 @@ function scheduleNextPointLevelPreparation(activeLevel: MapDisplayLevel, revisio
     mapRenderPhase.value = 'preparing-next'
     const nextCollection = buildPointCollection(nextLevel)
     if (revision !== pointPreparationRevision) return
+    ensureBubbleHeatImagesForCollection(nextCollection)
     const nextSource = map.getSource(pointSourceId(nextLevel)) as GeoJSONSource | undefined
     nextSource?.setData(nextCollection as never)
     if (activeMapLevel.value === activeLevel) mapRenderPhase.value = 'settled'
@@ -3889,10 +3802,13 @@ function scheduleNextPointLevelPreparation(activeLevel: MapDisplayLevel, revisio
 
 function buildSpecialAdminPointCollection(): FeatureCollection {
   const compactHeatIds = compactHeatRegionIdSet('admin1')
+  const acceptedIds = acceptedPointRegionIdsByLevel.get('city') ?? new Set<string>()
   return {
     type: 'FeatureCollection',
     features: displayMapRegionRows('admin1').flatMap((row) => {
-      if (!SPECIAL_ADMIN_GEO_KEYS.has(row.geoKey)) return []
+      if (!SPECIAL_ADMIN_GEO_KEYS.has(row.geoKey) || !acceptedIds.has(regionIdForStat(row))) {
+        return []
+      }
       const feature = pointFeatureForRow('admin1', row, compactHeatIds)
       if (!feature) return []
       return [
@@ -3920,9 +3836,7 @@ function schedulePointSourceRefresh(delay = 120) {
 
 function updateRegionDataSource() {
   updateRegionPaintStyles()
-  updateCityFallbackPaintStyles()
   updateSelectedRegionPaintStyles()
-  updateCityFallbackRegionSources()
   if (regionSourceMode === 'vector') {
     updateRegionVectorFilters()
     scheduleProgressiveRegionStates(activeMapLevel.value)
@@ -3930,7 +3844,6 @@ function updateRegionDataSource() {
   }
   const collection = buildRegionDataCollection()
   setGeoJsonSourceData('region-data', null, collection)
-  setGeoJsonLineSourceData('region-data-lines', collection)
 }
 
 function updateRegionPaintStyles() {
@@ -3940,38 +3853,6 @@ function updateRegionPaintStyles() {
     'region-data-fill',
     'fill-opacity',
     regionDataFillOpacityExpression() as never,
-  )
-  if (map.getLayer('region-data-line')) {
-    map.setPaintProperty(
-      'region-data-line',
-      'line-opacity',
-      regionDataLineOpacityExpression() as never,
-    )
-    map.setPaintProperty('region-data-line', 'line-width', regionDataLineWidthExpression() as never)
-  }
-}
-
-function updateCityFallbackPaintStyles() {
-  if (!map?.getLayer('region-city-data-fill')) return
-  map.setPaintProperty(
-    'region-city-data-fill',
-    'fill-color',
-    regionDataFillColorExpression() as never,
-  )
-  map.setPaintProperty(
-    'region-city-data-fill',
-    'fill-opacity',
-    regionDataFillOpacityExpression() as never,
-  )
-  map.setPaintProperty(
-    'region-city-data-line',
-    'line-opacity',
-    regionDataLineOpacityExpression() as never,
-  )
-  map.setPaintProperty(
-    'region-city-data-line',
-    'line-width',
-    regionDataLineWidthExpression() as never,
   )
 }
 
@@ -3995,117 +3876,31 @@ function updateSelectedRegionPaintStyles() {
       hoveredRegionFillColorExpression() as never,
     )
   }
-  if (map?.getLayer('region-city-selected-fill')) {
-    map.setPaintProperty(
-      'region-city-selected-fill',
-      'fill-color',
-      selectedRegionFillColorExpression() as never,
-    )
-    map.setPaintProperty(
-      'region-city-selected-fill',
-      'fill-opacity',
-      selectedRegionFillOpacityExpression() as never,
-    )
-  }
-  if (map?.getLayer('region-city-hover-fill')) {
-    map.setPaintProperty(
-      'region-city-hover-fill',
-      'fill-color',
-      hoveredRegionFillColorExpression() as never,
-    )
-  }
 }
 
 function updateRegionHighlightSources() {
-  updatePreviewRegionOutlineFeatureState()
-  // The composite PMTiles owns hover/selection outlines. Avoid rebuilding
-  // GeoJSON line sources or vector filters at pointer frequency.
-  if (basemapMode === 'vector') return
   if (regionSourceMode === 'vector') {
     updateRegionVectorFilters()
-    updateCityFallbackRegionSources()
     return
   }
-  updateCityFallbackRegionSources()
   const hoverCollection = featureCollectionOrEmpty(activeHoveredRegionFeature())
   const selectedCollection = featureCollectionOrEmpty(
     selectedRegionVisibleAtActiveLevel() ? selectedRegionFeature.value : null,
   )
   setGeoJsonSourceData('region-hover', null, hoverCollection)
-  setGeoJsonLineSourceData('region-hover-lines', hoverCollection)
   setGeoJsonSourceData('region-selected', null, selectedCollection)
-  setGeoJsonLineSourceData('region-selected-lines', selectedCollection)
-}
-
-function updatePreviewRegionOutlineFeatureState() {
-  if (basemapMode !== 'vector') return
-  const nextSelectedId = visibleSelectedRegionId()
-  const nextHoveredId = activeHoveredRegionId()
-  if (previewSelectedRegionId !== nextSelectedId) {
-    setPreviewRegionFeatureState(previewSelectedRegionId, 'selected', false)
-    previewSelectedRegionId = nextSelectedId
-    setPreviewRegionFeatureState(previewSelectedRegionId, 'selected', true)
-  }
-  if (previewHoveredRegionId !== nextHoveredId) {
-    setPreviewRegionFeatureState(previewHoveredRegionId, 'hover', false)
-    previewHoveredRegionId = nextHoveredId
-    setPreviewRegionFeatureState(previewHoveredRegionId, 'hover', true)
-  }
-}
-
-function setPreviewRegionFeatureState(
-  regionId: string,
-  state: 'selected' | 'hover',
-  active: boolean,
-) {
-  if (!map || !regionId || !map.getSource('protomaps')) return
-  try {
-    map.setFeatureState(
-      {
-        source: 'protomaps',
-        sourceLayer: PREVIEW_REGION_OUTLINE_SOURCE_LAYER,
-        id: regionId,
-      },
-      { [state]: active },
-    )
-  } catch {
-    // A style replacement can invalidate vector feature state for one frame.
-  }
-}
-
-function updatePreviewRegionOutlineLevelFilters() {
-  if (basemapMode !== 'vector') return
-  const filter = previewRegionOutlineLevelFilter()
-  PREVIEW_REGION_OUTLINE_LAYER_IDS.forEach((layerId) => {
-    if (map?.getLayer(layerId)) map.setFilter(layerId, filter as never)
-  })
-}
-
-function previewRegionOutlineLevelFilter() {
-  if (activeMapLevel.value !== 'city') {
-    return ['==', ['get', 'level'], activeMapLevel.value]
-  }
-  return [
-    'any',
-    ['==', ['get', 'level'], 'city'],
-    [
-      'all',
-      ['==', ['get', 'level'], 'admin1'],
-      ['in', ['get', 'geo_key'], ['literal', [...SPECIAL_ADMIN_GEO_KEYS]]],
-    ],
-  ]
 }
 
 function updateRegionVectorFilters() {
-  setRegionLayerFilter(['region-data-fill', 'region-data-line'], previewRegionPolygonLevelFilter())
+  setRegionLayerFilter(['region-data-fill'], previewRegionPolygonLevelFilter())
   setRegionLayerFilter(
-    ['region-selected-fill', 'region-selected-halo', 'region-selected-line'],
+    ['region-selected-fill'],
     regionVectorFilter(
       visibleSelectedRegionId() ? vectorRegionIds([visibleSelectedRegionId()]) : [],
     ),
   )
   setRegionLayerFilter(
-    ['region-hover-fill', 'region-hover-line'],
+    ['region-hover-fill'],
     regionVectorFilter(
       activeHoveredRegionId() ? vectorRegionIds([activeHoveredRegionId() as string]) : [],
     ),
@@ -4193,19 +3988,11 @@ function vectorFillColorForStat(stat: MapRegionStat) {
 function vectorFillOpacityForStat(stat: MapRegionStat) {
   if (!hasSpecificBiomarker.value) return 0
   const hasPndl = Number(stat.pndlMedianMgD1000inh ?? 0) > 0
-  if (hasPndl) return stat.level === 'city' ? 0.76 : stat.level === 'admin1' ? 0.72 : 0.68
-  if (statHasCoverage(stat)) {
-    return stat.level === 'city' ? 0.34 : stat.level === 'admin1' ? 0.38 : 0.32
-  }
-  return 0
+  return hasPndl || statHasCoverage(stat) ? 1 : 0
 }
 
 function vectorRegionIds(regionIds: string[]) {
-  // Keep the visual business overlay on one geometry source. The PMTiles region
-  // layer is still useful when it is complete, but current local tiles can miss
-  // country/city ids; the GeoJSON overlay below guarantees every data region is visible.
-  void regionIds
-  return []
+  return [...new Set(regionIds.filter(Boolean))]
 }
 
 function setRegionLayerFilter(layerIds: string[], filter: unknown) {
@@ -4214,27 +4001,6 @@ function setRegionLayerFilter(layerIds: string[], filter: unknown) {
     if (!map?.getLayer(layerId)) return
     map.setFilter(layerId, filter as never)
   })
-}
-
-function updateCityFallbackRegionSources() {
-  if (regionSourceMode !== 'vector') {
-    setGeoJsonSourceData('region-city-data', null, EMPTY_COLLECTION)
-    setGeoJsonLineSourceData('region-city-data-lines', EMPTY_COLLECTION)
-    setGeoJsonSourceData('region-city-hover', null, EMPTY_COLLECTION)
-    setGeoJsonLineSourceData('region-city-hover-lines', EMPTY_COLLECTION)
-    setGeoJsonSourceData('region-city-selected', null, EMPTY_COLLECTION)
-    setGeoJsonLineSourceData('region-city-selected-lines', EMPTY_COLLECTION)
-    return
-  }
-  const dataCollection = buildCityFallbackRegionDataCollection()
-  const hoverCollection = buildCityFallbackSingleCollection(activeHoveredRegionId(), 'hovered')
-  const selectedCollection = buildCityFallbackSingleCollection(selectedRegionId(), 'selected')
-  setGeoJsonSourceData('region-city-data', null, dataCollection)
-  setGeoJsonLineSourceData('region-city-data-lines', dataCollection)
-  setGeoJsonSourceData('region-city-hover', null, hoverCollection)
-  setGeoJsonLineSourceData('region-city-hover-lines', hoverCollection)
-  setGeoJsonSourceData('region-city-selected', null, selectedCollection)
-  setGeoJsonLineSourceData('region-city-selected-lines', selectedCollection)
 }
 
 function regionVectorFilter(regionIds: string[]) {
@@ -4264,11 +4030,6 @@ function setGeoJsonSourceData(
   source?.setData(
     (collection ?? (feature ? featureCollectionFromFeature(feature) : EMPTY_COLLECTION)) as never,
   )
-}
-
-function setGeoJsonLineSourceData(sourceId: string, collection: FeatureCollection) {
-  const source = map?.getSource(sourceId) as GeoJSONSource | undefined
-  source?.setData(polygonBoundariesToLines(collection) as never)
 }
 
 function featureCollectionOrEmpty(feature: GeoJsonFeature | null): FeatureCollection {
@@ -4394,34 +4155,6 @@ function inheritedHeatFeature(feature: GeoJsonFeature, stat: MapRegionStat) {
   }
 }
 
-function buildCityFallbackRegionDataCollection(): FeatureCollection {
-  return buildRegionDataCollection()
-}
-
-function buildCityFallbackSingleCollection(
-  regionId: string,
-  state: 'hovered' | 'selected',
-): FeatureCollection {
-  const [level, geoKey] = regionId.split('|') as [MapRegionStat['level'], string]
-  if (!normalizeMapLevel(level) || !geoKey) return EMPTY_COLLECTION
-  const stat = dataRegionStatById(regionId)
-  const feature = boundaryFeatureForLevelGeoKey(level, geoKey, stat)
-  if (!feature) return EMPTY_COLLECTION
-  const cloned = cloneHighlightFeature(feature, stat)
-  return {
-    type: 'FeatureCollection',
-    features: [
-      {
-        ...cloned,
-        properties: {
-          ...cloned.properties,
-          [state]: true,
-        },
-      },
-    ],
-  }
-}
-
 function regionIdForStat(stat: MapRegionStat) {
   return `${stat.level}|${stat.geoKey}`
 }
@@ -4517,25 +4250,29 @@ function filterSmallGeometryParts(geometry: unknown, minArea: number) {
 }
 
 function declutterPointRows(level: MapDisplayLevel, rows: MapRegionStat[]) {
-  if (!map || rows.length < 2) return rows
+  if (!map) return rows
   const zoom = map.getZoom()
-  // Z8 is the terminal inspection view. Real city points with coordinates and
-  // names must not be discarded by the screen-space density pass there.
-  if (level === 'city' && zoom >= 7.85) return rows
   const selectedId = selectedRegionId()
-  const candidates = rows
+  const hoveredId = activeHoveredRegionId()
+  const specialAdminRows =
+    level === 'city'
+      ? displayMapRegionRows('admin1').filter((row) => SPECIAL_ADMIN_GEO_KEYS.has(row.geoKey))
+      : []
+  const candidateRows = [...rows, ...specialAdminRows]
+  const candidates = candidateRows
     .map((row, index) => {
+      const visualLevel = row.level === 'admin1' && level === 'city' ? 'admin1' : level
       const coordinates = representativeCoordinates(row)
       if (!coordinates) return null
       const projected = map?.project(coordinates as [number, number])
       if (!projected) return null
       const regionId = regionIdForStat(row)
-      const radius = approximateBubbleRadius(level, row, coordinates)
+      const radius = approximateBubbleRadius(visualLevel, row, coordinates)
       const area =
         regionIndexEntryFor(row.level, row.geoKey)?.area ??
         primaryPolygonArea(findBoundaryFeature(row)?.geometry)
       const renderedLabelSize = businessLabelSizeAtZoom(
-        level,
+        visualLevel,
         zoom,
         Number(row.pointCount ?? 0),
         area,
@@ -4545,27 +4282,140 @@ function declutterPointRows(level: MapDisplayLevel, rows: MapRegionStat[]) {
         renderedLabelSize,
       )
       const labelHeight = renderedLabelSize * 1.1
-      const halfWidth = Math.max(radius, labelWidth / 2)
+      const placements = businessPointPlacementOptions(
+        [projected.x, projected.y],
+        radius,
+        labelWidth,
+        labelHeight,
+        renderedLabelSize,
+      )
       return {
         value: row,
         order: index,
         forceVisible: Boolean(
           regionId && (regionId === selectedId || regionId === selectedPointKey.value),
         ),
+        hovered: Boolean(regionId && regionId === hoveredId),
         pointCount: Number(row.pointCount ?? 0),
         recordCount: Number(row.recordCount ?? 0),
         area,
-        bounds: {
-          left: projected.x - halfWidth,
-          right: projected.x + halfWidth,
-          top: projected.y - radius * 2 - BUBBLE_LABEL_CLEARANCE_PX,
-          bottom: projected.y + labelHeight / 2,
-        },
+        bounds: placements[0]!.bounds,
+        alternativeBounds: placements.slice(1).map((placement) => placement.bounds),
+        placements,
       }
     })
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
 
-  return declutterScreenSpaceCandidates(candidates, progressiveDeclutterGap(level, zoom))
+  const accepted = declutterScreenSpacePlacements(
+    candidates,
+    progressiveDeclutterGap(level, zoom),
+    mapOverlayReservedBounds(),
+  )
+  const acceptedIds = new Set<string>()
+  for (const candidate of candidates)
+    pointLabelPlacementByRegionId.delete(regionIdForStat(candidate.value))
+  for (const item of accepted) {
+    const candidate = candidates.find((value) => value.value === item.value)
+    const placement = candidate?.placements[item.placementIndex]
+    const regionId = regionIdForStat(item.value)
+    acceptedIds.add(regionId)
+    if (placement) {
+      pointLabelPlacementByRegionId.set(regionId, {
+        offset: placement.offset,
+        placement: placement.placement,
+      })
+    }
+  }
+  acceptedPointRegionIdsByLevel.set(level, acceptedIds)
+  if (level === activeMapLevel.value) visiblePointGroupBounds = accepted.map((item) => item.bounds)
+  const primaryIds = new Set(rows.map(regionIdForStat))
+  return accepted.map((item) => item.value).filter((row) => primaryIds.has(regionIdForStat(row)))
+}
+
+function businessPointPlacementOptions(
+  [x, y]: [number, number],
+  radius: number,
+  labelWidth: number,
+  labelHeight: number,
+  labelSize: number,
+) {
+  const clearance = BUBBLE_LABEL_CLEARANCE_PX
+  const bubbleBounds: ScreenSpaceBounds = {
+    left: x - radius,
+    right: x + radius,
+    top: y - radius * 2 - clearance,
+    bottom: y - clearance,
+  }
+  const safeLabelSize = Math.max(1, labelSize)
+  const positions: Array<{
+    placement: 'bottom' | 'top' | 'right' | 'left'
+    center: [number, number]
+  }> = [
+    { placement: 'bottom', center: [x, y + labelHeight * 0.15] },
+    {
+      placement: 'top',
+      center: [x, bubbleBounds.top - clearance * 0.6 - labelHeight / 2],
+    },
+    {
+      placement: 'right',
+      center: [x + radius + clearance + labelWidth / 2, y - radius - clearance / 2],
+    },
+    {
+      placement: 'left',
+      center: [x - radius - clearance - labelWidth / 2, y - radius - clearance / 2],
+    },
+  ]
+  return positions.map(({ placement, center }) => {
+    const labelBounds: ScreenSpaceBounds = {
+      left: center[0] - labelWidth / 2,
+      right: center[0] + labelWidth / 2,
+      top: center[1] - labelHeight / 2,
+      bottom: center[1] + labelHeight / 2,
+    }
+    return {
+      placement,
+      offset: [
+        Math.round(((center[0] - x) / safeLabelSize) * 100) / 100,
+        Math.round(((center[1] - y) / safeLabelSize) * 100) / 100,
+      ] as [number, number],
+      bounds: mergeScreenBounds(bubbleBounds, labelBounds),
+    }
+  })
+}
+
+function mergeScreenBounds(left: ScreenSpaceBounds, right: ScreenSpaceBounds): ScreenSpaceBounds {
+  return {
+    left: Math.min(left.left, right.left),
+    top: Math.min(left.top, right.top),
+    right: Math.max(left.right, right.right),
+    bottom: Math.max(left.bottom, right.bottom),
+  }
+}
+
+function mapOverlayReservedBounds(): ScreenSpaceBounds[] {
+  const container = mapContainer.value
+  const stage = container?.closest('.map-stage')
+  if (!container || !stage) return []
+  const containerRect = container.getBoundingClientRect()
+  return [
+    '.filter-shell',
+    '.map-tool-stack',
+    '.map-heat-legend',
+    '.map-status-chip',
+    '.map-message',
+    '.boundary-loading-chip',
+    '.detail-drawer.open',
+  ].flatMap((selector) => {
+    const element = stage.querySelector<HTMLElement>(selector)
+    if (!element || element.offsetParent === null) return []
+    const rect = element.getBoundingClientRect()
+    const left = Math.max(0, rect.left - containerRect.left)
+    const top = Math.max(0, rect.top - containerRect.top)
+    const right = Math.min(containerRect.width, rect.right - containerRect.left)
+    const bottom = Math.min(containerRect.height, rect.bottom - containerRect.top)
+    if (right <= left || bottom <= top) return []
+    return [{ left: left - 6, top: top - 6, right: right + 6, bottom: bottom + 6 }]
+  })
 }
 
 function approximateBubbleRadius(
@@ -4632,6 +4482,7 @@ function buildLabelPointCollection(
     const stat = findStatByLevelGeoKey(level, geoKey, feature.properties)
     const statRegionId = stat ? regionIdForStat(stat) : ''
     const displayName = localizedBoundaryName(feature, level)
+    const runtimeExcluded = runtimeStaticLabelExclusions.has(`${level}|${geoKey}`)
     const isMainlandCity =
       level === 'city' &&
       isMainlandChinaCity(
@@ -4645,7 +4496,10 @@ function buildLabelPointCollection(
         properties: {
           ...feature.properties,
           display_name: displayName,
-          labelVisible: Boolean(displayName) && !isSuppressedCountryAliasLabel(name, geoKey),
+          labelVisible:
+            Boolean(displayName) &&
+            !runtimeExcluded &&
+            !isSuppressedCountryAliasLabel(name, geoKey),
           boundaryLevel: level,
           geoKey,
           region_id: statRegionId || regionId,
@@ -4742,6 +4596,7 @@ function pointFeatureForRow(
     bubbleScale,
     heatColorForStat(row) ?? MAP_HIGHLIGHT_STYLE.dataFill,
   )
+  const labelPlacement = pointLabelPlacementByRegionId.get(regionIdForStat(row))
   return {
     type: 'Feature',
     id: pointFeatureId(row),
@@ -4755,6 +4610,8 @@ function pointFeatureForRow(
       labelBaseSize: labelBaseSize(level, boundaryArea),
       labelCountTier: labelCountTier(level, pointCount),
       labelScale: labelScaleForPointCount(level, pointCount),
+      labelOffset: labelPlacement?.offset ?? [0, 0],
+      labelPlacement: labelPlacement?.placement ?? 'bottom',
       ...bubblePresentation,
     },
     geometry: { type: 'Point', coordinates },
@@ -4766,12 +4623,16 @@ function pointLayoutCacheKey(level: MapDisplayLevel) {
   const zoom = Math.round((map?.getZoom() ?? mapZoomLevel.value) * 100) / 100
   return [
     level,
-    mapMode.value,
     zoom,
     canvas?.clientWidth ?? 0,
     canvas?.clientHeight ?? 0,
     selectedRegionId(),
     selectedPointKey.value,
+    activeHoveredRegionId(),
+    pointOverlayLayoutVersion,
+    Number(isFilterOpen.value),
+    Number(isLayerPanelOpen.value),
+    detailMode.value,
   ].join('|')
 }
 
@@ -4793,6 +4654,25 @@ function displayPointRows() {
 
 function displayHeatRegionRows(level: MapDisplayLevel = activeMapLevel.value) {
   return displayMapRegionRows(heatRegionLevelForDisplayLevel(level))
+}
+
+function heatScaleForLevel(level: MapDisplayLevel) {
+  if (adaptiveHeatScaleStats !== stats.value) {
+    adaptiveHeatScaleStats = stats.value
+    adaptiveHeatScaleCache.clear()
+  }
+  const cached = adaptiveHeatScaleCache.get(level)
+  if (cached) return cached
+
+  const valuesByRegion = new Map<string, number>()
+  displayHeatRegionRows(level).forEach((row) => {
+    const value = Number(row.pndlMedianMgD1000inh ?? 0)
+    const regionId = regionIdForStat(row)
+    if (regionId && Number.isFinite(value) && value > 0) valuesByRegion.set(regionId, value)
+  })
+  const scale = buildAdaptiveHeatScale([...valuesByRegion.values()], MAP_HEAT_COLORS)
+  adaptiveHeatScaleCache.set(level, scale)
+  return scale
 }
 
 function compactHeatRegionIdSet(level: MapDisplayLevel) {
@@ -4926,11 +4806,11 @@ function combineStatRows(
         : (first.country ?? rows.find((row) => row.country)?.country ?? ''),
     province: level === 'admin1' ? (first.province ?? displayName) : null,
     city: null,
-    category: selection.category,
-    subcategory: selection.subcategory,
-    biomarkerKey: selection.biomarkerKey,
+    category: appliedSelection.value.category,
+    subcategory: appliedSelection.value.subcategory,
+    biomarkerKey: appliedSelection.value.biomarkerKey,
     biomarkerLabel: selectedBiomarkerLabel.value,
-    yearLabel: selection.year,
+    yearLabel: appliedSelection.value.year,
     pndlMedianMgD1000inh: null,
     pndlMinMgD1000inh: minStat(rows, 'pndlMinMgD1000inh'),
     pndlMaxMgD1000inh: maxStat(rows, 'pndlMaxMgD1000inh'),
@@ -5064,11 +4944,25 @@ function bubblePresentationProperties(
   const bucketIndex = bubbleBucketIndex(level, pointCount)
   const safeScale = Math.max(0.1, bubbleScale)
   const heatColorIndex = Math.max(0, (BUBBLE_HEAT_COLORS as readonly string[]).indexOf(heatColor))
+  ensureBubbleHeatImage(level, bucketIndex, heatColorIndex)
   return {
+    bubbleImageLevel: level,
+    bubbleBucketIndex: bucketIndex,
+    bubbleHeatColorIndex: heatColorIndex,
     bubbleOffsetKey: bubbleOffsetKey(level, bucketIndex, safeScale),
     bubbleRingImage: bubbleRingImageId(level, bucketIndex),
     bubbleHeatImage: bubbleHeatImageId(level, bucketIndex, heatColorIndex),
   }
+}
+
+function ensureBubbleHeatImagesForCollection(collection: FeatureCollection) {
+  collection.features.forEach((feature) => {
+    const level = normalizeMapLevel(feature.properties.bubbleImageLevel)
+    const bucketIndex = Number(feature.properties.bubbleBucketIndex)
+    const colorIndex = Number(feature.properties.bubbleHeatColorIndex)
+    if (!level || !Number.isInteger(bucketIndex) || !Number.isInteger(colorIndex)) return
+    ensureBubbleHeatImage(level, bucketIndex, colorIndex)
+  })
 }
 
 function bubbleOffsetKey(level: MapDisplayLevel, bucketIndex: number, bubbleScale: number) {
@@ -5153,7 +5047,7 @@ function statProperties(stat: MapRegionStat): Record<string, unknown> {
     hasCoverage: statHasCoverage(stat),
     pndlMin: numberOrNull(stat.pndlMinMgD1000inh),
     pndlMax: numberOrNull(stat.pndlMaxMgD1000inh),
-    pndlRank: valueRank(stat.pndlMedianMgD1000inh),
+    pndlRank: valueRank(stat.pndlMedianMgD1000inh, stat.level),
     heatColor: heatColorForStat(stat),
     recordCount: stat.recordCount ?? 0,
     doiCount: stat.doiCount ?? 0,
@@ -5180,6 +5074,19 @@ function statHasCoverage(stat: MapRegionStat) {
   )
 }
 
+function localizedRegionIndexName(entry: RegionIndexEntry) {
+  const fallback =
+    locale.value === 'en'
+      ? entry.display_name_en || entry.name || entry.display_name_local || entry.display_name
+      : entry.display_name_zh ||
+        entry.display_name_en ||
+        entry.display_name_local ||
+        entry.display_name
+  if (locale.value === 'en' && entry.geo_key === 'china|hongkong') return 'Hong Kong'
+  if (locale.value === 'en' && entry.geo_key === 'china|aomen') return 'Macao'
+  return cleanMapLabel(fallback)
+}
+
 function localizedStatDisplayName(stat: MapRegionStat): string {
   if (isUnassignedStat(stat)) {
     const translationKey = stat.level === 'city' ? 'UNASSIGNED_CITY' : 'UNASSIGNED_ADMIN1'
@@ -5199,16 +5106,19 @@ function localizedStatDisplayName(stat: MapRegionStat): string {
   if (locale.value === 'zh') {
     const chineseName = localizedChineseStatName(stat)
     if (chineseName) return chineseName
+    const indexEntry = regionIndexEntryFor(stat.level, stat.geoKey)
+    const indexedName = indexEntry ? localizedRegionIndexName(indexEntry) : ''
+    if (indexedName) return indexedName
     const boundaryFeature = findBoundaryFeature(stat)
     if (boundaryFeature) {
       const boundaryName = localizedBoundaryName(boundaryFeature, stat.level)
-      return hasCjk(boundaryName) ? boundaryName : ''
+      if (boundaryName) return boundaryName
     }
-    return ''
+    return cleanMapLabel(singleLanguageLabel(stat.displayName, 'en') || stat.displayName)
   }
   const boundaryFeature = findBoundaryFeature(stat)
   if (boundaryFeature) return localizedBoundaryName(boundaryFeature, stat.level)
-  return singleLanguageLabel(stat.displayName, 'en') || stat.displayName
+  return cleanMapLabel(singleLanguageLabel(stat.displayName, 'en') || stat.displayName)
 }
 
 function localizedChineseStatName(stat: MapRegionStat) {
@@ -5288,7 +5198,7 @@ function singleLanguageLabel(
   const normalized = String(value ?? '')
     .replace(/\s+/g, ' ')
     .trim()
-  if (!normalized) return ''
+  if (!cleanMapLabel(normalized)) return ''
   const cleanLoosePunctuation = (label: string) =>
     label
       .replace(/[()（）［］[\]【】]/g, '')
@@ -5314,15 +5224,8 @@ function localizedPropertyName(props: Record<string, unknown>, fallback = '') {
     singleLanguageLabel(String(secondary ?? ''), locale.value) ||
     singleLanguageLabel(String(props.displayName ?? ''), locale.value) ||
     singleLanguageLabel(fallback, locale.value) ||
-    fallback
+    cleanMapLabel(fallback)
   )
-}
-
-function localizedLocationMeta(values: Array<string | null | undefined>) {
-  return values
-    .map((value) => singleLanguageLabel(value, locale.value))
-    .filter(Boolean)
-    .join(' · ')
 }
 
 function pointFeatureId(stat: MapRegionStat) {
@@ -5330,8 +5233,8 @@ function pointFeatureId(stat: MapRegionStat) {
     'pndl',
     stat.level,
     stat.geoKey,
-    stat.biomarkerKey || selection.biomarkerKey,
-    stat.yearLabel || selection.year,
+    stat.biomarkerKey || appliedSelection.value.biomarkerKey,
+    stat.yearLabel || appliedSelection.value.year,
   ].join('|')
 }
 
@@ -5370,14 +5273,21 @@ function localizedBoundaryName(feature: GeoJsonFeature, level: MapRegionStat['le
         // Some Natural Earth placeholders use non-standard country codes.
       }
     }
-    return (
+    const chinese =
       localizedFeatureChineseAlias(props) ||
       singleLanguageLabel(String(props.display_name ?? props.name ?? ''), 'zh')
+    return (
+      chinese ||
+      cleanMapLabel(singleLanguageLabel(String(props.name ?? props.display_name ?? ''), 'en'))
     )
   }
   if (locale.value === 'zh') {
     const directLabel = singleLanguageLabel(String(props.display_name ?? props.name ?? ''), 'zh')
-    return directLabel || localizedFeatureChineseAlias(props)
+    return (
+      directLabel ||
+      localizedFeatureChineseAlias(props) ||
+      cleanMapLabel(singleLanguageLabel(String(props.name ?? props.display_name ?? ''), 'en'))
+    )
   }
   const primary = locale.value === 'en' ? props.name : props.display_name
   const fallback = locale.value === 'en' ? props.display_name : props.name
@@ -5395,6 +5305,15 @@ function localizedFeatureChineseAlias(props: Record<string, unknown>) {
     if (label) return label
   }
   return ''
+}
+
+function cleanMapLabel(value: string | null | undefined) {
+  const label = String(value ?? '')
+    .normalize('NFC')
+    .trim()
+  if (!label || /[?\uFFFD\u0000-\u001F\u007F-\u009F]/u.test(label)) return ''
+  if (/(?:Ã[\u0080-\u00ff]|Â[\u0080-\u00ff]|â[\u0080-\u00ff]{1,2}|ðŸ)/u.test(label)) return ''
+  return label
 }
 
 function boundaryFeatureMatchesGeoKey(
@@ -5608,147 +5527,6 @@ function findStatByLevelGeoKey(
   return undefined
 }
 
-function buildSearchCandidates() {
-  const candidates = new Map<string, MapSearchResult>()
-  ;[...(stats.value?.points ?? []), ...(stats.value?.regions ?? [])].forEach((row) => {
-    if (isUnassignedStat(row)) return
-    if (
-      row.level === 'city' &&
-      countryGroupKey(row) === 'china' &&
-      !isMainlandChinaCity(row.geoKey, row.parentGeoKey, adminGroupKey(row))
-    ) {
-      return
-    }
-    const label = localizedSearchResultLabel(
-      row.geoKey,
-      localizedStatDisplayName(row) || singleLanguageLabel(row.displayName, locale.value),
-    )
-    if (!label) return
-    const viewportFeature = findBoundaryFeature(row)
-    const indexEntry = regionIndexEntryFor(row.level, row.geoKey)
-    const center =
-      (viewportFeature ? labelPointForGeometry(viewportFeature.geometry, true) : null) ??
-      representativeCoordinates(row) ??
-      indexEntry?.center ??
-      undefined
-    addSearchCandidate(candidates, {
-      id: `stat|${row.level}|${row.geoKey}`,
-      label,
-      meta: localizedLocationMeta([
-        locationPrecisionLabel(row.level),
-        row.country,
-        row.province,
-        row.city,
-      ]),
-      level: row.level,
-      geoKey: row.geoKey,
-      center,
-      bbox: viewportFeature
-        ? (featureBbox(viewportFeature.geometry) ?? indexEntry?.bbox)
-        : indexEntry?.bbox,
-    })
-  })
-  boundarySearchCandidates(candidates)
-  return [...candidates.values()]
-}
-
-function boundarySearchCandidates(candidates: Map<string, MapSearchResult>) {
-  if (regionIndexEntries.length) {
-    regionIndexEntries.forEach((entry) => {
-      if (isUnassignedGeoKey(entry.level, entry.geo_key)) return
-      addSearchCandidate(candidates, {
-        id: `index|${entry.level}|${entry.geo_key}`,
-        label: localizedRegionIndexName(entry),
-        meta: localizedLocationMeta([locationPrecisionLabel(entry.level), entry.country_key]),
-        level: entry.level,
-        geoKey: entry.geo_key,
-        center: entry.center,
-        bbox: entry.bbox,
-      })
-    })
-    return
-  }
-  ;(['countries', 'admin1', 'chinaProvinces', 'chinaCities'] as BoundaryName[]).forEach((name) => {
-    const collection = getCleanBoundaryCollection(name)
-    if (!collection) return
-    const level = boundaryLevel(name)
-    collection.features.forEach((feature) => {
-      const props = feature.properties
-      const label = localizedBoundaryName(feature, level)
-      if (!label) return
-      const geoKey = featureGeoKey(feature, level)
-      addSearchCandidate(candidates, {
-        id: `boundary|${level}|${geoKey}`,
-        label,
-        meta: localizedLocationMeta([
-          locationPrecisionLabel(level),
-          String(props.country_display ?? ''),
-        ]),
-        level,
-        geoKey,
-        center: labelPointForGeometry(feature.geometry) ?? undefined,
-        bbox: featureBbox(feature.geometry) ?? undefined,
-      })
-    })
-  })
-}
-
-function localizedRegionIndexName(entry: RegionIndexEntry) {
-  const fallback =
-    locale.value === 'en'
-      ? entry.name || entry.display_name || entry.geo_key
-      : entry.display_name || entry.name || entry.geo_key
-  return localizedSearchResultLabel(entry.geo_key, fallback)
-}
-
-function localizedSearchResultLabel(geoKey: string, fallback: string) {
-  if (locale.value !== 'en') return fallback
-  if (geoKey === 'china|hongkong') return 'Hong Kong'
-  if (geoKey === 'china|aomen') return 'Macao'
-  return fallback
-}
-
-function addSearchCandidate(candidates: Map<string, MapSearchResult>, candidate: MapSearchResult) {
-  const key = `${candidate.level}|${candidate.geoKey}`
-  const existing = candidates.get(key)
-  if (!existing) {
-    candidates.set(key, candidate)
-    return
-  }
-  candidates.set(key, {
-    ...existing,
-    center: existing.center ?? candidate.center,
-    bbox: existing.bbox ?? candidate.bbox,
-  })
-}
-
-function normalizeSearch(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ')
-}
-
-function searchCandidateMatches(item: MapSearchResult, query: string) {
-  const aliases = SPECIAL_ADMIN_SEARCH_ALIASES[item.geoKey] ?? []
-  const haystack = normalizeSearch(`${item.label} ${item.meta} ${item.geoKey} ${aliases.join(' ')}`)
-  if (haystack.includes(query)) return true
-  return compactSearch(haystack).includes(compactSearch(query))
-}
-
-function compactSearch(value: string) {
-  return value.replace(/[\s_-]+/g, '')
-}
-
-function openSearch() {
-  if (searchBlurTimer) window.clearTimeout(searchBlurTimer)
-  isSearchFocused.value = true
-  void ensureRegionIndex()
-  if (regionSourceMode === 'vector') {
-    return
-  }
-  void ensureBoundary('admin1')
-  void ensureBoundary('chinaProvinces')
-  void ensureBoundary('chinaCities')
-}
-
 function regionIndexEntryFor(level: MapRegionStat['level'], geoKey: string) {
   return regionIndexByKey.get(`${level}|${geoKey}`)
 }
@@ -5758,8 +5536,11 @@ async function ensureRegionIndex() {
   if (regionIndexPromise) return regionIndexPromise
   regionIndexPromise = (async () => {
     try {
-      const response = await fetch(REGION_INDEX_URL)
-      if (!response.ok) return
+      const response = await fetch(REGION_INDEX_URL, { cache: 'no-cache' })
+      if (!response.ok) {
+        console.warn(`Region index request failed with status ${response.status}`)
+        return
+      }
       const payload = (await response.json()) as { regions?: RegionIndexEntry[] }
       regionIndexEntries = Array.isArray(payload.regions) ? payload.regions : []
       regionIndexByKey.clear()
@@ -5769,9 +5550,9 @@ async function ensureRegionIndex() {
       })
       labelPointCollectionCache.clear()
       pointCollectionCache.clear()
-      regionIndexVersion.value += 1
-    } catch {
-      // Search falls back to the currently loaded boundaries.
+    } catch (error) {
+      console.warn('Region index request failed; using loaded map boundaries instead.', error)
+      // Map labels and positioning fall back to the currently loaded boundaries.
     }
   })().finally(() => {
     regionIndexPromise = null
@@ -5779,121 +5560,64 @@ async function ensureRegionIndex() {
   return regionIndexPromise
 }
 
-function closeSearchSoon() {
-  if (searchBlurTimer) window.clearTimeout(searchBlurTimer)
-  searchBlurTimer = window.setTimeout(() => {
-    closeSearch()
-  }, 130)
-}
-
-function closeSearch() {
-  if (searchBlurTimer) window.clearTimeout(searchBlurTimer)
-  isSearchFocused.value = false
-}
-
-function clearSearch() {
-  searchQuery.value = ''
-  openSearch()
-}
-
-function applyFirstSearchResult() {
-  const [first] = searchResults.value
-  if (first) focusSearchResult(first)
-}
-
-function focusSearchResult(result: MapSearchResult) {
-  if (!map) return
-  cancelPendingMapClick()
-  clearHoveredPoint()
-  setHoveredRegion(null)
-  hideTooltip()
-  searchQuery.value = result.label
-  isSearchFocused.value = false
-  const feature =
-    boundaryFeatureForLevelGeoKey(result.level, result.geoKey) ??
-    regionReferenceFeatureFromProperties({
-      level: result.level,
-      geoKey: result.geoKey,
-      displayName: result.label,
-    })
-  const targetZoom = searchZoomForLevel(result.level, result.geoKey)
-  setSelectedRegion(feature, {
-    level: result.level,
-    geoKey: result.geoKey,
-    displayLevel: mapDisplayLevelForZoom(targetZoom),
-  })
-  clearSelectedPoint()
-  pointCollectionCache.clear()
-  schedulePointSourceRefresh(0)
-  map.stop()
-  if (result.bbox) {
-    map.fitBounds(
-      [
-        [result.bbox[0], result.bbox[1]],
-        [result.bbox[2], result.bbox[3]],
-      ] as LngLatBoundsLike,
-      {
-        padding: {
-          top: 90,
-          right: window.innerWidth >= 900 ? 96 : 44,
-          bottom: window.innerWidth >= 760 ? 80 : 170,
-          left: window.innerWidth >= 900 ? 96 : 44,
-        },
-        duration: 720,
-        maxZoom: clampZoom(targetZoom),
-      },
+function selectedMapCameraPadding() {
+  const container = mapContainer.value
+  const stage = container?.closest('.map-stage')
+  const compact = window.innerWidth < 900
+  const padding = {
+    top: 90,
+    right: compact ? 44 : 96,
+    bottom: window.innerWidth >= 760 ? 80 : 170,
+    left: compact ? 44 : 96,
+  }
+  if (!container || !stage) return padding
+  const containerRect = container.getBoundingClientRect()
+  const filter = stage.querySelector<HTMLElement>('.filter-shell:not(.collapsed)')
+  const drawer = stage.querySelector<HTMLElement>('.detail-drawer.open')
+  const legend = stage.querySelector<HTMLElement>('.map-heat-legend')
+  if (filter?.offsetParent) {
+    padding.left = Math.max(
+      padding.left,
+      filter.getBoundingClientRect().right - containerRect.left + 24,
     )
-    return
   }
-  if (result.center) {
-    map.easeTo({
-      center: result.center,
-      zoom: clampZoom(targetZoom),
-      duration: 720,
-      essential: true,
-    })
+  if (drawer?.offsetParent) {
+    padding.right = Math.max(
+      padding.right,
+      containerRect.right - drawer.getBoundingClientRect().left + 24,
+    )
   }
+  if (legend?.offsetParent) {
+    padding.bottom = Math.max(
+      padding.bottom,
+      containerRect.bottom - legend.getBoundingClientRect().top + 18,
+    )
+  }
+  return padding
 }
 
-function searchZoomForLevel(level: MapRegionStat['level'], geoKey = '') {
-  if (SPECIAL_ADMIN_GEO_KEYS.has(geoKey)) return Math.min(7.4, currentMapMaxZoom())
-  if (level === 'city') return Math.min(7.4, currentMapMaxZoom())
-  if (level === 'admin1') return 5.3
-  return 3.2
-}
-
-function valueRank(value?: number | null) {
-  const min = stats.value?.legend.min
-  const max = stats.value?.legend.max
-  if (!value || !min || !max || max <= min) return 0.5
-  const logMin = Math.log10(min + 1)
-  const logMax = Math.log10(max + 1)
-  return Math.max(0, Math.min(1, (Math.log10(value + 1) - logMin) / (logMax - logMin)))
+function valueRank(value?: number | null, level: MapDisplayLevel = activeMapLevel.value) {
+  return adaptiveHeatPercentile(heatScaleForLevel(level), Number(value ?? 0))
 }
 
 function heatColorForStat(stat?: MapRegionStat) {
   if (!hasSpecificBiomarker.value || !stat) return MAP_HIGHLIGHT_STYLE.dataFill
-  return heatColorForValue(Number(stat.pndlMedianMgD1000inh ?? 0))
+  return heatColorForValue(Number(stat.pndlMedianMgD1000inh ?? 0), stat.level)
 }
 
-function heatColorForValue(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return MAP_HIGHLIGHT_STYLE.dataFill
-  const min = regionHeatMin.value
-  const max = regionHeatMax.value
-  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= 0) {
-    return MAP_HIGHLIGHT_STYLE.dataFill
-  }
-  if (max <= min) return MAP_HEAT_COLORS[Math.floor(MAP_HEAT_COLORS.length / 2)]
-  const index = temperatureBandIndex(value, min, max, MAP_HEAT_COLORS.length)
-  return MAP_HEAT_COLORS[index]
+function heatColorForValue(value: number, level: MapDisplayLevel = activeMapLevel.value) {
+  return adaptiveHeatColor(heatScaleForLevel(level), value, MAP_HIGHLIGHT_STYLE.dataFill)
 }
 
-function heatLegendMiddleValue(min: number, max: number) {
-  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= 0) return 0
-  if (min <= 0 || max <= min) return max
-  return max / min > 100
-    ? 10 ** ((Math.log10(min + 1) + Math.log10(max + 1)) / 2) - 1
-    : (min + max) / 2
+function segmentedHeatGradient(colors: string[]) {
+  if (!colors.length) return 'transparent'
+  if (colors.length === 1) return colors[0]!
+  const stops = colors.flatMap((color, index) => {
+    const start = (index / colors.length) * 100
+    const end = ((index + 1) / colors.length) * 100
+    return [`${color} ${start}%`, `${color} ${end}%`]
+  })
+  return `linear-gradient(90deg, ${stops.join(', ')})`
 }
 
 function featureGeoKey(feature: GeoJsonFeature, level: MapRegionStat['level']) {
@@ -5940,109 +5664,63 @@ function labelSourceId(name: BoundaryName) {
   return 'china-city-label-points'
 }
 
-function scheduleStatsFetch(delay = 300) {
-  if (fetchTimer) window.clearTimeout(fetchTimer)
-  fetchTimer = window.setTimeout(fetchStats, delay)
-}
-
-async function fetchStats() {
-  if (!selection.category) return
+async function applyFilters({ force = false }: { force?: boolean } = {}) {
+  if (!selection.category || (!force && !filtersDirty.value)) return
+  const requestSelection = { ...selection }
+  const requestId = ++statsRequestId
   statsController?.abort()
-  statsController = new AbortController()
+  const controller = new AbortController()
+  statsController = controller
   isLoadingStats.value = true
   filterError.value = ''
   try {
-    stats.value = await fetchMapStats(
-      { ...selection },
+    const nextStats = await fetchMapStats(
+      requestSelection,
       ['country', 'admin1', 'city'],
-      statsController.signal,
+      controller.signal,
     )
+    if (requestId !== statsRequestId || controller.signal.aborted) return
+    closeDetail()
+    appliedSnapshot.value = {
+      selection: requestSelection,
+      stats: nextStats,
+    }
     invalidateMapDisplayCaches()
     ensureFallbackBoundaries()
     ensureStagedBoundariesForCurrentZoom()
     updateMapData()
-    focusGlobeOnDensePoints()
+    await nextTick()
+    await waitForMapDataRender()
   } catch (error) {
+    if (requestId !== statsRequestId) return
     if (error instanceof DOMException && error.name === 'AbortError') return
     filterError.value = getUserErrorMessage(error, ui.value.statsLoadFailed)
   } finally {
-    isLoadingStats.value = false
+    if (requestId === statsRequestId) {
+      isLoadingStats.value = false
+      if (statsController === controller) statsController = null
+    }
   }
 }
 
-function focusGlobeOnDensePoints() {
-  if (!map || mapMode.value !== 'globe') return
-  const center = currentDensePointCenter()
-  if (!center) return
-  const safeZoom = getGlobeSafeZoom()
-  map.stop()
-  map.easeTo({
-    center,
-    zoom: clampZoom(Math.max(map.getZoom(), safeZoom)),
-    bearing: 0,
-    pitch: 0,
-    duration: 900,
-    essential: true,
+function waitForMapDataRender() {
+  if (!map || !mapReady.value) {
+    return new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve())
+    })
+  }
+  return new Promise<void>((resolve) => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timeout)
+      resolve()
+    }
+    const timeout = window.setTimeout(finish, 450)
+    map?.once('render', finish)
+    map?.triggerRepaint()
   })
-}
-
-function currentDensePointCenter() {
-  const points = displayPointRows().flatMap((row) => {
-    const coordinates = representativeCoordinates(row)
-    if (!coordinates) return []
-    return [
-      {
-        coordinates,
-        weight: Math.max(row.recordCount ?? 0, row.pointCount ?? 0, 1),
-      },
-    ]
-  })
-  return densePointCenter(points)
-}
-
-function densePointCenter(points: Array<{ coordinates: [number, number]; weight: number }>) {
-  if (!points.length) return null
-  const anchor = points
-    .map((candidate) => ({
-      candidate,
-      score: points.reduce((score, point) => {
-        const lngDelta = wrappedLngDelta(candidate.coordinates[0], point.coordinates[0])
-        const latDelta = Math.abs(candidate.coordinates[1] - point.coordinates[1])
-        const distance = Math.hypot(lngDelta, latDelta)
-        return score + (distance <= DENSE_POINT_RADIUS_DEGREES ? point.weight : 0)
-      }, 0),
-    }))
-    .sort((a, b) => b.score - a.score)[0]?.candidate
-  if (!anchor) return points[0]?.coordinates ?? null
-  const neighborhood = points.filter((point) => {
-    const lngDelta = wrappedLngDelta(anchor.coordinates[0], point.coordinates[0])
-    const latDelta = Math.abs(anchor.coordinates[1] - point.coordinates[1])
-    return Math.hypot(lngDelta, latDelta) <= DENSE_POINT_RADIUS_DEGREES
-  })
-  return weightedGeoCenter(neighborhood.length ? neighborhood : [anchor])
-}
-
-function weightedGeoCenter(points: Array<{ coordinates: [number, number]; weight: number }>) {
-  let sinSum = 0
-  let cosSum = 0
-  let latSum = 0
-  let weightSum = 0
-  points.forEach((point) => {
-    const weight = Math.max(point.weight, 1)
-    const lngRadians = (point.coordinates[0] * Math.PI) / 180
-    sinSum += Math.sin(lngRadians) * weight
-    cosSum += Math.cos(lngRadians) * weight
-    latSum += point.coordinates[1] * weight
-    weightSum += weight
-  })
-  if (!weightSum) return null
-  const lng = (Math.atan2(sinSum / weightSum, cosSum / weightSum) * 180) / Math.PI
-  return [normalizeLng(lng), latSum / weightSum] as [number, number]
-}
-
-function wrappedLngDelta(a: number, b: number) {
-  const delta = Math.abs(a - b) % 360
-  return delta > 180 ? 360 - delta : delta
 }
 
 function normalizeLng(lng: number) {
@@ -6054,7 +5732,6 @@ function ensureFallbackBoundaries(refreshCached = false) {
 }
 
 function handleUnifiedMapClick(event: MapMouseEvent) {
-  closeSearch()
   const pointFeature = bestPointFeatureAtPoint(event.point)
   if (pointFeature?.properties) {
     centerNearestWorldCopyForFeature(pointFeature)
@@ -6079,7 +5756,6 @@ function handleUnifiedMapDoubleClick(event: MapMouseEvent) {
   event.preventDefault()
   if (clickTimer) window.clearTimeout(clickTimer)
   clickTimer = undefined
-  closeSearch()
   const feature = bestPointFeatureAtPoint(event.point) ?? bestRegionFeatureAtPoint(event.point)
   if (!feature?.properties) return
   centerNearestWorldCopyForFeature(feature)
@@ -6098,7 +5774,6 @@ function handleUnifiedMapDoubleClick(event: MapMouseEvent) {
 }
 
 function handlePointClick(event: MapLayerMouseEvent) {
-  closeSearch()
   const feature = bestPointFeatureAtPoint(event.point)
   if (!feature?.properties) return
   centerNearestWorldCopyForFeature(feature)
@@ -6112,7 +5787,6 @@ function handlePointClick(event: MapLayerMouseEvent) {
 }
 
 function handleRegionClick(event: MapLayerMouseEvent) {
-  closeSearch()
   if (pointFeaturesAtPoint(event.point).length) return
   const feature = bestRegionFeatureAtPoint(event.point)
   if (!feature?.properties) return
@@ -6150,7 +5824,7 @@ function focusCompactDetailTarget(feature: GeoJsonFeature) {
 }
 
 function centerNearestWorldCopyForFeature(feature: GeoJsonFeature, duration = 420) {
-  if (!map || mapMode.value !== 'flat') return
+  if (!map) return
   const target = detailTargetFromFeature(feature)
   const indexEntry = target ? regionIndexEntryFor(target.level, target.geoKey) : undefined
   const targetCenter =
@@ -6216,7 +5890,7 @@ async function openFeatureDetail(feature: GeoJsonFeature, mode: DetailMode = 'co
     let detail = await fetchMapDetail(
       target.level,
       target.geoKey,
-      { ...selection },
+      { ...appliedSelection.value },
       detailController.signal,
     )
     if (requestId !== detailRequestId) return
@@ -6231,7 +5905,7 @@ async function openFeatureDetail(feature: GeoJsonFeature, mode: DetailMode = 'co
       detail = await fetchMapDetail(
         retryStat.level,
         retryStat.geoKey,
-        { ...selection },
+        { ...appliedSelection.value },
         detailController.signal,
       )
       if (requestId !== detailRequestId) return
@@ -6274,7 +5948,11 @@ async function openClusterDetail(feature: GeoJsonFeature, mode: DetailMode = 'co
   detailError.value = ''
   try {
     const locations = await clusterLocations(clusterId, Number(feature.properties.point_count ?? 0))
-    const detail = await fetchMapClusterDetail({ ...selection }, locations, detailController.signal)
+    const detail = await fetchMapClusterDetail(
+      { ...appliedSelection.value },
+      locations,
+      detailController.signal,
+    )
     if (requestId !== detailRequestId) return
     selectedDetail.value = detail
     detailMode.value = mode
@@ -6372,9 +6050,7 @@ function refreshHoverAtCursor() {
 }
 
 function hideTooltipOnEmptyClick(event: MapMouseEvent) {
-  closeSearch()
   isLayerPanelOpen.value = false
-  isLanguageMenuOpen.value = false
   if (!pointFeaturesAtPoint(event.point).length && !bestRegionFeatureAtPoint(event.point)) {
     hideTooltip()
   }
@@ -6639,11 +6315,6 @@ function clearSelectedPointVisualState() {
   selectedPointSourceId = ''
 }
 
-function resetPreviewRegionFeatureStateTracking() {
-  previewHoveredRegionId = ''
-  previewSelectedRegionId = ''
-}
-
 function pointFeatureStateId(feature: GeoJsonFeature) {
   const id = feature.id ?? feature.properties.featureId
   if (typeof id === 'string' || typeof id === 'number') return id
@@ -6887,7 +6558,7 @@ function buildTooltipHtml(props: Record<string, unknown>) {
   return `
     <div class="map-tooltip-card">
       <div class="map-tooltip-title">${title}</div>
-      <div class="map-tooltip-sub">${precision} · ${escapeHtml(displayOptionLabel(String(props.yearLabel ?? selection.year)))}</div>
+      <div class="map-tooltip-sub">${precision} · ${escapeHtml(displayOptionLabel(String(props.yearLabel ?? appliedSelection.value.year)))}</div>
       <div class="map-tooltip-grid">
         <div class="map-tooltip-metric"><span>${escapeHtml(ui.value.points)}</span><b>${points}</b></div>
         <div class="map-tooltip-metric"><span>${escapeHtml(ui.value.literature)}</span><b>${doi}</b></div>
@@ -7047,11 +6718,11 @@ function pndlItemStatLike(item: MapPndlRankingItem) {
     country: item.geoKey.split('|')[0] || null,
     province: null,
     city: item.level === 'city' ? item.displayName : null,
-    category: selection.category,
-    subcategory: selection.subcategory,
-    biomarkerKey: selection.biomarkerKey,
+    category: appliedSelection.value.category,
+    subcategory: appliedSelection.value.subcategory,
+    biomarkerKey: appliedSelection.value.biomarkerKey,
     biomarkerLabel: selectedBiomarkerLabel.value,
-    yearLabel: selection.year,
+    yearLabel: appliedSelection.value.year,
     pndlMedianMgD1000inh: item.pndlMedianMgD1000inh,
     recordCount: item.recordCount,
     doiCount: item.doiCount,
@@ -7372,28 +7043,54 @@ function pndlChartPercent(value?: number | null) {
 
 async function applyDetailBiomarker(item: MapTopBiomarker) {
   if (!canApplyDetailBiomarker(item)) return
-  const nextTargetClass = item.targetClass || selection.targetClass || DEFAULT_SELECTION.targetClass
   const nextCategory = item.category || selection.category || ALL_CATEGORY_LABEL
   const nextSubcategory = item.subcategory || ALL_SUBCATEGORY_LABEL
+  const normalizedCategorySelection = selectionForCategory(
+    selection,
+    nextCategory,
+    filters.value?.categoriesByTargetClass ?? {},
+    {
+      allCategory: ALL_CATEGORY_LABEL,
+      allSubcategory: ALL_SUBCATEGORY_LABEL,
+      allBiomarker: ALL_BIOMARKER_KEY,
+      allYear: ALL_YEAR_LABEL,
+    },
+  )
+  if (!item.targetClass && !normalizedCategorySelection) {
+    filterError.value = ui.value.categoryParentRequired
+    isFilterOpen.value = true
+    return
+  }
+  const baseSelection = normalizedCategorySelection ?? selection
   pinnedBiomarkerOption.value = {
     key: item.biomarkerKey,
     label: item.biomarkerLabel || item.biomarkerKey,
     cas: item.biomarkerCas,
   }
   programmaticSelectionUpdateInProgress = true
-  preserveSelectionOnNextSelectionChange = true
-  closeDetail({ clearSelection: false })
-  Object.assign(selection, {
-    targetClass: nextTargetClass,
-    category: nextCategory,
-    subcategory: nextSubcategory,
-    biomarkerKey: item.biomarkerKey,
-    year: ALL_YEAR_LABEL,
-  })
-  await nextTick()
-  programmaticSelectionUpdateInProgress = false
-  preserveSelectionOnNextSelectionChange = false
-  scheduleStatsFetch(0)
+  try {
+    Object.assign(
+      selection,
+      selectionForBiomarkerPath(
+        baseSelection,
+        {
+          targetClass:
+            item.targetClass || baseSelection.targetClass || DEFAULT_SELECTION.targetClass,
+          category: nextCategory,
+          subcategory: nextSubcategory,
+          biomarkerKey: item.biomarkerKey,
+          biomarkerLabel: item.biomarkerLabel || item.biomarkerKey,
+          biomarkerCas: item.biomarkerCas,
+        },
+        ALL_YEAR_LABEL,
+      ),
+    )
+    await nextTick()
+  } finally {
+    programmaticSelectionUpdateInProgress = false
+  }
+  isFilterOpen.value = true
+  await applyFilters({ force: true })
 }
 
 function handleMapKeydown(event: KeyboardEvent) {
@@ -7411,22 +7108,15 @@ function toggleFilters() {
 
 function toggleLayerPanel() {
   isLayerPanelOpen.value = !isLayerPanelOpen.value
-  isLanguageMenuOpen.value = false
-  closeSearch()
 }
 
 function resetMapView() {
   if (!map) return
-  closeSearch()
   isLayerPanelOpen.value = false
   map.stop()
-  const targetZoom =
-    mapMode.value === 'globe'
-      ? Math.max(GLOBE_INITIAL_ZOOM, getGlobeSafeZoom())
-      : Math.max(FLAT_INITIAL_ZOOM, FLAT_MIN_ZOOM + 0.2)
   map.easeTo({
     center: FLAT_CENTER,
-    zoom: clampZoom(targetZoom),
+    zoom: clampZoom(Math.max(FLAT_INITIAL_ZOOM, FLAT_MIN_ZOOM + 0.2)),
     bearing: 0,
     pitch: 0,
     duration: 760,
@@ -7586,88 +7276,6 @@ function pointInGeometry(point: [number, number], geometry: unknown) {
   return false
 }
 
-function setMapMode(mode: MapMode) {
-  if (!map) return
-  if (mode === 'globe' && !globeAvailable.value) return
-  if (projectionSwitchInProgress || mode === mapMode.value) return
-  projectionSwitchInProgress = true
-  isMapStyleSwitching.value = true
-  map.stop()
-  isLayerPanelOpen.value = false
-  closeSearch()
-  clearHoveredPoint()
-  setHoveredRegion(null)
-  unbindLayerEvents()
-  mapReady.value = false
-  mapMode.value = mode
-  const safeMinZoom = mode === 'globe' ? getGlobeSafeZoom() : currentMapMinZoom()
-  map.setMinZoom(safeMinZoom)
-  const currentCenter = map.getCenter()
-  const currentZoom = map.getZoom()
-  resetPreviewRegionFeatureStateTracking()
-  map.setStyle(buildMapStyle(mode, activeBasemapConfig) as never)
-  const nextZoom = clampZoom(
-    mode === 'globe'
-      ? Math.max(currentZoom, safeMinZoom, GLOBE_INITIAL_ZOOM)
-      : Math.max(currentZoom, safeMinZoom),
-  )
-  const restore = () => {
-    if (!projectionSwitchInProgress || !map) return
-    if (!map.isStyleLoaded()) {
-      map.once('idle', restore)
-      return
-    }
-    mapReady.value = true
-    addMapSourcesAndLayers()
-    bindLayerEvents()
-    applyFlatWorldWrapConstraints()
-    syncActiveMapLevel(nextZoom)
-    void ensureBoundary('countries', true)
-    ensureFallbackBoundaries(true)
-    updateMapData()
-    syncAtmosphereStyle()
-    map.setMaxZoom(currentMapMaxZoom())
-    map.setMinZoom(mode === 'globe' ? safeMinZoom : currentMapMinZoom())
-    map.easeTo({
-      center: currentCenter,
-      zoom: nextZoom,
-      bearing: 0,
-      pitch: 0,
-      duration: 680,
-      essential: true,
-    })
-    projectionSwitchInProgress = false
-    isMapStyleSwitching.value = false
-  }
-  map.once('idle', restore)
-  window.setTimeout(restore, 900)
-}
-
-function getGlobeSafeZoom() {
-  const height = mapContainer.value?.clientHeight ?? window.innerHeight
-  if (height < 520) return 2.74
-  if (height < 680) return 2.68
-  return GLOBE_MIN_ZOOM
-}
-
-function enforceGlobeSafeZoom(animate = true) {
-  if (!map || mapMode.value !== 'globe') return
-  const safeZoom = getGlobeSafeZoom()
-  map.setMinZoom(safeZoom)
-  if (map.getZoom() + 0.01 >= safeZoom) return
-  const camera = {
-    center: map.getCenter(),
-    zoom: safeZoom,
-    bearing: map.getBearing(),
-    pitch: map.getPitch(),
-  }
-  if (animate) {
-    map.easeTo({ ...camera, duration: 280, essential: true })
-  } else {
-    map.jumpTo(camera)
-  }
-}
-
 function handleMapResize() {
   if (resizeTimer) window.clearTimeout(resizeTimer)
   resizeTimer = window.setTimeout(() => {
@@ -7675,7 +7283,6 @@ function handleMapResize() {
     applyFlatWorldWrapConstraints()
     pointCollectionCache.clear()
     schedulePointSourceRefresh(0)
-    enforceGlobeSafeZoom()
   }, 120)
 }
 
@@ -7692,8 +7299,8 @@ function applyViewLayerVisibility() {
   }
   setLayerVisibility(layerIdsForViewGroup('labels'), viewLayers.labels)
   setLayerVisibility([...PREVIEW_LABEL_LAYER_IDS], basemapMode === 'vector' && viewLayers.labels)
-  // A business name and its bubble are one visual unit. Keep the rest of the
-  // static administrative names visible and exclude only exact geo_key matches.
+  // A business name and its bubble are one visual unit. Static administrative
+  // labels that collide with an accepted unit are excluded as a second pass.
   applyPreviewBusinessLabelExclusions(pndlVisible)
   setLayerVisibility([...REGION_FILL_LAYER_IDS], hierarchyReady)
   if (basemapMode === 'vector') {
@@ -7724,7 +7331,7 @@ function applyViewLayerVisibility() {
       viewLayers.boundaries && activeMapLevel.value !== 'country',
     )
     setLayerVisibility(
-      ['china-active-province-line', 'china-city-line'],
+      ['china-city-line'],
       viewLayers.boundaries && activeMapLevel.value === 'city',
     )
     setLayerVisibility(
@@ -7732,14 +7339,7 @@ function applyViewLayerVisibility() {
       viewLayers.boundaries && activeMapLevel.value !== 'country',
     )
   }
-  setLayerVisibility([...REGION_LINE_LAYER_IDS], basemapMode === 'geojson' && viewLayers.boundaries)
-  setLayerVisibility(
-    [...PREVIEW_REGION_OUTLINE_LAYER_IDS],
-    basemapMode === 'vector' && viewLayers.boundaries,
-  )
-  setLayerVisibility(['region-data-line', 'region-city-data-line'], false)
   applyHierarchyBoundaryWidths()
-  syncAtmosphereStyle()
 }
 
 function pndlLayerIdsForLevel(level: MapDisplayLevel) {
@@ -7762,8 +7362,7 @@ function pndlLayerIdsForLevel(level: MapDisplayLevel) {
 }
 
 function applyPreviewBusinessLabelExclusions(pndlVisible: boolean) {
-  const vectorConfig = activeBasemapConfig
-  if (!map || basemapMode !== 'vector' || vectorConfig.mode !== 'vector') return
+  if (!map) return
   const range = pndlLayerZoomRange(activeMapLevel.value)
   const zoom = map.getZoom()
   const pointLayerVisibleAtZoom =
@@ -7775,14 +7374,63 @@ function applyPreviewBusinessLabelExclusions(pndlVisible: boolean) {
     pointLayerVisibleAtZoom &&
     Boolean(map.getLayer(bubbleLayerId)) &&
     map.getLayoutProperty(bubbleLayerId, 'visibility') !== 'none'
-  const excludedGeoKeys = pointLayerEnabled
-    ? buildPointCollection(activeMapLevel.value).features
-        .map((feature) => String(feature.properties?.geoKey ?? ''))
-        .filter(
-          (geoKey) => geoKey && !isUnassignedGeoKey(activeMapLevel.value, geoKey),
+  const pointFeatures = pointLayerEnabled ? buildPointCollection(activeMapLevel.value).features : []
+  const exclusionsByLevel = new Map<MapDisplayLevel, Set<string>>(
+    MAP_DISPLAY_LEVELS.map((level) => [level, new Set<string>()]),
+  )
+  for (const feature of pointFeatures) {
+    const geoKey = String(feature.properties?.geoKey ?? '')
+    if (geoKey && !isUnassignedGeoKey(activeMapLevel.value, geoKey)) {
+      exclusionsByLevel.get(activeMapLevel.value)?.add(geoKey)
+    }
+  }
+  const staticLabelLayerIds = [
+    ...PREVIEW_LABEL_LAYER_IDS,
+    'country-label',
+    'admin1-label',
+    'china-province-label',
+    'china-city-label',
+    'china-special-admin-label',
+  ].filter((layerId) => Boolean(map?.getLayer(layerId)))
+  if (pointLayerEnabled && staticLabelLayerIds.length) {
+    for (const bounds of visiblePointGroupBounds) {
+      const rendered = map.queryRenderedFeatures(
+        [
+          [bounds.left, bounds.top],
+          [bounds.right, bounds.bottom],
+        ] as never,
+        { layers: staticLabelLayerIds } as never,
+      )
+      for (const feature of rendered) {
+        const properties = feature.properties ?? {}
+        const geoKey = String(properties.geo_key ?? properties.geoKey ?? '')
+        const level = previewStaticLabelLevel(
+          String(feature.layer?.id ?? ''),
+          String(properties.presentation_level ?? properties.level ?? ''),
         )
-    : []
-  const excluded = [...new Set(excludedGeoKeys)]
+        if (level && geoKey) exclusionsByLevel.get(level)?.add(geoKey)
+      }
+    }
+  }
+  const nextRuntimeExclusions = new Set(
+    [...exclusionsByLevel.entries()].flatMap(([level, keys]) =>
+      [...keys].map((geoKey) => `${level}|${geoKey}`),
+    ),
+  )
+  const fallbackExclusionsChanged = !sameStringSet(
+    runtimeStaticLabelExclusions,
+    nextRuntimeExclusions,
+  )
+  runtimeStaticLabelExclusions = nextRuntimeExclusions
+
+  const vectorConfig = activeBasemapConfig
+  if (basemapMode !== 'vector' || vectorConfig.mode !== 'vector') {
+    if (fallbackExclusionsChanged) {
+      labelPointCollectionCache.clear()
+      updateLoadedLabelSources()
+    }
+    return
+  }
   ;(
     Object.entries(PREVIEW_LABEL_LAYER_IDS_BY_LEVEL) as Array<[MapDisplayLevel, readonly string[]]>
   ).forEach(([level, layerIds]) => {
@@ -7792,8 +7440,8 @@ function applyPreviewBusinessLabelExclusions(pndlVisible: boolean) {
         (layer) => isStyleLayer(layer) && layer.id === layerId,
       )
       const baseFilter = isStyleLayer(configuredLayer) ? configuredLayer.filter : undefined
-      const shouldExclude = level === activeMapLevel.value && excluded.length > 0
-      const filter = shouldExclude
+      const excluded = [...(exclusionsByLevel.get(level) ?? [])]
+      const filter = excluded.length
         ? [
             'all',
             ...(baseFilter ? [baseFilter] : []),
@@ -7803,6 +7451,19 @@ function applyPreviewBusinessLabelExclusions(pndlVisible: boolean) {
       map.setFilter(layerId, filter as never)
     })
   })
+}
+
+function previewStaticLabelLevel(layerId: string, sourceLevel: string): MapDisplayLevel | null {
+  if (/admin2|city/i.test(layerId) || sourceLevel === 'adm2' || sourceLevel === 'city') {
+    return 'city'
+  }
+  if (/admin1|province/i.test(layerId) || sourceLevel === 'adm1') return 'admin1'
+  if (/country/i.test(layerId) || sourceLevel === 'country') return 'country'
+  return null
+}
+
+function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>) {
+  return left.size === right.size && [...left].every((value) => right.has(value))
 }
 
 function activeHierarchyBoundariesReady() {
@@ -7822,7 +7483,7 @@ function applyHierarchyBoundaryWidths() {
       map.setPaintProperty(
         'wbe-country-boundary',
         'line-opacity',
-        level === 'country' ? 0.78 : level === 'admin1' ? 0.7 : 0.62,
+        countryBoundaryFadeOpacity(level === 'country' ? 0.78 : level === 'admin1' ? 0.7 : 0.62),
       )
     }
     return
@@ -7831,14 +7492,13 @@ function applyHierarchyBoundaryWidths() {
   const adminWidth = level === 'city' ? 0.66 : 0.7
   setBoundaryLineWidth('admin1-line', adminWidth)
   setBoundaryLineWidth('china-province-line', adminWidth)
-  setBoundaryLineWidth('china-active-province-line', 0.82)
   setBoundaryLineWidth('china-city-line', 0.46)
   setBoundaryLineWidth('china-special-admin-line', level === 'city' ? 1.18 : 1.05)
   if (map.getLayer('country-line')) {
     map.setPaintProperty(
       'country-line',
       'line-opacity',
-      level === 'country' ? 0.78 : level === 'admin1' ? 0.7 : 0.62,
+      countryBoundaryFadeOpacity(level === 'country' ? 0.78 : level === 'admin1' ? 0.7 : 0.62),
     )
   }
   if (map.getLayer('admin1-line')) {
@@ -7847,6 +7507,18 @@ function applyHierarchyBoundaryWidths() {
   if (map.getLayer('china-province-line')) {
     map.setPaintProperty('china-province-line', 'line-opacity', level === 'city' ? 0.58 : 0.68)
   }
+}
+
+function countryBoundaryFadeOpacity(opacity: number) {
+  return [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    PREVIEW_COUNTRY_BOUNDARY_FADE_START,
+    0,
+    PREVIEW_COUNTRY_BOUNDARY_MAJOR_VISIBLE_ZOOM,
+    opacity,
+  ]
 }
 
 function setBoundaryLineWidth(layerId: string, width: number) {
@@ -7878,37 +7550,83 @@ function setLayerVisibility(layerIds: string[], visible: boolean) {
   })
 }
 
-function syncAtmosphereStyle() {
-  if (!map) return
-  const mapWithSky = map as unknown as { setSky?: (sky?: Record<string, unknown>) => void }
-  mapWithSky.setSky?.(undefined)
-}
-
-function refreshStats() {
-  scheduleStatsFetch(0)
-}
-
-function resetFilters() {
-  closeSearch()
+async function resetFilters() {
   isLayerPanelOpen.value = false
   pinnedBiomarkerOption.value = null
-  closeDetail()
-  Object.assign(selection, { ...DEFAULT_SELECTION })
-  scheduleStatsFetch(0)
+  programmaticSelectionUpdateInProgress = true
+  try {
+    Object.assign(selection, { ...DEFAULT_SELECTION })
+    await nextTick()
+  } finally {
+    programmaticSelectionUpdateInProgress = false
+  }
+  await applyFilters({ force: true })
 }
 
-function updateFilterSelection(key: keyof MapFilterSelection, value: string) {
+async function updateFilterSelection(key: keyof MapFilterSelection, value: string) {
+  filterError.value = ''
+  if (key === 'category') {
+    const nextSelection = selectionForCategory(
+      selection,
+      value,
+      filters.value?.categoriesByTargetClass ?? {},
+      {
+        allCategory: ALL_CATEGORY_LABEL,
+        allSubcategory: ALL_SUBCATEGORY_LABEL,
+        allBiomarker: ALL_BIOMARKER_KEY,
+        allYear: ALL_YEAR_LABEL,
+      },
+    )
+    if (!nextSelection) {
+      filterError.value = ui.value.categoryParentRequired
+      return
+    }
+
+    pinnedBiomarkerOption.value = null
+    programmaticSelectionUpdateInProgress = true
+    try {
+      Object.assign(selection, nextSelection)
+      await nextTick()
+    } finally {
+      programmaticSelectionUpdateInProgress = false
+    }
+    return
+  }
   selection[key] = value
+}
+
+async function selectBiomarkerPath(value: string) {
+  if (value === ALL_BIOMARKER_PATH_KEY) {
+    pinnedBiomarkerOption.value = null
+    programmaticSelectionUpdateInProgress = true
+    try {
+      Object.assign(selection, selectionForAllBiomarkers(selection, ALL_YEAR_LABEL))
+      await nextTick()
+    } finally {
+      programmaticSelectionUpdateInProgress = false
+    }
+    return
+  }
+
+  const path = biomarkerPathByKey.value.get(value)
+  if (!path) {
+    updateFilterSelection('biomarkerKey', value)
+    return
+  }
+
+  pinnedBiomarkerOption.value = null
+  programmaticSelectionUpdateInProgress = true
+  try {
+    Object.assign(selection, selectionForBiomarkerPath(selection, path, ALL_YEAR_LABEL))
+    await nextTick()
+  } finally {
+    programmaticSelectionUpdateInProgress = false
+  }
 }
 
 function readInitialLocale(): Locale {
   if (typeof window === 'undefined') return 'zh'
   return window.localStorage.getItem(MAP_LOCALE_STORAGE_KEY) === 'en' ? 'en' : 'zh'
-}
-
-function setLocale(value: Locale) {
-  locale.value = value
-  isLanguageMenuOpen.value = false
 }
 
 function displayOptionLabel(value?: string | null) {
@@ -8368,33 +8086,21 @@ function escapeHtml(value: string) {
 
 <template>
   <main class="map-page">
-    <MapPageHeader
-      :ui="ui"
-      :search-query="searchQuery"
-      :search-focused="isSearchFocused"
-      :search-results="searchResults"
-      :locale="locale"
-      :language-menu-open="isLanguageMenuOpen"
-      @update:search-query="searchQuery = $event"
-      @update:language-menu-open="isLanguageMenuOpen = $event"
-      @open-search="openSearch"
-      @close-search-soon="closeSearchSoon"
-      @apply-first-result="applyFirstSearchResult"
-      @clear-search="clearSearch"
-      @select-result="focusSearchResult"
-      @set-locale="setLocale"
-    />
+    <MapPageHeader />
 
     <section
+      ref="mapStage"
+      id="main-content"
       class="map-stage"
       :class="{
         'compact-detail-open': isCompactDetailOpen,
         'full-detail-open': isFullDetailOpen,
         'filters-closed': !isFilterOpen,
         switching: isMapStyleSwitching,
-        globe: mapMode === 'globe',
         ambience: viewLayers.ambience,
       }"
+      @pointerdown.capture="handleMapStageInteraction"
+      @keydown.capture="handleMapStageInteraction"
     >
       <div
         ref="mapContainer"
@@ -8404,7 +8110,7 @@ function escapeHtml(value: string) {
         @mouseleave="handleMapMouseLeave"
       ></div>
 
-      <div class="map-tool-stack" :class="{ globe: mapMode === 'globe' }">
+      <div class="map-tool-stack">
         <button
           class="map-tool-button"
           type="button"
@@ -8413,24 +8119,6 @@ function escapeHtml(value: string) {
           @click="resetMapView"
         >
           <span class="reset-icon" aria-hidden="true"></span>
-        </button>
-
-        <button
-          class="map-tool-button"
-          type="button"
-          :disabled="!globeAvailable"
-          :aria-label="mapMode === 'globe' ? ui.switchToFlat : ui.switchToGlobe"
-          :title="mapMode === 'globe' ? ui.switchToFlat : ui.switchToGlobe"
-          @click="setMapMode(mapMode === 'globe' ? 'flat' : 'globe')"
-        >
-          <svg v-if="mapMode === 'globe'" class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="4" y="5" width="16" height="14" rx="3"></rect>
-            <path d="M8 5v14M16 5v14M4 10h16M4 15h16"></path>
-          </svg>
-          <svg v-else class="tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="12" cy="12" r="8"></circle>
-            <path d="M4 12h16M12 4a12 12 0 0 1 0 16M12 4a12 12 0 0 0 0 16"></path>
-          </svg>
         </button>
 
         <div class="layer-control" :class="{ open: isLayerPanelOpen }">
@@ -8462,25 +8150,43 @@ function escapeHtml(value: string) {
             <p>{{ ui.coverageNote }}</p>
           </div>
         </div>
+
+        <button
+          class="map-tool-button map-guide-button"
+          type="button"
+          :aria-label="ui.operationGuide"
+          :title="ui.operationGuide"
+          @click.stop="openMapOperationGuide('manual')"
+        >
+          <span class="map-guide-icon" aria-hidden="true">?</span>
+        </button>
       </div>
 
       <MapFilterPanel
         :ui="ui"
         :open="isFilterOpen"
         :selection="selection"
+        :biomarker-path-key="selectedBiomarkerPathKey"
         :target-class-options="targetClassFilterOptions"
         :category-options="categoryFilterOptions"
         :subcategory-options="subcategoryFilterOptions"
         :biomarker-options="biomarkerFilterOptions"
         :year-options="yearFilterOptions"
         :loading-filters="isLoadingFilters"
-        :loading-stats="isLoadingStats"
+        :dirty="filtersDirty"
+        :applying="isLoadingStats"
         :filters-ready="Boolean(filters)"
         @change="updateFilterSelection"
-        @refresh="refreshStats"
+        @select-biomarker-path="selectBiomarkerPath"
+        @apply="applyFilters()"
         @reset="resetFilters"
         @toggle="toggleFilters"
       />
+
+      <div v-if="isLoadingStats" class="map-data-transition" role="status" aria-live="polite">
+        <span aria-hidden="true"></span>
+        <strong>{{ ui.loadingStats }}</strong>
+      </div>
 
       <p v-if="activeMapMessage" class="map-message" :class="activeMapMessage.type">
         {{ activeMapMessage.text }}
@@ -8497,7 +8203,7 @@ function escapeHtml(value: string) {
       >
         <div class="heat-legend-heading">
           <strong>{{ ui.heatLegendTitle }}</strong>
-          <small v-if="canShowPndlGradient">{{ ui.heatLegendUnit }}</small>
+          <small v-if="canShowPndlGradient">{{ heatLegendUnit }}</small>
         </div>
         <div v-if="canShowPndlGradient" class="heat-legend-strip" aria-hidden="true"></div>
         <div v-if="canShowPndlGradient" class="heat-legend-scale">
@@ -8506,7 +8212,7 @@ function escapeHtml(value: string) {
             <b>{{ band.value }}</b>
           </span>
         </div>
-        <p v-if="canShowPndlGradient">{{ ui.heatLegendNote }}</p>
+        <p v-if="canShowPndlGradient">{{ heatLegendContext }}</p>
         <div v-if="hasCoverageWithoutPndl" class="heat-legend-coverage-only">
           <i aria-hidden="true"></i>
           <span>{{ ui.heatLegendCoverageOnly }}</span>
@@ -8658,7 +8364,7 @@ function escapeHtml(value: string) {
                   <div class="pndl-column-axis">
                     <div class="pndl-column-axis-title">
                       <i>PNDL</i>
-                      <small>{{ ui.heatLegendUnit }}</small>
+                      <small>{{ heatLegendUnit }}</small>
                       <em v-if="pndlChartUsesLogScale">{{ ui.pndlLogScale }}</em>
                     </div>
                     <span
@@ -8974,6 +8680,16 @@ function escapeHtml(value: string) {
           </aside>
         </div>
       </Transition>
+
+      <MapOperationGuide
+        :open="mapGuideOpen"
+        :step="mapGuideStep"
+        :steps="mapOperationGuideSteps"
+        @previous="previousMapGuideStep"
+        @next="nextMapGuideStep"
+        @skip="closeMapOperationGuide"
+        @finish="closeMapOperationGuide"
+      />
     </section>
   </main>
 </template>

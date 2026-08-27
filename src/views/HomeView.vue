@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import BrandMark from '../components/BrandMark.vue'
+import PlatformHeader from '../components/PlatformHeader.vue'
 import {
   AuthRequestError,
   fetchCaptcha,
@@ -512,8 +513,6 @@ const mockHomeData: HomeData = {
 }
 
 const homeData = ref<HomeData>(mockHomeData)
-const searchQuery = ref('')
-const isSearchOpen = ref(false)
 const isAuthOpen = ref(false)
 const isAuthenticated = ref(false)
 const currentUser = ref('')
@@ -577,6 +576,7 @@ const uploadForm = reactive({
   notes: '',
 })
 const router = useRouter()
+const route = useRoute()
 
 let codeTimer: number | undefined
 let overviewTimer: number | undefined
@@ -940,7 +940,7 @@ const detailColumnPlotWidth = computed(
 const visualEntryItems = computed(() => [
   {
     icon: 'map',
-    title: '地图可视化',
+    title: '空间分布查询',
     value: coverageText(),
     detail: '按空间层级查看 PNDL 分布',
     target: 'map-visualization',
@@ -948,38 +948,28 @@ const visualEntryItems = computed(() => [
   },
   {
     icon: 'sankey',
-    title: 'ICD11 桑基图',
+    title: '疾病关联分析',
     value: '10 类',
-    detail: '串联疾病分类、药物与生物标记物',
+    detail: '基于 ICD-11 分析疾病、药物与生物标记物的关联路径',
     target: 'icd11-sankey',
     route: '/icd11-sankey',
   },
   {
     icon: 'priority',
-    title: '核心标记物优先级',
+    title: '标记物优先级评估',
     value: '516 项',
-    detail: '识别高优先级标记物与证据短板',
+    detail: '依据证据评分识别核心标记物及证据短板',
     target: 'core-marker-priority',
     route: '/core-marker-priority',
   },
   {
     icon: 'method',
-    title: '方法学核验',
+    title: '采样与分析方法核验',
     value: '12 种方法',
-    detail: '核查处方属性、采样路径与分析覆盖',
+    detail: '核查处方属性、采样路径与分析方法覆盖',
     target: 'methodology-verification',
     route: '/methodology-verification',
   },
-])
-const quickSearchItems = computed(() => [
-  ...homeData.value.factors.map((item) => ({
-    title: item.name,
-    meta: `${item.type} · ${item.docs} 篇文献 · ${item.rows} 行数据`,
-  })),
-  ...homeData.value.categories.map((item) => ({
-    title: item.name,
-    meta: `${item.count} 条记录 · 覆盖率 ${item.ratio}%`,
-  })),
 ])
 const wordCloudItems = computed(() => {
   const keywords = homeData.value.keywords
@@ -1021,15 +1011,6 @@ const activeWord = computed(() =>
     ? wordCloudItems.value.find((item) => item.name === activeKeyword.value)
     : null,
 )
-const searchResults = computed(() => {
-  const keyword = searchQuery.value.trim().toLowerCase()
-  if (!keyword) return quickSearchItems.value.slice(0, 5)
-
-  return quickSearchItems.value
-    .filter((item) => `${item.title} ${item.meta}`.toLowerCase().includes(keyword))
-    .slice(0, 5)
-})
-
 function coverageText() {
   const coverage = homeData.value.metrics.find((item) => item.key === 'coverage')?.value ?? '45 / 259'
   return coverage.replace(/\s*\/\s*/g, '·')
@@ -1353,6 +1334,7 @@ async function handleLogout() {
     loginComplete.value = false
     isAuthOpen.value = false
     isUploadWorkspaceOpen.value = false
+    window.dispatchEvent(new Event('wbe-auth-changed'))
   }
 }
 
@@ -1578,6 +1560,7 @@ async function handleSubmit() {
       clearLoginCaptcha()
       loginPasswordVisible.value = false
       saveSession(result.data)
+      window.dispatchEvent(new Event('wbe-auth-changed'))
       isAuthenticated.value = true
       currentUser.value = result.data.user.username || result.data.user.email
       currentUserRole.value = result.data.user.role
@@ -1647,12 +1630,20 @@ async function hydrateSession() {
 onMounted(() => {
   void hydrateSession()
   void loadHomeData()
+  if (route.query.auth === 'login') openAuth()
   overviewTimer = window.setInterval(() => {
     if (isOverviewPaused.value) return
     const length = homeData.value.metrics.length || 1
     currentOverviewIndex.value = (currentOverviewIndex.value + 1) % length
   }, 3600)
 })
+
+watch(
+  () => route.query.auth,
+  (authMode) => {
+    if (authMode === 'login') openAuth()
+  },
+)
 
 onBeforeUnmount(() => {
   homeRequestSequence += 1
@@ -1664,82 +1655,7 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="site-shell">
-    <header class="site-header">
-      <a class="brand" href="#top" aria-label="污水信息因子数据库首页">
-        <BrandMark :size="44" />
-        <span>
-          <strong>污水信息因子数据库</strong>
-          <small>Wastewater Biomarker Evidence</small>
-        </span>
-      </a>
-
-      <nav class="main-nav" aria-label="主导航">
-        <a href="#visual-entry">可视化</a>
-        <a href="#visual">图谱分析</a>
-        <a href="#methods">方法与质量</a>
-        <a href="#news">更新</a>
-      </nav>
-
-      <div class="header-tools">
-        <label class="search-box">
-          <span aria-hidden="true">⌕</span>
-          <input
-            v-model="searchQuery"
-            type="search"
-            placeholder="搜索因子、类别或文献"
-            @focus="isSearchOpen = true"
-            @blur="isSearchOpen = false"
-          />
-        </label>
-        <div v-if="isSearchOpen && searchQuery" class="search-results">
-          <button v-for="item in searchResults" :key="item.title" type="button">
-            <strong>{{ item.title }}</strong>
-            <span>{{ item.meta }}</span>
-          </button>
-          <p v-if="!searchResults.length">暂无匹配结果</p>
-        </div>
-        <div v-if="isAuthenticated" class="user-tools">
-          <details class="account-menu">
-            <summary>
-              <span class="account-avatar" aria-hidden="true">{{ currentUser.slice(0, 1).toUpperCase() }}</span>
-              <span class="account-summary-copy">
-                <strong>{{ currentUser }}</strong>
-                <small>{{ currentRolePresentation.label }}</small>
-              </span>
-            </summary>
-            <div class="account-menu-panel">
-              <div class="account-panel-head">
-                <span class="account-avatar large" aria-hidden="true">{{ currentUser.slice(0, 1).toUpperCase() }}</span>
-                <span>
-                  <strong>{{ currentUser }}</strong>
-                  <small>{{ currentRolePresentation.label }}</small>
-                </span>
-              </div>
-              <p>{{ currentRolePresentation.description }}</p>
-              <div class="account-capabilities" aria-label="当前账号能力">
-                <span v-for="capability in currentUserCapabilities" :key="capability">
-                  {{ capability }}
-                </span>
-              </div>
-              <button class="logout-button" type="button" @click="handleLogout">
-                <span aria-hidden="true">↗</span>
-                退出当前账号
-              </button>
-            </div>
-          </details>
-          <RouterLink v-if="canAccessDataEntry" class="upload-entry" to="/data-entry">
-            数据录入
-          </RouterLink>
-        </div>
-        <button v-else class="login-button" type="button" @click="openAuth()">
-          <span class="login-button-icon" aria-hidden="true"></span>
-          <span class="login-button-copy">
-            <strong>登录 / 注册</strong>
-            <small>账号入口</small>
-          </span>
-        </button>
-      </div>
-    </header>
+    <PlatformHeader active="home" @request-auth="openAuth()" @logout="handleLogout" />
 
     <Transition name="account-notice">
       <aside
@@ -1758,7 +1674,7 @@ onBeforeUnmount(() => {
       </aside>
     </Transition>
 
-    <section id="top" class="hero-section" aria-labelledby="heroTitle">
+    <section id="main-content" class="hero-section" aria-labelledby="heroTitle" tabindex="-1">
       <div class="hero-copy">
         <p class="section-kicker">WBE DATA RESOURCE</p>
         <h1 id="heroTitle">面向污水流行病学的信息因子知识平台</h1>
@@ -1822,10 +1738,9 @@ onBeforeUnmount(() => {
       <div class="glance-inner">
         <div class="glance-heading">
           <div class="glance-title">
-          <p class="section-kicker">VISUAL ENTRY</p>
-            <h2 id="glanceTitle">可视化与数据入口</h2>
+          <p class="section-kicker">VISUAL EVIDENCE</p>
+            <h2 id="glanceTitle">可视化与证据分析</h2>
           </div>
-          <p class="glance-lead">空间分布、疾病关联、核心标记物和方法质量，集中为四个真实功能入口。</p>
         </div>
         <div class="glance-grid">
           <button
@@ -2503,7 +2418,7 @@ a {
     radial-gradient(circle at 90% 12%, rgba(14, 143, 119, 0.1), transparent 24%);
 }
 
-#top,
+#main-content,
 #visual-entry,
 #about,
 #visual,
@@ -2703,82 +2618,12 @@ a {
   gap: 10px;
 }
 
-.search-box {
-  width: min(280px, 24vw);
-  min-width: 210px;
-  height: 42px;
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  align-items: center;
-  border: 1px solid rgba(95, 124, 143, 0.22);
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.search-box span {
-  color: #6f8593;
-  text-align: center;
-  font-size: 20px;
-  line-height: 1;
-}
-
-.search-box input {
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  color: #182f40;
-  background: transparent;
-  font-size: 14px;
-}
-
-.search-box input::placeholder {
-  color: #607684;
-  opacity: 1;
-}
-
-.search-results {
-  position: absolute;
-  top: calc(100% + 10px);
-  left: 0;
-  z-index: 10;
-  width: min(360px, 84vw);
-  padding: 8px;
-  border: 1px solid rgba(102, 133, 153, 0.2);
-  border-radius: 8px;
-  background: #ffffff;
-  box-shadow: 0 20px 50px rgba(32, 58, 78, 0.16);
-}
-
-.search-results button,
 .factor-list button {
   width: 100%;
   border: 0;
   background: transparent;
   text-align: left;
   cursor: pointer;
-}
-
-.search-results button {
-  display: grid;
-  gap: 4px;
-  padding: 10px;
-  border-radius: 6px;
-}
-
-.search-results button:hover {
-  background: #eef6f7;
-}
-
-.search-results strong {
-  color: #173247;
-  font-size: 14px;
-}
-
-.search-results span,
-.search-results p {
-  margin: 0;
-  color: #6e8391;
-  font-size: 12px;
 }
 
 .login-button,
@@ -3065,8 +2910,8 @@ a {
   grid-template-columns: minmax(320px, 0.86fr) minmax(520px, 1.14fr);
   align-items: center;
   gap: clamp(32px, 6vw, 76px);
-  min-height: clamp(560px, calc(78vh - 74px), 700px);
-  padding: clamp(28px, 3.8vw, 50px) clamp(20px, 5vw, 70px) clamp(24px, 3vw, 38px);
+  min-height: clamp(480px, calc(72vh - 68px), 560px);
+  padding: clamp(28px, 3.4vw, 44px) clamp(20px, 5vw, 70px) clamp(24px, 2.8vw, 34px);
   border-bottom: 1px solid rgba(104, 135, 154, 0.24);
   overflow: hidden;
 }
@@ -3076,7 +2921,7 @@ a {
   inset: 0;
   z-index: -1;
   background:
-    linear-gradient(90deg, rgba(246, 250, 252, 0.9) 0%, rgba(246, 250, 252, 0.7) 48%, rgba(246, 250, 252, 0.58) 100%),
+    linear-gradient(90deg, rgba(246, 250, 252, 0.9) 0%, rgba(246, 250, 252, 0.68) 48%, rgba(246, 250, 252, 0.5) 100%),
     url('/hero-research-bg-v2.webp') center bottom / cover no-repeat;
   content: '';
   opacity: 0.96;
@@ -3100,7 +2945,7 @@ a {
 .hero-copy h1 {
   margin: 0;
   color: #102a3b;
-  font-size: clamp(36px, 4.2vw, 56px);
+  font-size: clamp(38px, 4vw, 54px);
   line-height: 1.1;
   letter-spacing: 0;
   text-wrap: balance;
@@ -3262,7 +3107,7 @@ a {
 .insight-board {
   position: relative;
   z-index: 1;
-  min-height: 398px;
+  min-height: 364px;
   display: grid;
   align-content: stretch;
   overflow: hidden;
@@ -3453,7 +3298,7 @@ a {
 }
 
 .glance-section {
-  padding: 30px clamp(20px, 5vw, 70px);
+  padding: 28px clamp(20px, 5vw, 70px) 34px;
   border-top: 1px solid rgba(104, 135, 154, 0.18);
   border-bottom: 1px solid rgba(104, 135, 154, 0.24);
   background:
@@ -3506,14 +3351,14 @@ a {
 
 .glance-item {
   position: relative;
-  min-height: 176px;
+  min-height: 160px;
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr);
   gap: 18px;
   align-items: start;
-  padding: 24px 20px 56px;
+  padding: 21px 18px 52px;
   border: 1px solid rgba(109, 139, 158, 0.18);
-  border-radius: 16px;
+  border-radius: 10px;
   color: #173247;
   background: #ffffff;
   text-align: left;
@@ -5583,10 +5428,6 @@ a {
     justify-content: flex-end;
   }
 
-  .search-box {
-    width: min(520px, 100%);
-  }
-
   .hero-section,
   .dossier-header,
   .dossier-body,
@@ -5652,10 +5493,6 @@ a {
   .account-menu-panel {
     right: auto;
     left: 0;
-  }
-
-  .search-box {
-    min-width: 0;
   }
 
   .hero-section {

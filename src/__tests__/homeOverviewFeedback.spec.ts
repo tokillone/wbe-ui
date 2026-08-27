@@ -1,5 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createMemoryHistory, createRouter } from 'vue-router'
 
 const { fetchOverviewMock } = vi.hoisted(() => ({
   fetchOverviewMock: vi.fn(),
@@ -28,6 +29,20 @@ vi.mock('../services/home', () => {
 import HomeView from '../views/HomeView.vue'
 import { HomeOverviewRequestError } from '../services/home'
 
+async function mountHome() {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/', component: { template: '<div>home</div>' } }],
+  })
+  await router.push('/')
+  await router.isReady()
+  return mount(HomeView, {
+    global: {
+      plugins: [router],
+    },
+  })
+}
+
 describe('home overview feedback', () => {
   afterEach(() => {
     vi.clearAllMocks()
@@ -39,16 +54,7 @@ describe('home overview feedback', () => {
       biomarkerFrequencies: [],
       targetCategoryOptions: [],
     })
-    const wrapper = mount(HomeView, {
-      global: {
-        stubs: {
-          RouterLink: true,
-        },
-        mocks: {
-          $router: { push: vi.fn() },
-        },
-      },
-    })
+    const wrapper = await mountHome()
 
     await flushPromises()
 
@@ -61,16 +67,7 @@ describe('home overview feedback', () => {
     fetchOverviewMock.mockRejectedValue(
       new HomeOverviewRequestError('unauthorized', '登录状态已失效'),
     )
-    const wrapper = mount(HomeView, {
-      global: {
-        stubs: {
-          RouterLink: true,
-        },
-        mocks: {
-          $router: { push: vi.fn() },
-        },
-      },
-    })
+    const wrapper = await mountHome()
 
     await flushPromises()
 

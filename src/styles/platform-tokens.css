@@ -1,0 +1,56 @@
+:root {
+  --platform-navy-950: #102a3b;
+  --platform-navy-900: #173247;
+  --platform-navy-700: #385466;
+  --platform-blue-700: #0f6591;
+  --platform-blue-100: #eaf3f8;
+  --platform-teal-700: #0b7868;
+  --platform-teal-600: #0e8f77;
+  --platform-teal-100: #eaf7f4;
+  --platform-page: #f3f7f9;
+  --platform-surface: #ffffff;
+  --platform-surface-muted: #f7fafb;
+  --platform-border: #d8e3e8;
+  --platform-border-strong: #c4d2d9;
+  --platform-text-secondary: #607684;
+  --platform-header-height: 68px;
+  --platform-context-height: 50px;
+  --platform-content-width: 1328px;
+  --platform-radius: 8px;
+  --platform-card-radius: 10px;
+  --platform-shadow-sm: 0 2px 8px rgba(21, 52, 72, 0.08);
+  --platform-shadow-md: 0 12px 34px rgba(21, 52, 72, 0.12);
+  --platform-focus: 0 0 0 3px rgba(14, 143, 119, 0.18);
+  font-synthesis: none;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  color: var(--platform-navy-900);
+  background: var(--platform-page);
+}
+
+#app {
+  min-height: 100vh;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  color: #ffffff;
+  background: var(--platform-blue-700);
+}

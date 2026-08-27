@@ -39,8 +39,6 @@ const requiredLayers = [
   'preview_presentation_admin2_labels',
   'preview_china_province_boundaries',
   'preview_china_city_boundaries',
-  'preview_region_outlines',
-  'preview_region_display_outlines',
   'preview_region_polygons',
   'preview_country_labels',
 ]
@@ -49,6 +47,14 @@ assert(header.minzoom === 0, `Expected min zoom 0, got ${header.minzoom}`)
 assert(header.maxzoom === 8, `Expected max zoom 8, got ${header.maxzoom}`)
 requiredLayers.forEach((layer) => assert(layers.has(layer), `Missing vector layer: ${layer}`))
 assert(!layers.has('preview_labels'), 'Legacy mixed preview_labels layer must not be present')
+assert(
+  !layers.has('preview_region_outlines'),
+  'Legacy interaction outline layer must not be present',
+)
+assert(
+  !layers.has('preview_region_display_outlines'),
+  'Legacy display interaction outline layer must not be present',
+)
 assert(
   !layers.has('preview_localized_cities'),
   'Ordinary localized city-place labels must not be present',
@@ -66,11 +72,9 @@ for (const legacyLayer of [
 
 verifyAllCountryLabels()
 verifyPresentationAdministration(metadata)
-verifyRegionOutlineCoverage(metadata)
-verifyRegionDisplayOutlines(metadata)
 verifyRegionPolygons(metadata)
 console.log(
-  `Preview composite verified: Z${header.minzoom}-Z${header.maxzoom}, ${layers.size} vector layers, all country labels and six-continent samples present.`,
+  `Preview composite verified: Z${header.minzoom}-Z${header.maxzoom}, ${layers.size} vector layers, fill-only interaction and all country labels present.`,
 )
 
 function verifyPresentationAdministration(metadata) {
@@ -79,16 +83,43 @@ function verifyPresentationAdministration(metadata) {
   )
   const report = compositeReport.presentationAdministration
   assert(report, 'Missing presentation administration report')
-  assert(report.labelCoverage?.admin1?.rate === 1, 'Incomplete presentation ADM1 labels')
-  assert(report.labelCoverage?.admin2?.rate === 1, 'Incomplete presentation ADM2 labels')
+  assert(
+    report.labelSanitizationAudit?.corruptVisibleLabelCount === 0,
+    'Presentation labels contain visible corrupt text',
+  )
   assert(
     report.nameCoverage?.admin1?.unverifiedChineseFieldCount === 0 &&
       report.nameCoverage?.admin2?.unverifiedChineseFieldCount === 0,
     'Presentation labels contain unverified Chinese names',
   )
   assert(
+    report.nameCoverage?.admin1?.verifiedChineseRate >= 0.97,
+    `ADM1 verified Chinese coverage below 97%: ${report.nameCoverage?.admin1?.verifiedChineseRate}`,
+  )
+  assert(
+    report.nameCoverage?.admin2?.verifiedChineseRate >= 0.034,
+    `ADM2 verified Chinese coverage regressed: ${report.nameCoverage?.admin2?.verifiedChineseRate}`,
+  )
+  assert(
+    Number.isInteger(report.nameResolution?.crossLevelCldrRejectCount) &&
+      report.nameResolution.crossLevelCldrRejectCount >= 0 &&
+      report.nameCoverage?.admin2?.sourceDistribution?.['cross-level-cldr-rejected'] ===
+        report.nameResolution.crossLevelCldrRejectCount,
+    'ADM2 cross-level CLDR rejection audit is missing or inconsistent',
+  )
+  assert(
     report.nameResolution?.snapshot?.cldrVersion === '48',
     'Presentation labels were not built from the pinned CLDR 48 snapshot',
+  )
+  assert(
+    report.manyToOneNameAudit?.remainingVerifiedDuplicateCount === 0,
+    'Presentation ADM1 names contain verified many-to-one assignments after rejection',
+  )
+  assert(
+    report.nameRegressionAudit?.egypt?.admin1Count === 27 &&
+      report.nameRegressionAudit?.egypt?.redSeaChineseCount === 1 &&
+      report.nameRegressionAudit?.egypt?.mismatches?.length === 0,
+    'Egypt ADM1 regression audit failed',
   )
   assert(
     report.languageTransitionAudit?.chinaAdmin1NonChineseDisplayCount === 0 &&
@@ -100,6 +131,10 @@ function verifyPresentationAdministration(metadata) {
     `ADM1/ADM2 coincident edges: ${report.edgeAudit?.coincidentSegmentCount}`,
   )
   assert(
+    report.edgeAudit?.sourceSharedEdgeMissingCount === 0,
+    `Missing eligible ADM2 source shared edges: ${report.edgeAudit?.sourceSharedEdgeMissingCount}`,
+  )
+  assert(
     compositeReport.renderedBoundaryOverlapAudit?.totalCoincidentSegmentCount === 0,
     `Cross-layer coincident edges: ${compositeReport.renderedBoundaryOverlapAudit?.totalCoincidentSegmentCount}`,
   )
@@ -108,10 +143,35 @@ function verifyPresentationAdministration(metadata) {
     `Duplicate-like rendered edges: ${compositeReport.tolerantBoundaryOverlapAudit?.totalDuplicateLikeSegmentCount}`,
   )
   assert(
+    compositeReport.boundaryTileOverlapAudit?.zoomRange?.min === 0 &&
+      compositeReport.boundaryTileOverlapAudit?.zoomRange?.max === 8,
+    'Final boundary tile audit did not cover Z0-Z8',
+  )
+  assert(
+    compositeReport.boundaryTileOverlapAudit?.exactDuplicateCount === 0 &&
+      compositeReport.boundaryTileOverlapAudit?.nearDuplicateLikeCount === 0 &&
+      compositeReport.boundaryTileOverlapAudit?.crossLayerOverlapCount === 0 &&
+      compositeReport.boundaryTileOverlapAudit?.interiorDanglingEndpointCount === 0 &&
+      compositeReport.boundaryTileOverlapAudit?.tileSeamDanglingEndpointCount === 0,
+    'Final Z0-Z8 boundary tiles contain overlaps or disconnected endpoints',
+  )
+  assert(
+    JSON.stringify(
+      compositeReport.boundaryTileOverlapAudit?.policy?.visibleLayerRanges
+        ?.preview_presentation_admin1_boundaries,
+    ) === JSON.stringify([4, 8]) &&
+      JSON.stringify(
+        compositeReport.boundaryTileOverlapAudit?.policy?.visibleLayerRanges
+          ?.preview_china_province_boundaries,
+      ) === JSON.stringify([4, 8]),
+    'ADM1 and China province boundaries must remain visible through Z8',
+  )
+  assert(
     compositeReport.renderedBoundaryCleanup?.zoom === 8 &&
       compositeReport.renderedBoundaryCleanup?.tolerancePx === 1.25 &&
-      compositeReport.renderedBoundaryCleanup?.maxAngleDegrees === 8,
-    'Rendered boundary cleanup tolerance policy is missing or changed',
+      compositeReport.renderedBoundaryCleanup?.maxAngleDegrees === 8 &&
+      compositeReport.renderedBoundaryCleanup?.partialNearSegmentRemoval === false,
+    'Rendered boundary ownership policy is missing or changed',
   )
   const policies = new Map(
     (report.countryPolicies ?? []).map((policy) => [policy.countryKey, policy]),
@@ -202,70 +262,6 @@ function verifyPresentationAdministration(metadata) {
   }
 }
 
-function verifyRegionOutlineCoverage(metadata) {
-  const report = readJson(`${rootDir}/public/tiles/generated/preview-composite-report.json`)
-  const coverage = report.regionOutlineCoverage
-  assert(coverage, 'Missing region outline coverage report')
-  assert(
-    coverage.matchRate === 1,
-    `Expected complete region outline coverage, got ${coverage.matchRate}`,
-  )
-  for (const level of ['country', 'admin1', 'city']) {
-    assert(
-      coverage.expectedByLevel?.[level] === coverage.emittedByLevel?.[level],
-      `Incomplete ${level} region outlines`,
-    )
-  }
-  const layer = (metadata.vector_layers ?? []).find(
-    (candidate) => candidate.id === 'preview_region_outlines',
-  )
-  const fields = new Set(Object.keys(layer?.fields ?? {}))
-  for (const field of ['region_id', 'level', 'geo_key', 'parent_geo_key', 'country_key']) {
-    assert(fields.has(field), `preview_region_outlines is missing ${field}`)
-  }
-}
-
-function verifyRegionDisplayOutlines(metadata) {
-  const report = readJson(`${rootDir}/public/tiles/generated/preview-composite-report.json`)
-  const audit = report.regionDisplayOutlineAudit
-  assert(audit, 'Missing region display outline audit')
-  assert(
-    audit.matchRate === 1,
-    `Expected complete display outline coverage, got ${audit.matchRate}`,
-  )
-  assert(
-    audit.overlapCount === 0,
-    `Expected no display outline overlaps, got ${audit.overlapCount}`,
-  )
-  for (const geoKey of ['china|hongkong', 'china|aomen', 'china|guangdong|zhuhai']) {
-    const focus = audit.focusRegions?.[geoKey]
-    assert(focus, `Missing focus display outline: ${geoKey}`)
-    assert(focus.componentCountAfter === 1, `Expected one display polygon for ${geoKey}`)
-  }
-  for (const [continent, samples] of Object.entries(audit.continentSamples ?? {})) {
-    assert(samples.length === 8, `Expected eight display-outline samples for ${continent}`)
-    samples.forEach((sample) => {
-      assert(sample.outlineCount > 0, `Missing display outlines for ${sample.countryKey}`)
-    })
-  }
-  const layer = (metadata.vector_layers ?? []).find(
-    (candidate) => candidate.id === 'preview_region_display_outlines',
-  )
-  const fields = new Set(Object.keys(layer?.fields ?? {}))
-  for (const field of [
-    'region_id',
-    'level',
-    'geo_key',
-    'parent_geo_key',
-    'country_key',
-    'display_geometry_mode',
-    'component_count_before',
-    'component_count_after',
-  ]) {
-    assert(fields.has(field), `preview_region_display_outlines is missing ${field}`)
-  }
-}
-
 function verifyRegionPolygons(metadata) {
   const report = readJson(`${rootDir}/public/tiles/generated/preview-composite-report.json`)
   const coverage = report.regionPolygonCoverage
@@ -273,6 +269,12 @@ function verifyRegionPolygons(metadata) {
   assert(
     coverage.matchRate === 1,
     `Expected complete region polygon coverage, got ${coverage.matchRate}`,
+  )
+  assert(
+    report.regionIndexCoverage?.brazilAdmin2Count >= 5569 &&
+      report.regionIndexCoverage?.indiaAdmin2Count >= 735 &&
+      report.regionIndexCoverage?.corruptVisibleLabelCount === 0,
+    'Region index ADM2 coverage or label sanitization failed',
   )
   for (const level of ['country', 'admin1', 'city']) {
     assert(

@@ -14,17 +14,39 @@ export type ScreenSpaceBounds = {
 export type ScreenSpaceDeclutterCandidate<T> = {
   value: T
   bounds: ScreenSpaceBounds
+  alternativeBounds?: ScreenSpaceBounds[]
   order: number
   forceVisible?: boolean
+  hovered?: boolean
   pointCount?: number
   recordCount?: number
   area?: number
+}
+
+export type ScreenSpaceDeclutterPlacement<T> = {
+  value: T
+  bounds: ScreenSpaceBounds
+  placementIndex: number
 }
 
 export type MapHierarchyRow = {
   level: MapDisplayLevel
   geoKey?: string
   parentGeoKey?: string | null
+}
+
+export type AdaptiveHeatScale = {
+  count: number
+  distinctCount: number
+  min: number
+  median: number
+  max: number
+  colors: string[]
+  groups: Array<{
+    value: number
+    percentile: number
+    colorIndex: number
+  }>
 }
 
 const SPECIAL_ADMIN_CITY_GEO_KEYS = new Set(['china|hongkong|hongkong', 'china|aomen|macao'])
@@ -174,9 +196,20 @@ export function declutterScreenSpaceCandidates<T>(
   candidates: ScreenSpaceDeclutterCandidate<T>[],
   gap: number,
 ) {
+  return declutterScreenSpacePlacements(candidates, gap).map((item) => item.value)
+}
+
+export function declutterScreenSpacePlacements<T>(
+  candidates: ScreenSpaceDeclutterCandidate<T>[],
+  gap: number,
+  reservedBounds: ScreenSpaceBounds[] = [],
+): ScreenSpaceDeclutterPlacement<T>[] {
   const sorted = [...candidates].sort((left, right) => {
     if (Boolean(right.forceVisible) !== Boolean(left.forceVisible)) {
       return Number(Boolean(right.forceVisible)) - Number(Boolean(left.forceVisible))
+    }
+    if (Boolean(right.hovered) !== Boolean(left.hovered)) {
+      return Number(Boolean(right.hovered)) - Number(Boolean(left.hovered))
     }
     if ((right.pointCount ?? 0) !== (left.pointCount ?? 0)) {
       return (right.pointCount ?? 0) - (left.pointCount ?? 0)
@@ -189,14 +222,22 @@ export function declutterScreenSpaceCandidates<T>(
     }
     return left.order - right.order
   })
-  const accepted: ScreenSpaceDeclutterCandidate<T>[] = []
+  const accepted: ScreenSpaceDeclutterPlacement<T>[] = []
   sorted.forEach((candidate) => {
-    const collides = accepted.some((item) =>
-      screenSpaceBoundsIntersect(candidate.bounds, item.bounds, gap),
+    const options = [candidate.bounds, ...(candidate.alternativeBounds ?? [])]
+    const placementIndex = options.findIndex(
+      (bounds) =>
+        !reservedBounds.some((reserved) => screenSpaceBoundsIntersect(bounds, reserved, gap)) &&
+        !accepted.some((item) => screenSpaceBoundsIntersect(bounds, item.bounds, gap)),
     )
-    if (!collides || candidate.forceVisible) accepted.push(candidate)
+    if (placementIndex >= 0) {
+      accepted.push({ value: candidate.value, bounds: options[placementIndex]!, placementIndex })
+    }
   })
-  return accepted.sort((left, right) => left.order - right.order).map((item) => item.value)
+  const order = new Map(candidates.map((candidate) => [candidate.value, candidate.order]))
+  return accepted.sort(
+    (left, right) => (order.get(left.value) ?? 0) - (order.get(right.value) ?? 0),
+  )
 }
 
 function screenSpaceBoundsIntersect(
@@ -258,6 +299,96 @@ export function selectRowsForDisplayLevel<T extends MapHierarchyRow>(
   })
 }
 
+export function buildAdaptiveHeatScale(
+  values: number[],
+  palette: readonly string[],
+): AdaptiveHeatScale {
+  const sorted = values
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((left, right) => left - right)
+  if (!sorted.length || !palette.length) {
+    return {
+      count: 0,
+      distinctCount: 0,
+      min: 0,
+      median: 0,
+      max: 0,
+      colors: [],
+      groups: [],
+    }
+  }
+
+  const rawGroups: Array<{ value: number; start: number; end: number }> = []
+  sorted.forEach((value, index) => {
+    const previous = rawGroups[rawGroups.length - 1]
+    if (previous?.value === value) {
+      previous.end = index
+    } else {
+      rawGroups.push({ value, start: index, end: index })
+    }
+  })
+
+  const bandCount = Math.min(palette.length, rawGroups.length)
+  const colors =
+    bandCount === 1
+      ? [palette[Math.floor((palette.length - 1) / 2)]!]
+      : Array.from({ length: bandCount }, (_, index) => {
+          const paletteIndex = Math.round((index * (palette.length - 1)) / (bandCount - 1))
+          return palette[paletteIndex]!
+        })
+  const denominator = Math.max(sorted.length - 1, 1)
+  const groups = rawGroups.map(({ value, start, end }) => {
+    const percentile = sorted.length === 1 ? 0.5 : (start + end) / 2 / denominator
+    return {
+      value,
+      percentile,
+      colorIndex: Math.min(colors.length - 1, Math.floor(percentile * colors.length)),
+    }
+  })
+  const middle = (sorted.length - 1) / 2
+  const lowerMiddle = sorted[Math.floor(middle)]!
+  const upperMiddle = sorted[Math.ceil(middle)]!
+
+  return {
+    count: sorted.length,
+    distinctCount: rawGroups.length,
+    min: sorted[0]!,
+    median: (lowerMiddle + upperMiddle) / 2,
+    max: sorted[sorted.length - 1]!,
+    colors,
+    groups,
+  }
+}
+
+export function adaptiveHeatPercentile(scale: AdaptiveHeatScale, value: number) {
+  if (!Number.isFinite(value) || value <= 0 || !scale.groups.length) return 0.5
+  let low = 0
+  let high = scale.groups.length
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2)
+    if (scale.groups[middle]!.value < value) low = middle + 1
+    else high = middle
+  }
+  const exact = scale.groups[low]
+  if (exact?.value === value) return exact.percentile
+  if (low === 0) return 0
+  if (low >= scale.groups.length) return 1
+  const lower = scale.groups[low - 1]!
+  const upper = scale.groups[low]!
+  const ratio = (value - lower.value) / Math.max(upper.value - lower.value, Number.EPSILON)
+  return lower.percentile + ratio * (upper.percentile - lower.percentile)
+}
+
+export function adaptiveHeatColor(scale: AdaptiveHeatScale, value: number, fallback: string) {
+  if (!scale.colors.length || !Number.isFinite(value) || value <= 0) return fallback
+  const percentile = adaptiveHeatPercentile(scale, value)
+  const index = Math.min(
+    scale.colors.length - 1,
+    Math.floor(Math.max(0, Math.min(1, percentile)) * scale.colors.length),
+  )
+  return scale.colors[index] ?? fallback
+}
+
 function hierarchyGeoKey(row: MapHierarchyRow) {
   return String(row.geoKey ?? (row as MapHierarchyRow & { key?: string }).key ?? '')
 }
@@ -266,63 +397,12 @@ function isUnassignedRow(row: MapHierarchyRow) {
   return isUnassignedGeoKey(row.level, hierarchyGeoKey(row))
 }
 
-export function temperatureBandIndex(value: number, min: number, max: number, bandCount: number) {
-  if (
-    !Number.isFinite(value) ||
-    value <= 0 ||
-    !Number.isFinite(min) ||
-    !Number.isFinite(max) ||
-    bandCount <= 1
-  ) {
-    return 0
-  }
-  if (max <= min) return Math.floor(bandCount / 2)
-  const useLogScale = min > 0 && max / min > 100
-  const ratio = useLogScale
-    ? (Math.log10(value + 1) - Math.log10(min + 1)) / (Math.log10(max + 1) - Math.log10(min + 1))
-    : (value - min) / (max - min)
-  return Math.round(Math.max(0, Math.min(1, ratio)) * (bandCount - 1))
-}
-
-export function resolveStableHeatRange(
-  legendMin: number | null | undefined,
-  legendMax: number | null | undefined,
-  allLevelValues: number[],
-) {
-  const fallbackValues = allLevelValues.filter((value) => Number.isFinite(value) && value > 0)
-  const fallbackMin = fallbackValues.length ? Math.min(...fallbackValues) : 0
-  const fallbackMax = fallbackValues.length ? Math.max(...fallbackValues) : 0
-  const min = Number(legendMin)
-  const max = Number(legendMax)
-
-  if (Number.isFinite(min) && min > 0 && Number.isFinite(max) && max >= min) {
-    return { min, max }
-  }
-  return { min: fallbackMin, max: fallbackMax }
-}
-
 export function regionFillOpacityExpression(hasSpecificBiomarker: boolean) {
   if (!hasSpecificBiomarker) return 0
   return [
     'case',
-    ['==', ['get', 'hasPndlValue'], true],
-    [
-      'case',
-      ['==', ['get', 'level'], 'city'],
-      0.76,
-      ['==', ['get', 'level'], 'admin1'],
-      0.72,
-      0.68,
-    ],
-    ['==', ['get', 'hasCoverage'], true],
-    [
-      'case',
-      ['==', ['get', 'level'], 'city'],
-      0.34,
-      ['==', ['get', 'level'], 'admin1'],
-      0.38,
-      0.32,
-    ],
+    ['any', ['==', ['get', 'hasPndlValue'], true], ['==', ['get', 'hasCoverage'], true]],
+    1,
     0,
   ]
 }

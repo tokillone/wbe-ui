@@ -122,6 +122,27 @@ describe('cleaned map boundary assets', () => {
           entry.area > 0,
       ),
     ).toBe(true)
+    expect(index.localization.admin1ChineseRate).toBe(1)
+    expect(index.localization.corruptVisibleLabelCount).toBe(0)
+    expect(index.localization.hiddenLabelCount).toBe(0)
+    expect(
+      index.regions.every(
+        (entry: any) =>
+          typeof entry.display_name_zh === 'string' &&
+          typeof entry.display_name_en === 'string' &&
+          typeof entry.name_zh_source === 'string' &&
+          Array.isArray(entry.search_aliases) &&
+          entry.search_aliases.length > 0,
+      ),
+    ).toBe(true)
+    expect(
+      index.regions.every(
+        (entry: any) => !/[?\uFFFD\u0000-\u001F\u007F-\u009F]/u.test(entry.display_name),
+      ),
+    ).toBe(true)
+    const chernihiv = index.regions.find((entry: any) => entry.geo_key === 'ukraine|chernihiv')
+    expect(chernihiv.display_name_zh).toBe('切尔尼戈夫')
+    expect(chernihiv.search_aliases).toEqual(expect.arrayContaining(['Chernihiv', '切尔尼戈夫']))
   })
 
   it('uses every controlled China province label as the region display anchor', () => {
@@ -151,10 +172,17 @@ describe('cleaned map boundary assets', () => {
     expect(provinceLabels).toHaveLength(34)
     provinceLabels.forEach((feature) => {
       const entry = entries.get(`admin1|${feature.properties.geo_key}`)
-      expect(entry?.label_point, feature.properties.geo_key).toEqual(feature.geometry.coordinates)
+      const expectedPoint =
+        feature.properties.geo_key === 'china|hebei'
+          ? [114.441325, 38.128893]
+          : feature.geometry.coordinates
+      expect(entry?.label_point, feature.properties.geo_key).toEqual(expectedPoint)
     })
     expect(entries.get('admin1|china|gansu')?.label_point).toEqual([102.3, 38.5])
-    expect(entries.get('admin1|china|hebei')?.label_point).toEqual([115.879104, 39.152231])
+    expect(entries.get('admin1|china|hebei')?.label_point).toEqual([114.441325, 38.128893])
+    expect(entries.get('admin1|china|hebei')?.label_point).toEqual(
+      entries.get('city|china|hebei|shijiazhuang')?.label_point,
+    )
     expect(entries.get('admin1|china|shaanxi')?.label_point).toEqual([108.580731, 34.681609])
   })
 
@@ -200,9 +228,7 @@ describe('cleaned map boundary assets', () => {
     ).toBe(true)
     expect(
       cities.features.some((feature) =>
-        /hong.?kong|macao|macau|taiwan|香港|澳门|台湾/i.test(
-          JSON.stringify(feature.properties),
-        ),
+        /hong.?kong|macao|macau|taiwan|香港|澳门|台湾/i.test(JSON.stringify(feature.properties)),
       ),
     ).toBe(false)
   })
@@ -210,9 +236,10 @@ describe('cleaned map boundary assets', () => {
   it('keeps exactly one non-overlapping display Polygon for Hong Kong and Macao', () => {
     const envelopes = loadRenderAsset('china-special-admin-envelopes.geojson')
     expect(envelopes.features).toHaveLength(2)
-    expect(
-      envelopes.features.map((feature) => String(feature.properties.geo_key)).sort(),
-    ).toEqual(['china|aomen', 'china|hongkong'])
+    expect(envelopes.features.map((feature) => String(feature.properties.geo_key)).sort()).toEqual([
+      'china|aomen',
+      'china|hongkong',
+    ])
     expect(
       envelopes.features.every((feature) => (feature.geometry as any).type === 'Polygon'),
     ).toBe(true)
@@ -229,9 +256,11 @@ describe('cleaned map boundary assets', () => {
   it('ships single display polygons for Hong Kong, Macao, and Zhuhai coastal islands', () => {
     const envelopes = loadRenderAsset('china-coastal-display-envelopes.geojson')
     expect(envelopes.features).toHaveLength(3)
-    expect(
-      envelopes.features.map((feature) => String(feature.properties.geo_key)).sort(),
-    ).toEqual(['china|aomen', 'china|guangdong|zhuhai', 'china|hongkong'])
+    expect(envelopes.features.map((feature) => String(feature.properties.geo_key)).sort()).toEqual([
+      'china|aomen',
+      'china|guangdong|zhuhai',
+      'china|hongkong',
+    ])
     expect(
       envelopes.features.every((feature) => (feature.geometry as any).type === 'Polygon'),
     ).toBe(true)
@@ -270,11 +299,13 @@ describe('cleaned map boundary assets', () => {
       report.sources.every((source: any) => source.lineValidation.antimeridianJumps.length === 0),
     ).toBe(true)
     expect(
-      report.sources.every((source: any) => source.spikeRepairMetrics.excessiveRepairs.length === 0),
+      report.sources.every(
+        (source: any) => source.spikeRepairMetrics.excessiveRepairs.length === 0,
+      ),
     ).toBe(true)
   })
 
-  it('ships a zero-result Z8 tolerant boundary overlap audit', () => {
+  it('ships zero-result source and Z0-Z8 tile boundary audits', () => {
     const report = JSON.parse(
       readFileSync(
         resolve(process.cwd(), 'public/tiles/generated/preview-composite-report.json'),
@@ -283,6 +314,7 @@ describe('cleaned map boundary assets', () => {
     )
     const cleanup = report.renderedBoundaryCleanup
     const audit = report.tolerantBoundaryOverlapAudit
+    const tileAudit = report.boundaryTileOverlapAudit
 
     expect(cleanup).toMatchObject({
       zoom: 8,
@@ -290,24 +322,21 @@ describe('cleaned map boundary assets', () => {
       maxAngleDegrees: 8,
       minOverlapPx: 2,
       minCandidateOverlapRatio: 0.7,
+      partialNearSegmentRemoval: false,
     })
     expect(audit.totalDuplicateLikeSegmentCount).toBe(0)
-    expect(
-      Object.values(audit.layers).every(
-        (layer: any) => layer.total === 0,
-      ),
-    ).toBe(true)
+    expect(Object.values(audit.layers).every((layer: any) => layer.total === 0)).toBe(true)
     expect(audit.pairs.every((pair: any) => pair.total === 0)).toBe(true)
-
-    const southeastAsia = ['laos', 'myanmar', 'cambodia', 'thailand', 'vietnam']
-    const removedNearByCountry = new Map<string, number>()
-    Object.values(cleanup.layers).forEach((layer: any) => {
-      Object.entries(layer.removedByCountry).forEach(([country, counts]: [string, any]) => {
-        removedNearByCountry.set(country, (removedNearByCountry.get(country) ?? 0) + counts.near)
-      })
-    })
-    southeastAsia.forEach((country) => {
-      expect(removedNearByCountry.get(country), country).toBeGreaterThan(0)
+    expect(Object.values(cleanup.layers).every((layer: any) => layer.removedWithinNear === 0)).toBe(
+      true,
+    )
+    expect(tileAudit).toMatchObject({
+      zoomRange: { min: 0, max: 8 },
+      exactDuplicateCount: 0,
+      nearDuplicateLikeCount: 0,
+      crossLayerOverlapCount: 0,
+      interiorDanglingEndpointCount: 0,
+      tileSeamDanglingEndpointCount: 0,
     })
   })
 })

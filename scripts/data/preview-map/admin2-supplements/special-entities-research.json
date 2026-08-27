@@ -1,0 +1,673 @@
+{
+  "schema_version": 1,
+  "batch": "special-entities",
+  "generated_at": "2026-08-27",
+  "scope": {
+    "country_keys": [
+      "palestine",
+      "baykonurcosmodrome",
+      "birtawil",
+      "scarboroughreef",
+      "spratlyislands",
+      "somaliland",
+      "westernsahara",
+      "siachenglacier",
+      "bajonuevobankpetrelis",
+      "brazilianisland",
+      "clippertonisland",
+      "southernpatagonianicefield",
+      "serranillabank"
+    ],
+    "allowed_changes": "research metadata only",
+    "protected_scope": "China and every existing country or territory not listed above"
+  },
+  "summary": {
+    "candidate_count": 13,
+    "official_hierarchy_confirmed_geometry_license_pending": 2,
+    "no_official_adm2": 9,
+    "disputed_no_neutral_hierarchy": 2,
+    "geojson_created": false
+  },
+  "source_policy": {
+    "retrieved_at": "2026-08-27",
+    "geometry_rule": "Do not ingest geometry unless the authoritative publisher states a reusable license and the source can be reproduced exactly.",
+    "dispute_rule": "Record the positions and neutral international status without choosing a sovereign or turning a physical feature into an administrative unit.",
+    "chinese_name_rule": "Prefer Chinese United Nations terminology, Unicode CLDR, or a competent Chinese government source. Existing project labels are explicitly marked pending when no authoritative Chinese source was located."
+  },
+  "candidates": [
+    {
+      "country_key": "palestine",
+      "display_name_zh": "巴勒斯坦领土",
+      "display_name_en": "Palestinian Territory",
+      "status": "official_hierarchy_confirmed_geometry_license_pending",
+      "political_status": {
+        "classification": "neutral",
+        "notes": "The map label follows Unicode CLDR territory code PS. United Nations materials use context-dependent forms including the occupied Palestinian territory and the State of Palestine; this record does not determine final-status borders.",
+        "sources": [
+          {
+            "source_id": "un-palestine-facts-zh",
+            "source_authority": "United Nations — Question of Palestine",
+            "source_url": "https://www.un.org/unispal/zh/in-facts-and-figures/"
+          }
+        ]
+      },
+      "official_hierarchy": {
+        "adm1": {
+          "exists": true,
+          "unit_name_en": "governorate",
+          "unit_name_zh": "省（Governorate）",
+          "count": 16,
+          "units": [
+            { "subdivision_code": "PS-BTH", "display_name_en": "Bethlehem", "display_name_zh": "伯利恒省" },
+            { "subdivision_code": "PS-DEB", "display_name_en": "Deir al-Balah", "display_name_zh": "代尔拜莱赫省" },
+            { "subdivision_code": "PS-GZA", "display_name_en": "Gaza", "display_name_zh": "加沙省" },
+            { "subdivision_code": "PS-HBN", "display_name_en": "Hebron", "display_name_zh": "希布伦省" },
+            { "subdivision_code": "PS-JEM", "display_name_en": "Jerusalem", "display_name_zh": "耶路撒冷省" },
+            { "subdivision_code": "PS-JEN", "display_name_en": "Jenin", "display_name_zh": "杰宁省" },
+            { "subdivision_code": "PS-JRH", "display_name_en": "Jericho and Al-Aghwar", "display_name_zh": "杰里科省" },
+            { "subdivision_code": "PS-KYS", "display_name_en": "Khan Yunis", "display_name_zh": "汉尤尼斯省" },
+            { "subdivision_code": "PS-NBS", "display_name_en": "Nablus", "display_name_zh": "纳布卢斯省" },
+            { "subdivision_code": "PS-NGZ", "display_name_en": "North Gaza", "display_name_zh": "北加沙省" },
+            { "subdivision_code": "PS-QQA", "display_name_en": "Qalqilya", "display_name_zh": "盖勒吉利耶省" },
+            { "subdivision_code": "PS-RBH", "display_name_en": "Ramallah and al-Bireh", "display_name_zh": "拉马拉和比雷赫省" },
+            { "subdivision_code": "PS-RFH", "display_name_en": "Rafah", "display_name_zh": "拉法省" },
+            { "subdivision_code": "PS-SLT", "display_name_en": "Salfit", "display_name_zh": "萨尔费特省" },
+            { "subdivision_code": "PS-TBS", "display_name_en": "Tubas and Northern Valleys", "display_name_zh": "图巴斯省" },
+            { "subdivision_code": "PS-TKM", "display_name_en": "Tulkarm", "display_name_zh": "图勒凯尔姆省" }
+          ]
+        },
+        "adm2": {
+          "exists": true,
+          "unit_name_en": "locality",
+          "unit_name_zh": "地方行政单位",
+          "count": 613,
+          "notes": "PCBS reports 580 localities in the West Bank and 33 in the Gaza Strip for the 2017 administrative division. A locality is an inhabited place with an independent local administration or a separated inhabited place outside another locality's formal boundary."
+        }
+      },
+      "geometry_source": {
+        "ingestible": false,
+        "reason": "The official GeoMOLG service exposes queryable governorate and local-government boundary layers, but its public metadata has no stated reuse license. PCBS maps are authoritative validation references, not licensed vector downloads.",
+        "sources": [
+          {
+            "source_id": "pcbs-migration-atlas-2017",
+            "source_authority": "Palestinian Central Bureau of Statistics",
+            "source_url": "https://www.pcbs.gov.ps/Downloads/book2522.pdf",
+            "source_license": "not stated",
+            "usage": "hierarchy and count validation only"
+          },
+          {
+            "source_id": "geomolg-governorate-boundaries",
+            "source_authority": "Palestinian Ministry of Local Government — GeoMOLG",
+            "source_url": "https://geomolg.ps/Geocortex/Essentials/REST/sites/A3/map/mapservices/284/layers/0",
+            "source_license": "not stated",
+            "usage": "authoritative service discovery only"
+          },
+          {
+            "source_id": "geomolg-layer-catalog",
+            "source_authority": "Palestinian Ministry of Local Government — GeoMOLG",
+            "source_url": "https://geomolg.ps/Geocortex/Essentials/REST/sites/A3/map/layerlist",
+            "source_license": "not stated",
+            "usage": "ADM2 layer existence validation only"
+          }
+        ]
+      },
+      "chinese_name_source": {
+        "display_name_zh": "巴勒斯坦领土",
+        "status": "verified",
+        "source_authority": "Unicode Consortium — CLDR 48",
+        "source_url": "https://github.com/unicode-org/cldr/blob/release-48/common/main/zh.xml",
+        "source_key": "territory[@type='PS']",
+        "source_license": "Unicode-3.0",
+        "adm1_source_url": "https://github.com/unicode-org/cldr/blob/release-48/common/subdivisions/zh.xml"
+      },
+      "notes": [
+        "This is a valid future supplement candidate after the official publisher supplies a compatible geometry license.",
+        "Do not substitute Israeli district or Area A/B/C control polygons for the PCBS governorate/locality hierarchy.",
+        "Do not ingest the official REST geometry by inference from public accessibility alone."
+      ]
+    },
+    {
+      "country_key": "somaliland",
+      "display_name_zh": "索马里兰",
+      "display_name_en": "Somaliland",
+      "status": "official_hierarchy_confirmed_geometry_license_pending",
+      "political_status": {
+        "classification": "disputed",
+        "notes": "Somaliland operates a de facto regional and district administration. United Nations and Chinese government material treats it within Somalia and often places the name in quotation marks or calls it Somaliland State/region. The dataset must not imply recognition as a sovereign State.",
+        "sources": [
+          {
+            "source_id": "un-somalia-report-2014",
+            "source_authority": "United Nations Security Council",
+            "source_url": "https://digitallibrary.un.org/record/781898/files/S_2014_726-ZH.pdf"
+          },
+          {
+            "source_id": "prc-somalia-travel",
+            "source_authority": "Ministry of Foreign Affairs of the People's Republic of China",
+            "source_url": "https://cs.mfa.gov.cn/zggmcg/ljmdd/fz_648564/sml_651729/jtcx_651757/"
+          }
+        ]
+      },
+      "official_hierarchy": {
+        "adm1": {
+          "exists": true,
+          "unit_name_en": "region",
+          "unit_name_zh": "州（Region）",
+          "count": 6,
+          "units": [
+            { "display_name_local": "Awdal", "display_name_en": "Awdal", "display_name_zh": "奥达勒", "chinese_name_status": "verified_in_un_chinese_document" },
+            { "display_name_local": "Maroodi Jeex", "display_name_en": "Maroodi Jeex", "display_name_zh": "马罗迪杰赫", "chinese_name_status": "provisional_transliteration" },
+            { "display_name_local": "Saaxil", "display_name_en": "Sahil", "display_name_zh": "萨希勒", "chinese_name_status": "provisional_transliteration" },
+            { "display_name_local": "Togdheer", "display_name_en": "Togdheer", "display_name_zh": "托格代", "chinese_name_status": "verified_in_un_chinese_document" },
+            { "display_name_local": "Sanaag", "display_name_en": "Sanaag", "display_name_zh": "萨纳格", "chinese_name_status": "verified_in_un_chinese_document" },
+            { "display_name_local": "Sool", "display_name_en": "Sool", "display_name_zh": "苏勒", "chinese_name_status": "verified_in_un_chinese_document" }
+          ],
+          "notes": "Somaliland government sources consistently describe six main regions, but some later documents also mention fourteen proposed or expanded regions. Use the six-region legal baseline until the competent authority publishes one unambiguous, licensed boundary release."
+        },
+        "adm2": {
+          "exists": true,
+          "unit_name_en": "district",
+          "unit_name_zh": "区（District）",
+          "count": 86,
+          "notes": "A 2025 Somaliland government document reports 86 districts, of which 23 are electoral districts. The legal and cartographic status of later-created districts is not consistent enough for ingestion without a definitive official register."
+        }
+      },
+      "geometry_source": {
+        "ingestible": false,
+        "reason": "The competent authority confirms the hierarchy, but the reviewed official documents contain illustrative maps rather than a licensed, reproducible vector boundary release. Some eastern regions and districts are also contested by neighbouring administrations.",
+        "sources": [
+          {
+            "source_id": "somaliland-constitution-chapter-five",
+            "source_authority": "Government of Somaliland",
+            "source_url": "https://www.govsomaliland.org/article/chapter-five",
+            "source_license": "not stated",
+            "usage": "legal hierarchy validation"
+          },
+          {
+            "source_id": "somaliland-administrative-political-units-2025",
+            "source_authority": "Government of Somaliland",
+            "source_url": "https://www.govsomaliland.org/uploads/files/2025/11/2025-11-29-06-35-30-6765-1764398130.pdf",
+            "source_license": "not stated",
+            "usage": "six-region and district-count validation"
+          },
+          {
+            "source_id": "somaliland-gpe-proposal-2024",
+            "source_authority": "Government of Somaliland — Ministry of Education and Science",
+            "source_url": "https://www.govsomaliland.org/uploads/files/2024/09/2024-09-01-06-02-24-3784-1725170544.pdf",
+            "source_license": "not stated",
+            "usage": "administrative-map cross-check only"
+          }
+        ]
+      },
+      "chinese_name_source": {
+        "display_name_zh": "索马里兰",
+        "status": "verified_as_regional_name_not_state_name",
+        "source_authority": "Ministry of Foreign Affairs of the People's Republic of China",
+        "source_url": "https://cs.mfa.gov.cn/zggmcg/ljmdd/fz_648564/sml_651729/jtcx_651757/",
+        "notes": "The source uses 索马里兰州 and treats it as part of Somalia. United Nations Chinese records validate 奥达勒、托格代、萨纳格、苏勒; two other Chinese region labels remain provisional."
+      },
+      "notes": [
+        "This is a hierarchy research candidate, not an authorization to recognize a sovereign boundary.",
+        "Sool and Sanaag include actively disputed areas; never dissolve competing claims into a single solid international border.",
+        "No GeoJSON is created because license and current legal boundary alignment are unresolved."
+      ]
+    },
+    {
+      "country_key": "baykonurcosmodrome",
+      "display_name_zh": "拜科努尔航天发射场",
+      "display_name_en": "Baikonur Cosmodrome",
+      "status": "no_official_adm2",
+      "political_status": {
+        "classification": "non_sovereign_leased_complex",
+        "notes": "The complex is in Kazakhstan and is used by the Russian Federation under bilateral lease arrangements. It is a space facility and associated special-status city, not a country-level administrative territory.",
+        "sources": [
+          {
+            "source_id": "un-baikonur-use-agreement",
+            "source_authority": "United Nations Office for Outer Space Affairs",
+            "source_url": "https://digitallibrary.un.org/record/679388/files/st_space_28E.pdf"
+          },
+          {
+            "source_id": "kazakhstan-baikonur-special-representative",
+            "source_authority": "Government of Kazakhstan",
+            "source_url": "https://www.gov.kz/memleket/entities/kyzylorda-baikonur?lang=kk"
+          }
+        ]
+      },
+      "official_hierarchy": {
+        "adm1": { "exists": false },
+        "adm2": { "exists": false },
+        "notes": "Do not confuse the cosmodrome/city with Astana's unrelated Baikonur urban district."
+      },
+      "geometry_source": {
+        "ingestible": false,
+        "reason": "There is no country→ADM1→ADM2 hierarchy for the leased complex. Any facility perimeter would be an operational/lease boundary, not ADM2."
+      },
+      "chinese_name_source": {
+        "display_name_zh": "拜科努尔航天发射场",
+        "status": "verified",
+        "source_authority": "China Manned Space Agency",
+        "source_url": "https://www.cmse.gov.cn/art/2008/9/17/art_311_3595.html"
+      },
+      "notes": [
+        "Remove fake ADM1/ADM2 self-duplicates rather than inventing subdivisions.",
+        "Keep Kazakhstan's normal hierarchy frozen."
+      ]
+    },
+    {
+      "country_key": "birtawil",
+      "display_name_zh": "比尔泰维勒",
+      "display_name_en": "Bir Tawil",
+      "status": "no_official_adm2",
+      "political_status": {
+        "classification": "unclaimed",
+        "notes": "The area results from incompatible Egypt–Sudan boundary interpretations. The UK Foreign, Commonwealth & Development Office states that neither Egypt nor Sudan claims the Bir Tawil trapezoid.",
+        "sources": [
+          {
+            "source_id": "uk-fcdo-egypt-regional-risks",
+            "source_authority": "UK Foreign, Commonwealth & Development Office",
+            "source_url": "https://www.gov.uk/foreign-travel-advice/egypt/regional-risks"
+          },
+          {
+            "source_id": "un-egypt-sudan-boundary-note",
+            "source_authority": "United Nations Division for Ocean Affairs and the Law of the Sea",
+            "source_url": "https://digitallibrary.un.org/record/3890922/files/LOS_94_WEB.pdf"
+          }
+        ]
+      },
+      "official_hierarchy": {
+        "adm1": { "exists": false },
+        "adm2": { "exists": false }
+      },
+      "geometry_source": {
+        "ingestible": false,
+        "reason": "There is no competent administration and therefore no official ADM1 or ADM2 boundary. The physical trapezoid must not be replicated as province and city polygons."
+      },
+      "chinese_name_source": {
+        "display_name_zh": "比尔泰维勒",
+        "status": "project_label_pending_authoritative_chinese_source",
+        "source_authority": "Existing project label",
+        "source_url": null
+      },
+      "notes": [
+        "Display as a neutral special geographic feature only.",
+        "No administrative fill should be generated."
+      ]
+    },
+    {
+      "country_key": "scarboroughreef",
+      "display_name_zh": "黄岩岛",
+      "display_name_en": "Scarborough Shoal",
+      "status": "no_official_adm2",
+      "political_status": {
+        "classification": "disputed",
+        "notes": "China and the Philippines publish different sovereignty and naming positions. The South China Sea arbitral award addressed maritime status and conduct but expressly did not decide territorial sovereignty. This research record adopts neither claim.",
+        "sources": [
+          {
+            "source_id": "un-riaa-south-china-sea-award",
+            "source_authority": "United Nations — Reports of International Arbitral Awards",
+            "source_url": "https://legal.un.org/riaa/cases/vol_XXXIII/153-617.pdf"
+          },
+          {
+            "source_id": "prc-huangyan-baselines-2024",
+            "source_authority": "Ministry of Foreign Affairs of the People's Republic of China",
+            "source_url": "https://www.mfa.gov.cn/web/wjb_673085/zzjg_673183/xws_674681/xgxw_674683/202412/t20241218_11497883.shtml"
+          },
+          {
+            "source_id": "philippines-namria-bajo-de-masinloc",
+            "source_authority": "Philippines National Mapping and Resource Information Authority",
+            "source_url": "https://namria.gov.ph/jdownloads/Navigational_Warning/NAVPHIL_104_2020_signed.pdf"
+          }
+        ]
+      },
+      "official_hierarchy": {
+        "adm1": { "exists": false },
+        "adm2": { "exists": false }
+      },
+      "geometry_source": {
+        "ingestible": false,
+        "reason": "A reef/atoll and maritime baselines are not municipal subdivisions. No neutral ADM2 hierarchy exists."
+      },
+      "chinese_name_source": {
+        "display_name_zh": "黄岩岛",
+        "status": "verified_name_claim_neutrality_required",
+        "source_authority": "Ministry of Natural Resources / Ministry of Foreign Affairs of the People's Republic of China",
+        "source_url": "https://www.mfa.gov.cn/web/wjb_673085/zzjg_673183/bjhysws_674671/bhflfg/dtdmxgfl/202303/P020230313585504979937.pdf"
+      },
+      "notes": [
+        "Do not draw the PRC territorial-sea baseline as an ADM boundary.",
+        "If shown, use a disputed feature symbol and dual-language aliases rather than a country→province→city hierarchy."
+      ]
+    },
+    {
+      "country_key": "spratlyislands",
+      "display_name_zh": "南沙群岛",
+      "display_name_en": "Spratly Islands",
+      "status": "disputed_no_neutral_hierarchy",
+      "political_status": {
+        "classification": "disputed",
+        "notes": "Multiple governments claim or administer different features. Claimant domestic administrative assignments are mutually incompatible and cannot be combined into one non-overlapping neutral ADM hierarchy.",
+        "sources": [
+          {
+            "source_id": "un-riaa-south-china-sea-award",
+            "source_authority": "United Nations — Reports of International Arbitral Awards",
+            "source_url": "https://legal.un.org/riaa/volumes/riaa_XXXIII.pdf"
+          },
+          {
+            "source_id": "unclos-declarations-spratly",
+            "source_authority": "United Nations Treaty Collection",
+            "source_url": "https://treaties.un.org/Pages/ViewDetailsIII.aspx?chapter=21&mtdsg_no=XXI-6&src=IND"
+          },
+          {
+            "source_id": "prc-south-china-sea-statement-2016",
+            "source_authority": "Ministry of Foreign Affairs of the People's Republic of China",
+            "source_url": "https://www.mfa.gov.cn/web/gjhdq_676201/gj_676203/yz_676205/1206_676452/1207_676464/201607/t20160712_7977739.shtml"
+          }
+        ]
+      },
+      "official_hierarchy": {
+        "adm1": { "exists": false, "notes": "No claim-neutral ADM1." },
+        "adm2": { "exists": false, "notes": "No claim-neutral ADM2." }
+      },
+      "geometry_source": {
+        "ingestible": false,
+        "reason": "Available polygons represent physical reefs, land reclamation, maritime entitlements, or one claimant's domestic administration. None is a neutral official ADM2 boundary set."
+      },
+      "chinese_name_source": {
+        "display_name_zh": "南沙群岛",
+        "status": "verified_name_claim_neutrality_required",
+        "source_authority": "Ministry of Foreign Affairs of the People's Republic of China",
+        "source_url": "https://www.mfa.gov.cn/wjb_673085/zzjg_673183/bjhysws_674671/bhflfg/dtdmxgfl/202303/P020230313585088793886.pdf"
+      },
+      "notes": [
+        "Do not treat each reef as a city or synthesize claimant boundaries.",
+        "Retain only neutral disputed-feature cartography until a product policy for competing claims is approved."
+      ]
+    },
+    {
+      "country_key": "westernsahara",
+      "display_name_zh": "西撒哈拉",
+      "display_name_en": "Western Sahara",
+      "status": "disputed_no_neutral_hierarchy",
+      "political_status": {
+        "classification": "disputed",
+        "notes": "Western Sahara remains on the United Nations list of Non-Self-Governing Territories and its final status is unresolved. Moroccan and Sahrawi administrative schemes must not be fused into a neutral ADM hierarchy.",
+        "sources": [
+          {
+            "source_id": "un-decolonization-western-sahara",
+            "source_authority": "United Nations — Decolonization",
+            "source_url": "https://www.un.org/dppa/decolonization/en/nsgt/western-sahara"
+          },
+          {
+            "source_id": "un-minurso",
+            "source_authority": "United Nations Peacekeeping",
+            "source_url": "https://peacekeeping.un.org/zh/mission/minurso"
+          }
+        ]
+      },
+      "official_hierarchy": {
+        "adm1": { "exists": false, "notes": "No United Nations-neutral ADM1 scheme." },
+        "adm2": { "exists": false, "notes": "No United Nations-neutral ADM2 scheme." }
+      },
+      "geometry_source": {
+        "ingestible": false,
+        "reason": "UN mission sectors, the berm, Moroccan provinces, and Sahrawi wilayas are different concepts. None may be presented as a single neutral country→province→city hierarchy."
+      },
+      "chinese_name_source": {
+        "display_name_zh": "西撒哈拉",
+        "status": "verified",
+        "source_authority": "United Nations — Decolonization, Chinese edition",
+        "source_url": "https://www.un.org/dppa/decolonization/zh/nsgt/western-sahara"
+      },
+      "notes": [
+        "Remove any exact self-duplicate fake ADM1/ADM2 outlines.",
+        "A future dispute-aware layer may separately depict the berm and areas of control, but those are not administrative subdivisions."
+      ]
+    },
+    {
+      "country_key": "siachenglacier",
+      "display_name_zh": "锡亚琴冰川",
+      "display_name_en": "Siachen Glacier",
+      "status": "no_official_adm2",
+      "political_status": {
+        "classification": "disputed",
+        "notes": "India and Pakistan differ on the continuation of the line north of NJ9842. Official material from both governments records the issue as unresolved; a glacier is not an administrative unit.",
+        "sources": [
+          {
+            "source_id": "india-mea-siachen-history",
+            "source_authority": "Ministry of External Affairs, Government of India",
+            "source_url": "https://www.mea.gov.in/Uploads/PublicationDocs/23460_IWM_Book__11-06-2014_.pdf"
+          },
+          {
+            "source_id": "pakistan-mofa-siachen",
+            "source_authority": "Ministry of Foreign Affairs, Government of Pakistan",
+            "source_url": "https://mofa.gov.pk/storage/files/1/65451083a984b.pdf"
+          },
+          {
+            "source_id": "un-kashmir-ceasefire-map",
+            "source_authority": "United Nations Commission for India and Pakistan",
+            "source_url": "https://digitallibrary.un.org/record/486070?ln=en"
+          }
+        ]
+      },
+      "official_hierarchy": {
+        "adm1": { "exists": false },
+        "adm2": { "exists": false }
+      },
+      "geometry_source": {
+        "ingestible": false,
+        "reason": "The current feature is a physical glacier and the surrounding military line is disputed/undemarcated. Neither should be duplicated as ADM1 and ADM2."
+      },
+      "chinese_name_source": {
+        "display_name_zh": "锡亚琴冰川",
+        "status": "verified",
+        "source_authority": "United Nations Digital Library — Chinese official document",
+        "source_url": "https://digitallibrary.un.org/record/612873/files/A_61_981--S_2007_656-ZH.pdf"
+      },
+      "notes": [
+        "Use a disputed physical-feature label only.",
+        "Do not convert the Actual Ground Position Line or claimant cartography into municipal borders."
+      ]
+    },
+    {
+      "country_key": "bajonuevobankpetrelis",
+      "display_name_zh": "巴霍努埃沃浅滩",
+      "display_name_en": "Bajo Nuevo Bank",
+      "status": "no_official_adm2",
+      "political_status": {
+        "classification": "neutral_record_of_adjudicated_status",
+        "notes": "The International Court of Justice concluded in 2012 that Colombia has sovereignty over the islands at Bajo Nuevo. Colombian law includes the cays within the Department Archipelago of San Andrés, Providencia and Santa Catalina. The project must record this result without manufacturing a separate country hierarchy.",
+        "sources": [
+          {
+            "source_id": "icj-nicaragua-colombia-2012",
+            "source_authority": "International Court of Justice",
+            "source_url": "https://www.icj-cij.org/case/124"
+          },
+          {
+            "source_id": "colombia-decree-1946-2013",
+            "source_authority": "Ministry of Foreign Affairs of Colombia",
+            "source_url": "https://cancilleria.gov.co/normograma/compilacion/docs/decreto_1946_2013.htm"
+          }
+        ]
+      },
+      "official_hierarchy": {
+        "adm1": { "exists": false, "notes": "The bank is not a standalone ADM1; it belongs to Colombia's Archipelago Department." },
+        "adm2": { "exists": false }
+      },
+      "geometry_source": {
+        "ingestible": false,
+        "reason": "The cay/bank does not have its own municipal subdivisions. Attach it to Colombia/Archipelago Department in a future normalization rather than adding duplicate boundaries."
+      },
+      "chinese_name_source": {
+        "display_name_zh": "巴霍努埃沃浅滩",
+        "status": "project_label_pending_authoritative_chinese_source",
+        "source_authority": "Existing project label",
+        "source_url": null
+      },
+      "notes": [
+        "No GeoJSON supplement is appropriate.",
+        "Remove fake self-repeated ADM levels if the integration task later normalizes the parent country."
+      ]
+    },
+    {
+      "country_key": "brazilianisland",
+      "display_name_zh": "巴西岛",
+      "display_name_en": "Brazilian Island",
+      "status": "no_official_adm2",
+      "political_status": {
+        "classification": "disputed",
+        "notes": "Brazilian diplomatic-history material records the island at the mouth of the Quaraí/Uruguay rivers as remaining in question between Brazil and Uruguay. It is an island boundary issue, not an administrative country.",
+        "sources": [
+          {
+            "source_id": "brazil-funag-latin-american-borders",
+            "source_authority": "Fundação Alexandre de Gusmão, Ministry of Foreign Affairs of Brazil",
+            "source_url": "https://funag.gov.br/biblioteca-nova/produto/loc_pdf/251/1/formacao_das_fronteiras_latino-americanas"
+          },
+          {
+            "source_id": "uruguay-river-boundary-digest",
+            "source_authority": "Government of Uruguay — Ministry of Environment",
+            "source_url": "https://www.gub.uy/ministerio-ambiente/sites/ministerio-ambiente/files/2020-10/Adjunto%20III_%20DIGESTO%20SOBRE%20EL%20USO%20Y%20APROVECHAMIENTO%20DEL%20RIO%20URUGUAY%20APROBADO%20POR%20RESOLUCI%C3%93N%20CARU%20N%C2%B0%2028-19%2C%20DE%205-12-2019_0.pdf"
+          }
+        ]
+      },
+      "official_hierarchy": {
+        "adm1": { "exists": false },
+        "adm2": { "exists": false }
+      },
+      "geometry_source": {
+        "ingestible": false,
+        "reason": "No independent administration or ADM2 exists. The river/island boundary question belongs in a dispute-aware international-boundary layer."
+      },
+      "chinese_name_source": {
+        "display_name_zh": "巴西岛",
+        "status": "project_label_pending_authoritative_chinese_source",
+        "source_authority": "Existing project label",
+        "source_url": null
+      },
+      "notes": [
+        "Do not confuse this geographic name with Brazil as a State.",
+        "Do not create an ADM1 or city polygon."
+      ]
+    },
+    {
+      "country_key": "clippertonisland",
+      "display_name_zh": "克利珀顿岛",
+      "display_name_en": "Clipperton Island",
+      "status": "no_official_adm2",
+      "political_status": {
+        "classification": "non_sovereign_special_territory",
+        "notes": "French law places La Passion–Clipperton under the direct authority of the Government and administration of the minister responsible for overseas territories. It is neither an overseas department/region nor an overseas collectivity or special-status collectivity.",
+        "sources": [
+          {
+            "source_id": "france-overseas-clipperton",
+            "source_authority": "French Ministry for Overseas Territories",
+            "source_url": "https://www.outre-mer.gouv.fr/territoires/ile-de-la-passion-clipperton"
+          },
+          {
+            "source_id": "france-clipperton-decree-2023",
+            "source_authority": "Légifrance",
+            "source_url": "https://www.legifrance.gouv.fr/jorf/id/JORFTEXT000048567048"
+          }
+        ]
+      },
+      "official_hierarchy": {
+        "adm1": { "exists": false },
+        "adm2": { "exists": false }
+      },
+      "geometry_source": {
+        "ingestible": false,
+        "reason": "The directly administered island has no province or municipality hierarchy. Its shoreline is not an ADM2 boundary."
+      },
+      "chinese_name_source": {
+        "display_name_zh": "克利珀顿岛",
+        "status": "verified",
+        "source_authority": "Unicode Consortium — CLDR 48",
+        "source_url": "https://github.com/unicode-org/cldr/blob/release-48/common/main/zh.xml",
+        "source_key": "territory[@type='CP']",
+        "source_license": "Unicode-3.0"
+      },
+      "notes": [
+        "Mark ADM2 as not applicable.",
+        "Remove fake duplicated island-as-province and island-as-city boundaries."
+      ]
+    },
+    {
+      "country_key": "southernpatagonianicefield",
+      "display_name_zh": "南巴塔哥尼亚冰原",
+      "display_name_en": "Southern Patagonian Ice Field",
+      "status": "no_official_adm2",
+      "political_status": {
+        "classification": "transboundary_partly_pending_demarcation",
+        "notes": "Argentina and Chile signed the 1998 agreement defining the boundary course from Mount Fitz Roy to Cerro Daudet and assigned detailed 1:50,000 survey and demarcation work to their joint boundary commission. The ice field itself is a transboundary physical feature, not a country.",
+        "sources": [
+          {
+            "source_id": "argentina-law-25110",
+            "source_authority": "Government of Argentina",
+            "source_url": "https://www.argentina.gob.ar/normativa/nacional/ley-25110-58471/texto"
+          },
+          {
+            "source_id": "argentina-environment-boundary-review-2023",
+            "source_authority": "Government of Argentina — Ministry of Environment and Sustainable Development",
+            "source_url": "https://www.argentina.gob.ar/normativa/nacional/resoluci%C3%B3n-477-2023-395707/texto"
+          }
+        ]
+      },
+      "official_hierarchy": {
+        "adm1": { "exists": false },
+        "adm2": { "exists": false }
+      },
+      "geometry_source": {
+        "ingestible": false,
+        "reason": "The feature crosses the Argentina–Chile frontier and has no independent administration. Joint boundary survey requirements cannot be replaced by a generic ice-field polygon."
+      },
+      "chinese_name_source": {
+        "display_name_zh": "南巴塔哥尼亚冰原",
+        "status": "project_label_pending_authoritative_chinese_source",
+        "source_authority": "Existing project label",
+        "source_url": null
+      },
+      "notes": [
+        "Keep Argentine and Chilean existing ADM1/ADM2 untouched.",
+        "If the international boundary is later updated, use the bilateral commission output, not the physical ice outline."
+      ]
+    },
+    {
+      "country_key": "serranillabank",
+      "display_name_zh": "塞拉尼利亚浅滩",
+      "display_name_en": "Serranilla Bank",
+      "status": "no_official_adm2",
+      "political_status": {
+        "classification": "neutral_record_of_adjudicated_status",
+        "notes": "The International Court of Justice concluded in 2012 that Colombia has sovereignty over the islands at Serranilla. Colombian law includes the cays within the Department Archipelago of San Andrés, Providencia and Santa Catalina. This record does not create a separate country hierarchy.",
+        "sources": [
+          {
+            "source_id": "icj-nicaragua-colombia-2012",
+            "source_authority": "International Court of Justice",
+            "source_url": "https://www.icj-cij.org/case/124"
+          },
+          {
+            "source_id": "colombia-decree-1946-2013",
+            "source_authority": "Ministry of Foreign Affairs of Colombia",
+            "source_url": "https://cancilleria.gov.co/normograma/compilacion/docs/decreto_1946_2013.htm"
+          }
+        ]
+      },
+      "official_hierarchy": {
+        "adm1": { "exists": false, "notes": "The bank is not a standalone ADM1; it belongs to Colombia's Archipelago Department." },
+        "adm2": { "exists": false }
+      },
+      "geometry_source": {
+        "ingestible": false,
+        "reason": "The cay/bank does not have its own municipal subdivisions. Attach it to Colombia/Archipelago Department in a future normalization rather than adding duplicate boundaries."
+      },
+      "chinese_name_source": {
+        "display_name_zh": "塞拉尼利亚浅滩",
+        "status": "project_label_pending_authoritative_chinese_source",
+        "source_authority": "Existing project label",
+        "source_url": null
+      },
+      "notes": [
+        "No GeoJSON supplement is appropriate.",
+        "Remove fake self-repeated ADM levels if the integration task later normalizes the parent country."
+      ]
+    }
+  ]
+}

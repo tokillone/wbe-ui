@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
 
-import BrandMark from '../components/BrandMark.vue'
+import PlatformHeader from '../components/PlatformHeader.vue'
 import {
   bulkUpdateUserPermissions,
   fetchUsers,
@@ -876,31 +876,15 @@ async function handleLogout() {
 
 <template>
   <main class="entry-shell">
-    <header class="entry-header">
-      <RouterLink class="brand" to="/" aria-label="返回首页">
-        <BrandMark :size="40" />
-        <span>
-          <strong>污水信息因子数据库</strong>
-          <small>Wastewater Biomarker Evidence</small>
-        </span>
-      </RouterLink>
-      <div class="header-title">
-        <strong>数据工作台</strong>
-        <span>/</span>
-        <em>{{ activeHeaderLabel }}</em>
-      </div>
-      <nav class="entry-nav" aria-label="数据录入导航">
-        <RouterLink to="/">首页</RouterLink>
-        <RouterLink to="/map-visualization">地图可视化</RouterLink>
-      </nav>
-      <div class="operator-chip">
-        <span>{{ currentUser?.username }}</span>
-        <strong>{{ currentUser ? roleLabel(currentUser.role) : '未登录' }}</strong>
-      </div>
-      <button class="logout-button" type="button" @click="handleLogout">退出</button>
-    </header>
+    <PlatformHeader
+      active="data"
+      page-title="数据工作台"
+      :page-subtitle="activeHeaderLabel"
+      show-context
+      @logout="handleLogout"
+    />
 
-    <section class="workspace-layout">
+    <section id="main-content" class="workspace-layout" tabindex="-1">
       <aside class="workspace-nav" aria-label="数据工作台模块">
         <button
           v-for="section in workspaceSections"
@@ -1623,7 +1607,7 @@ async function handleLogout() {
 }
 
 .entry-shell {
-  --entry-header-height: 76px;
+  --entry-header-height: 118px;
   min-height: 100vh;
 }
 

@@ -65,19 +65,25 @@ describe('map rendering layer policy', () => {
     expect(source).toContain("setLayerVisibility(['boundaries_country', 'boundaries'], false)")
   })
 
-  it('keeps each business name paired with its bubble and excludes only matching PMTiles names', () => {
+  it('keeps each business name paired with its bubble and excludes colliding PMTiles names', () => {
     expect(source).toContain('A business name and its bubble are one visual unit')
     expect(source).toContain('function applyPreviewBusinessLabelExclusions(')
     expect(source).toContain("['!', ['in', ['get', 'geo_key'], ['literal', excluded]]]")
-    expect(source).toContain('buildPointCollection(activeMapLevel.value).features')
+    expect(source).toContain('buildPointCollection(activeMapLevel.value)')
     expect(source).not.toContain('? displayMapRegionRows(activeMapLevel.value)')
     expect(source).not.toContain(
       'setLayerVisibility([...PREVIEW_LABEL_LAYER_IDS_BY_LEVEL[activeMapLevel.value]], false)',
     )
-    expect(source).not.toContain('viewLayers.labels && activeMapLevel.value === \'admin1\'')
+    expect(source).not.toContain("viewLayers.labels && activeMapLevel.value === 'admin1'")
     expect(source).toContain('source: pointSourceId(level)')
-    expect(source).toContain("'text-allow-overlap': true")
-    expect(source).toContain("'text-ignore-placement': true")
+    const labelLayer = source.slice(
+      source.indexOf('function addPndlLabelLayer('),
+      source.indexOf('function addBubbleImages('),
+    )
+    expect(labelLayer).toContain("'text-allow-overlap': false")
+    expect(labelLayer).toContain("'text-ignore-placement': false")
+    expect(source).toContain('map.queryRenderedFeatures(')
+    expect(source).toContain('runtimeStaticLabelExclusions')
     expect(source).toContain("'text-optional': false")
     expect(source).not.toContain('map-point-labels-')
     expect(source).toContain('Map bubbles omitted because their paired names are missing')
@@ -86,7 +92,7 @@ describe('map rendering layer policy', () => {
   it('keeps real city bubbles and paired labels through the exclusive Z8 upper bound', () => {
     expect(source).toContain('range.maxzoom = PREVIEW_MAP_MAX_ZOOM + 0.01')
     expect(source).toContain('maxzoom: PREVIEW_MAP_MAX_ZOOM + 0.01')
-    expect(source).toContain("if (level === 'city' && zoom >= 7.85) return rows")
+    expect(source).not.toContain("if (level === 'city' && zoom >= 7.85) return rows")
     expect(source).toContain("'text-size': businessLabelTextSizeExpression(level)")
     expect(source).toContain('labelBaseSize: labelBaseSize(level, boundaryArea)')
     expect(source).toContain('labelCountTier: labelCountTier(level, pointCount)')
@@ -95,60 +101,86 @@ describe('map rendering layer policy', () => {
 
   it('registers persistent province, city, and special-admin line layers', () => {
     expect(source).toContain("addGeoSource('china-city-boundary-lines')")
-    expect(source).toContain("addGeoSource('china-active-province-boundary-lines')")
     expect(source).toContain("addGeoSource('china-special-admin-boundary-lines')")
-    expect(source).toContain("'china-active-province-line'")
+    expect(source).not.toContain("'china-active-province-line'")
     expect(source).toContain("'china-city-line'")
     expect(source).toContain("'china-special-admin-line'")
+    expect(source).toContain("activeMapLevel.value !== 'country'")
   })
 
-  it('keeps search result clicks out of the map canvas and does not open details', () => {
-    expect(headerSource).toContain('@mousedown.prevent')
-    expect(headerSource).toContain('@click.stop="emit(\'selectResult\', result)"')
-    expect(source).toContain('@select-result="focusSearchResult"')
-    const focusSource = source.slice(
-      source.indexOf('function focusSearchResult('),
-      source.indexOf('function searchZoomForLevel('),
+  it('keeps GeoJSON parent boundaries visible at city level', () => {
+    const fallbackVisibility = source.slice(
+      source.indexOf("setLayerVisibility(['country-line']"),
+      source.indexOf('applyHierarchyBoundaryWidths()'),
     )
-    expect(focusSource).toContain('setSelectedRegion(feature')
-    expect(focusSource).not.toContain('openFeatureDetail')
-    expect(focusSource).toContain('searchZoomForLevel(result.level, result.geoKey)')
+    expect(fallbackVisibility).toContain(
+      "viewLayers.boundaries && activeMapLevel.value !== 'country'",
+    )
+    const fallbackLayers = source.slice(
+      source.indexOf('function addBoundaryLineLayers()'),
+      source.indexOf('function addLineLayer('),
+    )
+    expect(fallbackLayers).not.toContain('CITY_BOUNDARY_MIN_ZOOM,\n  )')
+    expect(fallbackLayers.indexOf("'china-city-line'")).toBeLessThan(
+      fallbackLayers.indexOf("'china-province-line'"),
+    )
+    expect(fallbackLayers.indexOf("'china-province-line'")).toBeLessThan(
+      fallbackLayers.indexOf("'country-line'"),
+    )
+  })
+
+  it('removes location search UI while retaining the region index for labels and positioning', () => {
+    expect(headerSource).toContain('<PlatformHeader active="map" />')
+    expect(headerSource).not.toContain('location-search')
+    expect(headerSource).not.toContain('searchQuery')
+    expect(headerSource).not.toContain('selectResult')
+    expect(headerSource).not.toContain('show-context')
+    expect(headerSource).not.toContain('page-title')
+    expect(headerSource).not.toContain('context-actions')
+    expect(source).toContain('<MapPageHeader />')
+    expect(source).not.toContain('@select-result')
+    expect(source).not.toContain('isLanguageMenuOpen')
+    expect(source).not.toContain('focusSearchResult')
+    expect(source).toContain('void ensureRegionIndex().then(() => {')
+    expect(source).toContain('Map labels and positioning fall back')
   })
 
   it('keeps Hong Kong and Macao labels visible at city zoom', () => {
     expect(source).toContain("'text-allow-overlap': id === 'china-special-admin-label'")
-    expect(source).toContain('if (SPECIAL_ADMIN_GEO_KEYS.has(geoKey)) return Math.min(7.4')
-    expect(source).toContain("'china|hongkong': ['香港', 'Hong Kong', 'HongKong']")
-    expect(source).toContain("'china|aomen': ['澳门', 'Macao', 'Macau', 'Aomen']")
+    expect(source).toContain("entry.geo_key === 'china|hongkong'")
+    expect(source).toContain("entry.geo_key === 'china|aomen'")
+    expect(source).toContain("return 'Hong Kong'")
+    expect(source).toContain("return 'Macao'")
   })
 
-  it('keeps the original outline-only GeoJSON selection style', () => {
+  it('uses fill-only hover and selection in both vector and GeoJSON modes', () => {
     const selectionOpacity = source.slice(
       source.indexOf('function selectedRegionFillOpacityExpression()'),
-      source.indexOf('function regionDataLineOpacityExpression()'),
+      source.indexOf('function regionDataFillColorExpression()'),
     )
-    expect(selectionOpacity).toContain('return 0')
-  })
-
-  it('draws hover and selection outlines from the display-only composite layer', () => {
+    expect(selectionOpacity).toContain('return 0.28')
+    expect(source).toContain('fillOpacity: 0.16')
+    expect(source).toContain('// Selected is added after hover so it always has visual priority.')
     expect(source).toContain(
-      "const PREVIEW_REGION_OUTLINE_SOURCE_LAYER = 'preview_region_display_outlines'",
+      'const REGION_VECTOR_SOURCE_LAYER = PREVIEW_REGION_POLYGON_SOURCE_LAYER',
     )
-    expect(source).toContain("id: 'preview-region-hover-line'")
-    expect(source).toContain("id: 'preview-region-selected-line'")
-    expect(source).toContain("id: 'preview-region-selected-halo'")
-    expect(source).toContain("source: 'protomaps'")
-    expect(source).toContain("[PREVIEW_REGION_OUTLINE_SOURCE_LAYER]: 'region_id'")
-    expect(source).toContain("['feature-state', 'selected']")
-    expect(source).toContain("['feature-state', 'hover']")
-    expect(source).toContain('updatePreviewRegionOutlineLevelFilters()')
-    expect(source).not.toContain('setPreviewRegionOutlineFilter(')
-    expect(source).toContain("basemapMode === 'geojson' && viewLayers.boundaries")
+    expect(source).not.toContain('preview_region_outlines')
+    expect(source).not.toContain('preview_region_display_outlines')
+    for (const layerId of [
+      'region-data-line',
+      'region-hover-line',
+      'region-selected-line',
+      'region-selected-halo',
+      'preview-region-hover-line',
+      'preview-region-selected-line',
+    ]) {
+      expect(source).not.toContain(`'${layerId}'`)
+    }
   })
 
   it('uses one animation-frame hover query and continuous guarded world copies', () => {
     expect(source).toContain('renderWorldCopies: true')
-    expect(source).toContain('map.setRenderWorldCopies(flat)')
+    expect(source).toContain('map.setRenderWorldCopies(true)')
     expect(source).toContain('wrappedWorldMinZoom(width, FLAT_MIN_ZOOM)')
     expect(source).toContain('nearestWorldCopyCoordinate(targetCenter, map.getCenter().lng)')
     expect(source).toContain('function unifiedInteractiveFeaturesAtPoint(')
@@ -163,6 +195,11 @@ describe('map rendering layer policy', () => {
   it('uses composite polygon tiles and chunked feature state for business fills', () => {
     expect(source).toContain("const REGION_VECTOR_SOURCE_ID = 'protomaps'")
     expect(source).toContain('PREVIEW_REGION_POLYGON_SOURCE_LAYER')
+    expect(source).toContain('PREVIEW_BOUNDARY_LAYER_IDS.find((layerId) => map?.getLayer(layerId))')
+    expect(source).not.toContain(
+      'layers.find((item) => /^roads_|^pois|^places|^transit|^transport/i.test(item.id))',
+    )
+    expect(source).toContain('return hasPndl || statHasCoverage(stat) ? 1 : 0')
     expect(source).toContain('scheduleProgressiveFeatureState(entries')
     expect(source).toContain('batchSize: 32')
     expect(source).toContain('budgetMs: 4')
@@ -170,8 +207,14 @@ describe('map rendering layer policy', () => {
   })
 
   it('declutters each bubble, count, and name as one screen-space unit', () => {
-    expect(source).toContain('declutterScreenSpaceCandidates(')
+    expect(source).toContain('declutterScreenSpacePlacements(')
     expect(source).toContain('progressiveDeclutterGap(level, zoom)')
+    expect(source).toContain('businessPointPlacementOptions(')
+    expect(source).toContain('mapOverlayReservedBounds()')
+    expect(source).toContain("placement: 'bottom'")
+    expect(source).toContain("placement: 'top'")
+    expect(source).toContain("placement: 'right'")
+    expect(source).toContain("placement: 'left'")
     expect(source).toContain('approximateBusinessLabelWidth(')
     expect(source).toContain('businessLabelSizeAtZoom(')
     expect(source).toContain('forceVisible: Boolean(')

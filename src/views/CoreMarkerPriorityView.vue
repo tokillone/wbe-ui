@@ -2,17 +2,12 @@
 import { pinyin } from 'pinyin-pro'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
-import BrandMark from '../components/BrandMark.vue'
+import PlatformHeader from '../components/PlatformHeader.vue'
 
 const isPrototypeReady = ref(false)
 const prototypeError = ref('')
 const reloadKey = ref(0)
 const prototypeFrame = ref<HTMLIFrameElement | null>(null)
-const headerVisible = ref(true)
-const drawerOpen = ref(false)
-let lastHeaderScrollTop = 0
-let headerScrollTravel = 0
-let headerScrollDirection = 0
 type PinyinAliases = { full: string; initials: string }
 type PriorityWindow = Window & { __wbePinyin?: (value: string) => PinyinAliases }
 const priorityWindow = window as PriorityWindow
@@ -22,53 +17,18 @@ const publicBase = import.meta.env.BASE_URL.endsWith('/')
 const prototypeUrl = computed(
   () => `${publicBase}core-marker-priority/index.html?reload=${reloadKey.value}`,
 )
-const priorityPageStyle = computed<Record<string, string>>(() => ({
-  '--priority-header-opacity': drawerOpen.value || headerVisible.value ? '1' : '0',
-}))
-
-function updateHeaderVisibility(scrollTop: number) {
-  if (scrollTop <= 8) {
-    headerVisible.value = true
-    lastHeaderScrollTop = scrollTop
-    headerScrollTravel = 0
-    headerScrollDirection = 0
-    return
-  }
-  const delta = scrollTop - lastHeaderScrollTop
-  lastHeaderScrollTop = scrollTop
-  if (Math.abs(delta) < 1) return
-  const direction = delta > 0 ? 1 : -1
-  if (direction !== headerScrollDirection) {
-    headerScrollDirection = direction
-    headerScrollTravel = 0
-  }
-  headerScrollTravel += Math.abs(delta)
-  if (headerScrollTravel < 12) return
-  headerVisible.value = direction < 0
-  headerScrollTravel = 0
-}
-
 function handlePrototypeLoad() {
   isPrototypeReady.value = true
 }
 
 function handlePrototypeError() {
   isPrototypeReady.value = false
-  headerVisible.value = true
-  drawerOpen.value = false
-  headerScrollTravel = 0
-  headerScrollDirection = 0
   prototypeError.value = '分析页面加载失败，请检查网络后重试。'
 }
 
 function retryPrototype() {
   prototypeError.value = ''
   isPrototypeReady.value = false
-  headerVisible.value = true
-  drawerOpen.value = false
-  lastHeaderScrollTop = 0
-  headerScrollTravel = 0
-  headerScrollDirection = 0
   reloadKey.value += 1
 }
 
@@ -85,11 +45,6 @@ function handlePrototypeMessage(event: MessageEvent) {
     prototypeError.value = ''
   } else if (event.data.type === 'core-marker-priority:error') {
     prototypeError.value = '核心标记物数据加载失败，请稍后重试。'
-  } else if (event.data.type === 'core-marker-priority:scroll') {
-    const scrollTop = Number(event.data.scrollTop)
-    if (Number.isFinite(scrollTop)) updateHeaderVisibility(Math.max(0, scrollTop))
-  } else if (event.data.type === 'core-marker-priority:drawer') {
-    drawerOpen.value = event.data.open === true
   }
 }
 
@@ -97,7 +52,9 @@ function createPinyinAliases(value: string): PinyinAliases {
   const options = { toneType: 'none', type: 'array' } as const
   return {
     full: pinyin(value, options).join('').toLowerCase(),
-    initials: pinyin(value, { ...options, pattern: 'first' }).join('').toLowerCase(),
+    initials: pinyin(value, { ...options, pattern: 'first' })
+      .join('')
+      .toLowerCase(),
   }
 }
 
@@ -112,35 +69,15 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="priority-page" :style="priorityPageStyle">
-    <header
-      class="platform-header"
-      :class="{ 'is-hidden': !(drawerOpen || headerVisible) }"
+  <main class="priority-page">
+    <PlatformHeader active="priority" />
+
+    <section
+      id="main-content"
+      class="prototype-shell"
+      aria-label="标记物优先级评估分析工作区"
+      tabindex="-1"
     >
-      <RouterLink class="brand" to="/" aria-label="返回污水信息因子数据库首页">
-        <BrandMark :size="44" />
-        <span class="brand-copy">
-          <strong>污水信息因子数据库</strong>
-          <small>Wastewater Biomarker Evidence</small>
-        </span>
-      </RouterLink>
-
-      <div class="module-heading">
-        <strong>核心标记物优先级识别</strong>
-        <small>按照分类逐级筛选，并查看候选标记物排名</small>
-      </div>
-
-      <nav class="module-nav" aria-label="模块导航">
-        <RouterLink to="/map-visualization">空间分布</RouterLink>
-        <RouterLink to="/icd11-sankey">ICD11 桑基图</RouterLink>
-        <RouterLink class="home-link" to="/" aria-label="返回首页">
-          <span aria-hidden="true">←</span>
-          返回首页
-        </RouterLink>
-      </nav>
-    </header>
-
-    <section class="prototype-shell" aria-label="核心标记物优先级分析工作区">
       <div v-if="!isPrototypeReady && !prototypeError" class="loading-state" role="status">
         <span></span>
         <strong>正在载入优先级分析数据</strong>
@@ -156,7 +93,7 @@ onBeforeUnmount(() => {
         class="prototype-frame"
         :class="{ ready: isPrototypeReady }"
         :src="prototypeUrl"
-        title="核心标记物优先级识别交互分析"
+        title="标记物优先级评估交互分析"
         @load="handlePrototypeLoad"
         @error="handlePrototypeError"
       ></iframe>
@@ -187,6 +124,8 @@ onBeforeUnmount(() => {
   position: relative;
   height: 100vh;
   height: 100dvh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   background: #eef3f6;
 }
@@ -377,7 +316,10 @@ onBeforeUnmount(() => {
   font-weight: 800;
   text-decoration: none;
   white-space: nowrap;
-  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease,
+    transform 0.18s ease;
 }
 
 .module-nav a:hover,
@@ -396,7 +338,7 @@ onBeforeUnmount(() => {
 
 .prototype-shell {
   position: relative;
-  height: 100%;
+  height: auto;
   min-height: 0;
   overflow: hidden;
   background: #f3f5f7;
@@ -506,7 +448,6 @@ onBeforeUnmount(() => {
     min-height: 36px;
     padding: 0 10px;
   }
-
 }
 
 @media (max-width: 430px) {

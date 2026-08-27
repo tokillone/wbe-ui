@@ -5,7 +5,11 @@ import { init, use, type ECharts } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
-import BrandMark from '../components/BrandMark.vue'
+import PlatformHeader from '../components/PlatformHeader.vue'
+import SankeyMobileDrawer from '../components/sankey/SankeyMobileDrawer.vue'
+import SankeyNodeSearch from '../components/sankey/SankeyNodeSearch.vue'
+import SankeySelect, { type SankeySelectOption } from '../components/sankey/SankeySelect.vue'
+import SankeyStageNavigator from '../components/sankey/SankeyStageNavigator.vue'
 import { ApiTimeoutError } from '../services/api'
 import { getUserErrorMessage } from '../services/errors'
 import { fetchIcd11SankeyCategories, fetchIcd11SankeyGraph } from '../services/icd11Sankey'
@@ -23,6 +27,7 @@ import {
   resolveUpstreamPathIds,
   sankeyHoverTargetKey,
   sortSankeyPaths,
+  summarizeSankeyOverview,
   upstreamContext as summarizeUpstreamContext,
   upstreamLayerText,
   type RelationPieSection as BaseRelationPieSection,
@@ -32,10 +37,19 @@ import {
 } from '../utils/icd11SankeyDisplay'
 import {
   buildDynamicLevel2ColorMap,
+  relationPieColor,
   SANKEY_LEVEL2_FALLBACK_COLOR,
   sankeyLevel2ColorKey,
 } from '../utils/icd11SankeyColors'
 import { icd11SankeyGraphIndex } from '../utils/icd11SankeyGraphIndex'
+import {
+  ensureSearchTargetVisible,
+  pathsForSearchNode,
+  representativeSearchPath,
+  resolveSearchLevel1,
+  searchSankeyNodes,
+  type SankeyNodeSearchResult,
+} from '../utils/icd11SankeySearch'
 
 type DetailState =
   | { kind: 'category' }
@@ -136,6 +150,7 @@ interface DisplayPathSummary {
   weightCoverage: number
   linkedLevel1Count: number
   modeLabel: string
+  injectedSearchPath: boolean
 }
 
 type RelationPieSourceItem = RelationShareItem & {
@@ -165,14 +180,19 @@ const KIND_LABELS: Record<Icd11SankeyNode['kind'], string> = {
   drug: '药物',
   biomarker: '生物标记物',
 }
-const DISPLAY_MODE_OPTIONS: { value: Icd11SankeyDisplayMode; label: string }[] = [
-  { value: 'all', label: '全量' },
-  { value: 'smart', label: '智能精简' },
-  { value: 'top20', label: 'Top 20' },
-  { value: 'top50', label: 'Top 50' },
-  { value: 'top100', label: 'Top 100' },
+const DISPLAY_MODE_OPTIONS: (SankeySelectOption & { value: Icd11SankeyDisplayMode })[] = [
+  { value: 'smart', label: '智能精简', description: '桌面最多 50 条，手机最多 20 条' },
+  { value: 'top20', label: 'Top 20', description: '固定显示权重最高的 20 条' },
+  { value: 'top50', label: 'Top 50', description: '固定显示权重最高的 50 条' },
+  { value: 'top100', label: 'Top 100', description: '适合大屏浏览', advanced: true },
+  {
+    value: 'all',
+    label: '全量',
+    description: '路径较多时可能影响可读性',
+    advanced: true,
+  },
 ]
-const MIN_WEIGHT_OPTIONS = [
+const MIN_WEIGHT_OPTIONS: SankeySelectOption[] = [
   { value: 0, label: '全部' },
   { value: 2, label: '≥2' },
   { value: 3, label: '≥3' },
@@ -184,28 +204,19 @@ const SERIES_RIGHT = 156
 const SERIES_TOP = 10
 const SERIES_BOTTOM = 44
 const MOBILE_CHART_MIN_WIDTH = 900
+const MOBILE_BREAKPOINT = 720
+const MOBILE_STAGE_TITLES = ['L1', 'L2', 'L3', '药物', '标记物']
+const MOBILE_SWIPE_HINT_KEY = 'icd11-sankey-swipe-hint-v2'
 const LONG_CHART_HEIGHT_RATIO = 1.35
 const LONG_CHART_MIN_NODES = 60
 const UPSTREAM_CONTEXT_ENTRY_MIN = 780
 const UPSTREAM_CONTEXT_ENTRY_VIEWPORT_RATIO = 1.05
 const HEADER_HEIGHT = 70
-const HEADER_SCROLL_THRESHOLD = 12
 const HOVER_INTENT_DELAY = 85
 const HOVER_RESTORE_DELAY = 110
 const SANKEY_NODE_COLOR = '#4B78A8'
 const SANKEY_NODE_HOVER_COLOR = '#356A9C'
 const SANKEY_NODE_LOCKED_COLOR = '#245F8E'
-const PIE_COLORS = [
-  '#4C78A8',
-  '#66A182',
-  '#8A7EB5',
-  '#5CA7A9',
-  '#B79A4A',
-  '#7E8A98',
-  '#B67A9C',
-  '#E39A65',
-]
-const PIE_OTHER_COLOR = '#A5ADB1'
 const MAX_RELATION_PIE_ITEMS = 8
 const TOP_RELATION_PIE_ITEMS = 7
 const MAX_FILTER_CACHE_ENTRIES = 24
@@ -228,9 +239,9 @@ const isLoading = ref(false)
 const loadState = ref<LoadState>('idle')
 const errorMessage = ref('')
 const searchQuery = ref('')
-const displayMode = ref<Icd11SankeyDisplayMode>('all')
+const displayMode = ref<Icd11SankeyDisplayMode>('smart')
 const selectedLevel1 = ref('')
-const level1Scope = ref<Level1Scope>('linked')
+const level1Scope = ref<Level1Scope>('selected')
 const minWeight = ref(0)
 const chartHeight = ref(760)
 const viewportHeight = ref(720)
@@ -244,9 +255,17 @@ const lockedEdge = ref<Icd11SankeyLink | null>(null)
 const lockedPathId = ref('')
 const currentFocus = ref('')
 const detail = ref<DetailState>({ kind: 'category' })
-const headerVisible = ref(true)
 const pieModalOpen = ref(false)
 const activePieId = ref('')
+const overviewScope = ref<'current' | 'global'>('current')
+const isMobileViewport = ref(
+  typeof window !== 'undefined' ? window.innerWidth <= MOBILE_BREAKPOINT : false,
+)
+const mobileDrawerOpen = ref(false)
+const activeMobileStage = ref(0)
+const showMobileSwipeHint = ref(false)
+const selectedSearchNodeId = ref('')
+const forcedSearchPathId = ref('')
 
 let chart: ECharts | null = null
 let pieCharts = new Map<string, ECharts>()
@@ -257,16 +276,17 @@ let graphController: AbortController | null = null
 let hoverPreviewTimer: number | null = null
 let hoverRestoreTimer: number | null = null
 let activePreviewKey = ''
-let lastHeaderScrollTop = 0
-let headerScrollTravel = 0
-let headerScrollDirection = 0
+let swipeHintTimer: number | null = null
+let searchDrawerTimer: number | null = null
+let searchCommitInProgress = false
+let searchLevel1ChangeInProgress = false
 const displaySummaryCache = new WeakMap<Icd11SankeyGraph, Map<string, DisplayPathSummary>>()
 const filteredGraphCache = new WeakMap<Icd11SankeyGraph, Map<string, Icd11SankeyGraph>>()
 const chartGraphCache = new WeakMap<Icd11SankeyGraph, ChartGraph>()
 const highlightGraphCache = new WeakMap<Icd11SankeyGraph, Map<string, ChartGraph>>()
 
 const statsSummaryItems = computed(() => {
-  const stats = graph.value?.stats
+  const stats = categoryStats.value
   if (!stats) return []
   return [
     { label: '总权重', value: formatNumber(stats.totalWeight) },
@@ -293,14 +313,42 @@ const shownDetailPaths = computed(() => {
   if (detail.value.kind === 'category') return []
   return detail.value.paths.slice(0, detail.value.limit)
 })
-const categoryStats = computed(() => graph.value?.stats ?? null)
+const selectedLevel1Paths = computed(() =>
+  graph.value?.paths.filter((path) => path.level1 === selectedLevel1.value) ?? [],
+)
+const currentLevel1Stats = computed(() =>
+  selectedLevel1Paths.value.length ? summarizeSankeyOverview(selectedLevel1Paths.value) : null,
+)
+const globalOverviewStats = computed(() => {
+  if (!graph.value) return null
+  return {
+    ...graph.value.stats,
+    topLevel2: summarizeSankeyOverview(graph.value.paths).topLevel2,
+  }
+})
+const categoryStats = computed(() =>
+  overviewScope.value === 'current' ? currentLevel1Stats.value : globalOverviewStats.value,
+)
+const overviewTitle = computed(() =>
+  overviewScope.value === 'current'
+    ? `${selectedLevel1.value || '当前分类'}概览`
+    : '全部目标类别概览',
+)
+const overviewFirstRanking = computed(() =>
+  overviewScope.value === 'current'
+    ? {
+        title: 'Top ICD11_Level2',
+        items: currentLevel1Stats.value?.topLevel2 ?? [],
+      }
+    : {
+        title: 'Top ICD11_Level1',
+        items: globalOverviewStats.value?.topLevel1 ?? [],
+      },
+)
 const hasRenderableGraph = computed(() => Boolean(graph.value?.paths.length))
 const selectedCategoryLabel = computed(
   () => graph.value?.category || currentCategory.value || 'ICD11 桑基图',
 )
-const headerStyle = computed(() => ({
-  '--header-opacity': headerVisible.value ? '1' : '0',
-}))
 const chartPanelStyle = computed(() => ({
   '--series-left': `${SERIES_LEFT}px`,
   '--series-right': `${SERIES_RIGHT}px`,
@@ -319,6 +367,17 @@ const level1Options = computed(() => {
     (a, b) => (weights.get(b) ?? 0) - (weights.get(a) ?? 0) || a.localeCompare(b, 'zh-Hans-CN'),
   )
 })
+const level1SelectOptions = computed<SankeySelectOption[]>(() =>
+  level1Options.value.map((level1) => ({ value: level1, label: level1 })),
+)
+const mobileDrawerTitle = computed(() => {
+  if (detail.value.kind === 'category') return overviewTitle.value
+  return detail.value.title
+})
+const smartPathLimit = computed(() => (isMobileViewport.value ? 20 : 50))
+const searchResults = computed(() =>
+  graph.value ? searchSankeyNodes(graph.value, searchQuery.value) : [],
+)
 const displaySummary = computed(() => (graph.value ? summarizeDisplayPaths(graph.value) : null))
 const displaySummaryText = computed(() => {
   const summary = displaySummary.value
@@ -329,8 +388,9 @@ const displaySummaryText = computed(() => {
       : `展示 ${summary.shownPathCount}/${summary.candidatePathCount} 条候选路径，总计 ${summary.totalPathCount} 条`
   const linkedText =
     summary.linkedLevel1Count > 0 ? ` · 关联 ${summary.linkedLevel1Count} 个其他 Level1` : ''
+  const searchText = summary.injectedSearchPath ? ' · 含 1 条搜索定位路径' : ''
   const scopeText = level1Scope.value === 'linked' ? '含关联' : '仅当前'
-  return `${baseText} · 权重覆盖 ${formatPercent(summary.weightCoverage)}${linkedText} · ${scopeText} · ${summary.modeLabel}`
+  return `${baseText} · 权重覆盖 ${formatPercent(summary.weightCoverage)}${linkedText}${searchText} · ${scopeText} · ${summary.modeLabel}`
 })
 const relationPieSections = computed<RelationPieSection[]>(() => {
   if (detail.value.kind !== 'node') return []
@@ -405,9 +465,34 @@ const upstreamContextRows = computed(() => {
   ]
 })
 
-watch([searchQuery, displayMode, selectedLevel1, level1Scope, minWeight], () => {
-  if (!graph.value) return
+watch(selectedLevel1, (value, previous) => {
+  if (!graph.value || value === previous) return
+  if (!searchLevel1ChangeInProgress) clearSearchSelection()
+  overviewScope.value = 'current'
   clearLockedState()
+  detail.value = { kind: 'category' }
+  mobileDrawerOpen.value = false
+  chartScrollLeft.value = 0
+  activeMobileStage.value = 0
+  chartScrollEl.value?.scrollTo({ left: 0 })
+  render()
+})
+
+watch(searchQuery, () => {
+  if (!graph.value) return
+  if (!searchCommitInProgress) clearSearchSelection()
+  clearLockedState()
+  detail.value = { kind: 'category' }
+  mobileDrawerOpen.value = false
+  render()
+})
+
+watch([displayMode, level1Scope, minWeight], () => {
+  if (!graph.value) return
+  clearSearchSelection()
+  clearLockedState()
+  detail.value = { kind: 'category' }
+  mobileDrawerOpen.value = false
   render()
 })
 
@@ -435,8 +520,8 @@ watch(pieModalOpen, async (isOpen) => {
 onMounted(async () => {
   window.scrollTo({ top: 0, left: 0 })
   viewportHeight.value = window.innerHeight
+  isMobileViewport.value = window.innerWidth <= MOBILE_BREAKPOINT
   await nextTick()
-  initChart()
   window.addEventListener('resize', handleResize)
   window.addEventListener('scroll', handleWindowScroll, { passive: true })
   window.addEventListener('keydown', handleKeydown)
@@ -451,6 +536,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('scroll', handleWindowScroll)
   window.removeEventListener('keydown', handleKeydown)
   clearHoverTimers()
+  if (swipeHintTimer !== null) window.clearTimeout(swipeHintTimer)
+  if (searchDrawerTimer !== null) window.clearTimeout(searchDrawerTimer)
   chart?.dispose()
   chart = null
   disposeRelationPieCharts()
@@ -505,7 +592,9 @@ async function loadGraph(category: string) {
     loadState.value = response.paths.length ? 'ready' : 'empty'
     resetInteractionState()
     await nextTick()
+    initChart()
     render()
+    maybeShowMobileSwipeHint()
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     if (controller.signal.aborted) return
@@ -999,7 +1088,6 @@ async function handleChartClick(params: unknown) {
   if (!activeBaseGraph.value || !event.data) return
   clearHoverPreview()
   if (event.dataType === 'node') {
-    openDetailPanel()
     const node = event.data as ChartNode
     if (node.kind === 'level1' && node.displayName !== selectedLevel1.value) {
       selectedLevel1.value = node.displayName
@@ -1024,6 +1112,7 @@ async function handleChartClick(params: unknown) {
       paths,
       limit: 20,
     }
+    openDetailPanel()
     return
   }
   if (event.dataType === 'edge') {
@@ -1221,17 +1310,7 @@ function decorateRelationPieItem(
 }
 
 function relationItemColor(item: RelationPieSourceItem, index: number) {
-  if (item.isOther) return PIE_OTHER_COLOR
-  const seed = stableTextHash(item.name)
-  return PIE_COLORS[(seed + index) % PIE_COLORS.length] ?? '#55A6BF'
-}
-
-function stableTextHash(value: string) {
-  let hash = 0
-  for (const char of value) {
-    hash = (hash * 33 + char.charCodeAt(0)) % 1000003
-  }
-  return hash
+  return relationPieColor(index, item.isOther)
 }
 
 function isRelationPieChartable(
@@ -1248,7 +1327,7 @@ function singleRelationItem(section: RelationPieSection): RelationPieDatum {
       share: 0,
       pathIds: [],
       sectionId: section.id,
-      itemStyle: { color: PIE_OTHER_COLOR },
+      itemStyle: { color: relationPieColor(0, true) },
     }
   )
 }
@@ -1541,10 +1620,13 @@ function restoreLockedHighlight() {
 
 function resetView() {
   searchQuery.value = ''
-  displayMode.value = 'all'
+  clearSearchSelection()
+  displayMode.value = 'smart'
   selectedLevel1.value = defaultLevel1()
-  level1Scope.value = 'linked'
+  level1Scope.value = 'selected'
   minWeight.value = 0
+  overviewScope.value = 'current'
+  mobileDrawerOpen.value = false
   clearLockedState()
   render()
 }
@@ -1557,10 +1639,15 @@ function clearLock() {
 
 function resetInteractionState() {
   searchQuery.value = ''
-  displayMode.value = 'all'
+  clearSearchSelection()
+  displayMode.value = 'smart'
   selectedLevel1.value = defaultLevel1()
-  level1Scope.value = 'linked'
+  level1Scope.value = 'selected'
   minWeight.value = 0
+  overviewScope.value = 'current'
+  mobileDrawerOpen.value = false
+  activeMobileStage.value = 0
+  chartScrollLeft.value = 0
   clearLockedState()
   detail.value = { kind: 'category' }
 }
@@ -1583,7 +1670,109 @@ function clearLockedState() {
   currentFocus.value = ''
 }
 
+function clearSearchSelection() {
+  selectedSearchNodeId.value = ''
+  forcedSearchPathId.value = ''
+  if (searchDrawerTimer !== null) {
+    window.clearTimeout(searchDrawerTimer)
+    searchDrawerTimer = null
+  }
+}
+
+async function selectSearchResult(result: SankeyNodeSearchResult) {
+  const fullGraph = graph.value
+  if (!fullGraph) return
+  const targetLevel1 = resolveSearchLevel1(fullGraph, result.nodeId, selectedLevel1.value)
+  const representative = representativeSearchPath(fullGraph, result.nodeId, targetLevel1)
+
+  searchCommitInProgress = true
+  searchLevel1ChangeInProgress = true
+  selectedSearchNodeId.value = result.nodeId
+  forcedSearchPathId.value = representative?.pathId ?? ''
+  searchQuery.value = result.name
+  if (targetLevel1 && targetLevel1 !== selectedLevel1.value) selectedLevel1.value = targetLevel1
+  await nextTick()
+  searchCommitInProgress = false
+  searchLevel1ChangeInProgress = false
+
+  clearLockedState()
+  mobileDrawerOpen.value = false
+  const node = icd11SankeyGraphIndex(fullGraph).nodeById.get(result.nodeId)
+  if (!node) {
+    render()
+    return
+  }
+  const paths = pathsForSearchNode(fullGraph, result.nodeId, targetLevel1)
+  currentFocus.value = node.name
+  lockLabel.value = '当前搜索定位'
+  lockText.value = node.displayName
+  detail.value = {
+    kind: 'node',
+    title: node.displayName,
+    level: KIND_LABELS[node.kind],
+    nodeKind: node.kind,
+    nodeWeight: sumPathWeight(paths),
+    paths,
+    limit: 20,
+  }
+  render(node.name)
+  await locateSearchNode(node)
+
+  if (isMobileViewport.value) {
+    searchDrawerTimer = window.setTimeout(() => {
+      mobileDrawerOpen.value = true
+      searchDrawerTimer = null
+      applyChartLayout()
+    }, prefersReducedMotion() ? 0 : 200)
+  } else {
+    openDetailPanel()
+  }
+}
+
+async function locateSearchNode(node: Icd11SankeyNode) {
+  if (isMobileViewport.value) scrollToMobileStage(node.depth)
+  await nextTick()
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+
+  let nodeCenter: number | null = null
+  try {
+    const layoutChart = chart as unknown as {
+      getModel?: () => {
+        getSeriesByIndex?: (index: number) => {
+          getData?: () => {
+            indexOfName?: (name: string) => number
+            getItemLayout?: (index: number) => { y?: number; dy?: number } | undefined
+          }
+        }
+      }
+    }
+    const data = layoutChart?.getModel?.().getSeriesByIndex?.(0)?.getData?.()
+    const dataIndex = data?.indexOfName?.(node.name) ?? -1
+    const layout = dataIndex >= 0 ? data?.getItemLayout?.(dataIndex) : undefined
+    if (typeof layout?.y === 'number') nodeCenter = layout.y + Number(layout.dy || 0) / 2
+  } catch {
+    nodeCenter = null
+  }
+
+  const targetElement = chartEl.value ?? chartShellEl.value
+  if (!targetElement) return
+  const elementTop = window.scrollY + targetElement.getBoundingClientRect().top
+  const targetTop =
+    nodeCenter === null
+      ? elementTop - 130
+      : elementTop + nodeCenter - Math.min(window.innerHeight * 0.38, 320)
+  window.scrollTo({ top: Math.max(0, targetTop), behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
+}
+
+function prefersReducedMotion() {
+  return Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
+}
+
 function statusText() {
+  if (selectedSearchNodeId.value && graph.value) {
+    const node = icd11SankeyGraphIndex(graph.value).nodeById.get(selectedSearchNodeId.value)
+    if (node) return `已定位搜索结果：${node.displayName}`
+  }
   if (searchQuery.value.trim()) return `当前搜索高亮：${searchQuery.value.trim()}`
   return '当前未锁定路径'
 }
@@ -1609,8 +1798,18 @@ function summarizeDisplayPaths(baseGraph: Icd11SankeyGraph): DisplayPathSummary 
   ).sort(
     (a, b) => Number(b.level1 === selectedLevel1.value) - Number(a.level1 === selectedLevel1.value),
   )
-  const limit = displayModeLimit(displayMode.value, filteredPaths.length)
-  const paths = limit ? filteredPaths.slice(0, limit) : filteredPaths
+  const limit = displayModeLimit(displayMode.value, filteredPaths.length, smartPathLimit.value)
+  const limitedPaths = limit ? filteredPaths.slice(0, limit) : filteredPaths
+  const forcedPath = forcedSearchPathId.value
+    ? icd11SankeyGraphIndex(baseGraph).pathById.get(forcedSearchPathId.value) ?? null
+    : null
+  const injected = ensureSearchTargetVisible(
+    limitedPaths,
+    selectedSearchNodeId.value,
+    forcedPath,
+    limit,
+  )
+  const paths = injected.paths
   const candidateWeight = sumPathWeight(filteredPaths)
   const shownWeight = sumPathWeight(paths)
 
@@ -1630,6 +1829,7 @@ function summarizeDisplayPaths(baseGraph: Icd11SankeyGraph): DisplayPathSummary 
           ).size
         : 0,
     modeLabel: displayModeLabel(displayMode.value, limit),
+    injectedSearchPath: injected.injected,
   }
   setBoundedWeakCacheEntry(
     displaySummaryCache,
@@ -1642,9 +1842,15 @@ function summarizeDisplayPaths(baseGraph: Icd11SankeyGraph): DisplayPathSummary 
 }
 
 function displayTransformKey() {
-  return [selectedLevel1.value, level1Scope.value, displayMode.value, String(minWeight.value)].join(
-    '\u001f',
-  )
+  return [
+    selectedLevel1.value,
+    level1Scope.value,
+    displayMode.value,
+    String(minWeight.value),
+    String(smartPathLimit.value),
+    selectedSearchNodeId.value,
+    forcedSearchPathId.value,
+  ].join('\u001f')
 }
 
 function setBoundedWeakCacheEntry<K extends object, V>(
@@ -1673,7 +1879,9 @@ function defaultLevel1() {
 }
 
 function displayModeLabel(mode: Icd11SankeyDisplayMode, limit: number | null) {
-  if (mode === 'smart') return limit ? `智能精简 Top ${limit}` : '智能精简：全量'
+  if (mode === 'smart') {
+    return limit ? `智能精简 · 最多 ${limit}` : `智能精简 · 少于 ${smartPathLimit.value}`
+  }
   return DISPLAY_MODE_OPTIONS.find((option) => option.value === mode)?.label ?? '全量'
 }
 
@@ -1702,7 +1910,7 @@ function searchSeeds(baseGraph: Icd11SankeyGraph, keyword: string) {
   if (!query) return null
   const seeds = new Set<string>()
   for (const node of baseGraph.nodes) {
-    const haystack = `${node.displayName} ${node.searchText}`.toLowerCase()
+    const haystack = node.displayName.toLocaleLowerCase('zh-Hans-CN')
     if (haystack.includes(query)) seeds.add(node.name)
   }
   return seeds
@@ -1738,17 +1946,82 @@ function nodeGap(baseGraph: Icd11SankeyGraph) {
 }
 
 function handleResize() {
+  const wasMobile = isMobileViewport.value
   viewportHeight.value = window.innerHeight
+  isMobileViewport.value = window.innerWidth <= MOBILE_BREAKPOINT
+  if (wasMobile !== isMobileViewport.value) {
+    mobileDrawerOpen.value = false
+    if (displayMode.value === 'smart') render()
+    if (isMobileViewport.value) maybeShowMobileSwipeHint()
+  }
   applyChartLayout()
   updateUpstreamContextVisibility()
 }
 
 function handleChartScroll(event: Event) {
-  chartScrollLeft.value = (event.currentTarget as HTMLElement).scrollLeft
+  const scroller = event.currentTarget as HTMLElement
+  chartScrollLeft.value = scroller.scrollLeft
+  const maxScroll = Math.max(0, scroller.scrollWidth - scroller.clientWidth)
+  activeMobileStage.value = maxScroll
+    ? Math.max(0, Math.min(4, Math.round((scroller.scrollLeft / maxScroll) * 4)))
+    : 0
+  if (scroller.scrollLeft > 4) dismissMobileSwipeHint()
 }
 
 function openDetailPanel() {
+  if (isMobileViewport.value) mobileDrawerOpen.value = true
   window.setTimeout(applyChartLayout, 0)
+}
+
+function openMobileOverview() {
+  clearLockedState()
+  detail.value = { kind: 'category' }
+  mobileDrawerOpen.value = true
+}
+
+function closeMobileDrawer() {
+  const shouldClearSelection = detail.value.kind !== 'category'
+  mobileDrawerOpen.value = false
+  if (shouldClearSelection) {
+    clearLockedState()
+    detail.value = { kind: 'category' }
+    render()
+  }
+}
+
+function scrollToMobileStage(index: number) {
+  const scroller = chartScrollEl.value
+  if (!scroller) return
+  const safeIndex = Math.max(0, Math.min(4, index))
+  const maxScroll = Math.max(0, scroller.scrollWidth - scroller.clientWidth)
+  activeMobileStage.value = safeIndex
+  dismissMobileSwipeHint()
+  scroller.scrollTo({ left: (maxScroll * safeIndex) / 4, behavior: 'smooth' })
+}
+
+function maybeShowMobileSwipeHint() {
+  if (!isMobileViewport.value || !hasRenderableGraph.value) return
+  try {
+    if (window.sessionStorage.getItem(MOBILE_SWIPE_HINT_KEY)) return
+  } catch {
+    // Storage may be disabled; the hint still remains safely dismissible.
+  }
+  showMobileSwipeHint.value = true
+  if (swipeHintTimer !== null) window.clearTimeout(swipeHintTimer)
+  swipeHintTimer = window.setTimeout(dismissMobileSwipeHint, 4200)
+}
+
+function dismissMobileSwipeHint() {
+  showMobileSwipeHint.value = false
+  if (swipeHintTimer !== null) {
+    window.clearTimeout(swipeHintTimer)
+    swipeHintTimer = null
+  }
+  try {
+    window.sessionStorage.setItem(MOBILE_SWIPE_HINT_KEY, 'seen')
+  } catch {
+    // The hint remains non-blocking when storage is unavailable.
+  }
 }
 
 function applyChartLayout() {
@@ -1773,28 +2046,6 @@ function applyChartLayout() {
 }
 
 function handleWindowScroll() {
-  const scrollTop = Math.max(window.scrollY, document.documentElement.scrollTop, 0)
-  if (scrollTop <= 8) {
-    headerVisible.value = true
-    lastHeaderScrollTop = scrollTop
-    headerScrollTravel = 0
-    headerScrollDirection = 0
-  } else {
-    const delta = scrollTop - lastHeaderScrollTop
-    lastHeaderScrollTop = scrollTop
-    if (Math.abs(delta) >= 1) {
-      const direction = delta > 0 ? 1 : -1
-      if (direction !== headerScrollDirection) {
-        headerScrollDirection = direction
-        headerScrollTravel = 0
-      }
-      headerScrollTravel += Math.abs(delta)
-      if (headerScrollTravel >= HEADER_SCROLL_THRESHOLD) {
-        headerVisible.value = direction < 0
-        headerScrollTravel = 0
-      }
-    }
-  }
   updateUpstreamContextVisibility()
 }
 
@@ -1898,55 +2149,46 @@ function exportPng() {
 
 <template>
   <main class="sankey-shell">
-    <header
-      class="site-header sankey-map-header"
-      :class="{ 'is-hidden': !headerVisible }"
-      :style="headerStyle"
-    >
-      <RouterLink class="brand" to="/" aria-label="污水信息因子数据库首页">
-        <BrandMark :size="40" />
-        <span>
-          <strong>污水信息因子数据库</strong>
-          <small>Wastewater Biomarker Evidence</small>
-        </span>
-      </RouterLink>
+    <PlatformHeader active="sankey" />
 
-      <div class="header-center">
-        <h1 class="page-title">ICD11 桑基图</h1>
-        <label class="location-search">
-          <span class="search-mark" aria-hidden="true"></span>
-          <input
-            v-model="searchQuery"
-            type="search"
-            placeholder="搜索 ICD、药物或 biomarker"
-            :disabled="isLoading || !hasRenderableGraph"
-          />
-          <button v-if="searchQuery" type="button" aria-label="清空搜索" @click="searchQuery = ''">
-            ×
-          </button>
-        </label>
+    <form id="main-content" class="sankey-controls" tabindex="-1" @submit.prevent>
+      <div class="control-field search-field">
+        <span>五层搜索</span>
+        <SankeyNodeSearch
+          :model-value="searchQuery"
+          :results="searchResults"
+          :selected-node-id="selectedSearchNodeId"
+          :disabled="isLoading || !hasRenderableGraph"
+          @update:model-value="searchQuery = $event"
+          @select="selectSearchResult"
+          @clear="clearSearchSelection"
+        />
       </div>
 
-      <div class="header-tools">
-        <RouterLink class="module-switch-link" to="/map-visualization">
-          <span>切换模块</span>
-          <strong>地图</strong>
-        </RouterLink>
-      </div>
-    </header>
-
-    <form class="sankey-controls" @submit.prevent>
-      <label class="control-field level-field">
+      <div class="control-field level-field">
         <span>ICD11_Level1</span>
-        <select v-model="selectedLevel1" :disabled="isLoading || !hasRenderableGraph">
-          <option v-for="level1 in level1Options" :key="level1" :value="level1">
-            {{ level1 }}
-          </option>
-        </select>
-      </label>
+        <SankeySelect
+          :model-value="selectedLevel1"
+          :options="level1SelectOptions"
+          select-label="选择 ICD11 Level1"
+          mobile-title="选择 ICD11 Level1"
+          :disabled="isLoading || !hasRenderableGraph"
+          @update:model-value="selectedLevel1 = String($event)"
+        />
+      </div>
 
       <fieldset class="scope-field">
-        <legend>关联范围</legend>
+        <legend class="field-label-row">
+          <span>关联范围</span>
+          <span
+            class="control-help"
+            tabindex="0"
+            role="img"
+            aria-label="关联范围说明：仅当前只显示所选 Level1 的路径；含关联会加入与当前 Level1 共享下游节点的相关路径。"
+            data-tooltip="仅当前：只显示所选 Level1 的路径。含关联：加入与当前 Level1 共享下游节点的相关路径。"
+            >?</span
+          >
+        </legend>
         <div class="scope-segmented">
           <label>
             <input
@@ -1969,25 +2211,50 @@ function exportPng() {
         </div>
       </fieldset>
 
-      <label class="control-field display-field">
-        <span>显示模式</span>
-        <select v-model="displayMode" :disabled="isLoading || !hasRenderableGraph">
-          <option v-for="option in DISPLAY_MODE_OPTIONS" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
-      </label>
+      <div class="control-field display-field">
+        <span class="field-label-row">
+          <span>显示模式</span>
+          <span
+            class="control-help"
+            tabindex="0"
+            role="img"
+            aria-label="显示模式说明：全量显示所有候选路径，智能精简和 Top 模式按照权重减少路径数量。"
+            data-tooltip="控制路径数量：全量显示所有候选路径；智能精简和 Top 模式按照权重减少路径数量。"
+            >?</span
+          >
+        </span>
+        <SankeySelect
+          :model-value="displayMode"
+          :options="DISPLAY_MODE_OPTIONS"
+          select-label="选择显示模式"
+          mobile-title="选择显示模式"
+          :disabled="isLoading || !hasRenderableGraph"
+          @update:model-value="displayMode = $event as Icd11SankeyDisplayMode"
+        />
+      </div>
 
-      <label class="control-field compact-field">
-        <span>最小权重</span>
-        <select v-model.number="minWeight" :disabled="isLoading || !hasRenderableGraph">
-          <option v-for="option in MIN_WEIGHT_OPTIONS" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
-      </label>
-
-      <div class="toolbar-actions" role="group" aria-label="图表操作">
+      <div class="weight-reset-group">
+        <div class="control-field compact-field">
+          <span class="field-label-row">
+            <span>最小权重</span>
+            <span
+              class="control-help"
+              tabindex="0"
+              role="img"
+              aria-label="最小权重说明：只保留权重大于或等于所选阈值的路径，全部表示不设置权重门槛。"
+              data-tooltip="只保留权重大于或等于所选阈值的路径；“全部”表示不设置权重门槛。"
+              >?</span
+            >
+          </span>
+          <SankeySelect
+            :model-value="minWeight"
+            :options="MIN_WEIGHT_OPTIONS"
+            select-label="选择最小权重"
+            mobile-title="选择最小权重"
+            :disabled="isLoading || !hasRenderableGraph"
+            @update:model-value="minWeight = Number($event)"
+          />
+        </div>
         <button
           class="control-button reset-button"
           type="button"
@@ -1995,6 +2262,17 @@ function exportPng() {
           @click="resetView"
         >
           重置
+        </button>
+      </div>
+
+      <div class="toolbar-actions" role="group" aria-label="图表操作">
+        <button
+          class="control-button mobile-overview-button"
+          type="button"
+          :disabled="isLoading || !hasRenderableGraph"
+          @click="openMobileOverview"
+        >
+          查看概览
         </button>
         <button
           class="control-button clear-lock-button"
@@ -2026,6 +2304,11 @@ function exportPng() {
           <span>{{ lockText }}</span>
           <span v-if="displaySummaryText" class="filter-summary">{{ displaySummaryText }}</span>
         </div>
+        <SankeyStageNavigator
+          :stages="MOBILE_STAGE_TITLES"
+          :active-index="activeMobileStage"
+          @select="scrollToMobileStage"
+        />
         <div v-if="isLoading" class="state-message loading-state" role="status" aria-live="polite">
           <span class="loading-spinner" aria-hidden="true"></span>
           <span>正在加载 ICD11 桑基图数据…</span>
@@ -2077,9 +2360,24 @@ function exportPng() {
             <div ref="chartEl" class="sankey-chart"></div>
           </div>
         </div>
+        <button
+          v-if="showMobileSwipeHint && hasRenderableGraph"
+          class="mobile-swipe-hint"
+          type="button"
+          @click="scrollToMobileStage(1)"
+        >
+          <span>向左滑动查看下游</span>
+          <b aria-hidden="true">←</b>
+        </button>
       </section>
 
-      <aside
+      <SankeyMobileDrawer
+        :mobile="isMobileViewport"
+        :open="mobileDrawerOpen"
+        :title="mobileDrawerTitle"
+        @close="closeMobileDrawer"
+      >
+        <aside
         class="side-panel"
         :class="{
           'compact-detail': isCompactDetail,
@@ -2106,7 +2404,25 @@ function exportPng() {
         </section>
         <template v-if="detail.kind === 'category' && categoryStats">
           <header class="overview-header">
-            <h2>{{ selectedCategoryLabel }}</h2>
+            <div class="overview-scope-switch" role="group" aria-label="概览范围">
+              <button
+                type="button"
+                :class="{ 'is-active': overviewScope === 'current' }"
+                :aria-pressed="overviewScope === 'current'"
+                @click="overviewScope = 'current'"
+              >
+                当前分类
+              </button>
+              <button
+                type="button"
+                :class="{ 'is-active': overviewScope === 'global' }"
+                :aria-pressed="overviewScope === 'global'"
+                @click="overviewScope = 'global'"
+              >
+                全局概览
+              </button>
+            </div>
+            <h2>{{ overviewTitle }}</h2>
             <div v-if="statsSummaryItems.length" class="stats-summary" aria-label="当前类别统计">
               <span v-for="item in statsSummaryItems" :key="item.label">
                 <b>{{ item.label }}</b>
@@ -2120,7 +2436,7 @@ function exportPng() {
               <div>
                 <dt>颜色与带宽</dt>
                 <dd>
-                  节点统一为青灰色；流带按 Level2 动态着色，优先区分当前
+                  节点统一为蓝色；流带按 Level2 动态着色，优先区分当前
                   Level1。带宽代表涉及文献数权重。
                 </dd>
               </div>
@@ -2147,9 +2463,9 @@ function exportPng() {
             </dl>
           </section>
           <section class="detail-block ranking-block">
-            <h3>Top ICD11_Level1</h3>
+            <h3>{{ overviewFirstRanking.title }}</h3>
             <ul class="top-list">
-              <li v-for="(item, index) in topList(categoryStats.topLevel1)" :key="item.name">
+              <li v-for="(item, index) in topList(overviewFirstRanking.items)" :key="item.name">
                 <span class="top-rank">{{ index + 1 }}</span>
                 <b>{{ item.name }}</b>
                 <span>{{ formatNumber(item.value) }} · {{ formatPercent(item.share) }}</span>
@@ -2332,7 +2648,8 @@ function exportPng() {
             </template>
           </section>
         </template>
-      </aside>
+        </aside>
+      </SankeyMobileDrawer>
     </section>
 
     <div
@@ -2633,8 +2950,7 @@ function exportPng() {
   }
 }
 
-.sankey-controls :disabled,
-.location-search :disabled {
+.sankey-controls :disabled {
   cursor: not-allowed;
   opacity: 0.56;
 }
@@ -3195,71 +3511,6 @@ function exportPng() {
   line-height: 1.2;
   letter-spacing: 0;
   white-space: nowrap;
-}
-
-.location-search {
-  position: relative;
-  min-width: 0;
-}
-
-.location-search input {
-  width: 100%;
-  height: 42px;
-  padding: 0 42px 0 40px;
-  border: 1px solid rgba(91, 117, 132, 0.2);
-  border-radius: 8px;
-  color: #173247;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.76);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 800;
-  outline: 0;
-}
-
-.location-search input:focus {
-  border-color: rgba(34, 147, 132, 0.42);
-  box-shadow:
-    0 0 0 3px rgba(34, 147, 132, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.76);
-}
-
-.search-mark {
-  position: absolute;
-  top: 12px;
-  left: 14px;
-  width: 13px;
-  height: 13px;
-  border: 2px solid #607384;
-  border-radius: 50%;
-  pointer-events: none;
-}
-
-.search-mark::after {
-  position: absolute;
-  right: -6px;
-  bottom: -5px;
-  width: 7px;
-  height: 2px;
-  content: '';
-  border-radius: 999px;
-  background: #607384;
-  transform: rotate(45deg);
-}
-
-.location-search > button {
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  width: 28px;
-  height: 28px;
-  border: 1px solid rgba(91, 117, 132, 0.14);
-  border-radius: 8px;
-  color: #607384;
-  background: #ffffff;
-  font-size: 20px;
-  line-height: 1;
-  cursor: pointer;
 }
 
 .header-tools {
@@ -3896,6 +4147,8 @@ function exportPng() {
 }
 
 .sankey-controls {
+  position: relative;
+  z-index: 12;
   grid-template-columns:
     minmax(260px, 1.3fr)
     minmax(188px, 0.72fr)
@@ -5346,8 +5599,6 @@ function exportPng() {
   font-size: 20px;
 }
 
-.location-search input,
-.location-search > button,
 .module-switch-link {
   border: 1px solid var(--sankey-border);
   border-radius: 6px;
@@ -5355,14 +5606,6 @@ function exportPng() {
   box-shadow: none;
 }
 
-.location-search input {
-  height: 38px;
-  color: var(--sankey-ink);
-  font-weight: 400;
-}
-
-.location-search input:focus,
-.location-search > button:focus-visible,
 .module-switch-link:focus-visible {
   border-color: #5f84b3;
   outline: 2px solid rgba(37, 102, 212, 0.12);
@@ -5390,10 +5633,10 @@ function exportPng() {
 .sankey-controls {
   grid-template-columns:
     minmax(320px, 560px)
-    150px
+    164px
     minmax(190px, 260px)
-    108px
-    minmax(298px, 1fr);
+    minmax(190px, 220px)
+    minmax(214px, 1fr);
   align-items: end;
   gap: 8px;
   padding-top: 8px;
@@ -5421,6 +5664,75 @@ function exportPng() {
   line-height: 1.15;
 }
 
+.field-label-row {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.control-help {
+  position: relative;
+  z-index: 4;
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  place-items: center;
+  border: 1px solid #9eafbf;
+  border-radius: 50%;
+  color: #64788b;
+  background: #ffffff;
+  cursor: help;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1;
+  box-sizing: border-box;
+}
+
+.control-help::after {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: -5px;
+  width: 228px;
+  padding: 8px 10px;
+  border: 1px solid #cbd6e1;
+  border-radius: 5px;
+  content: attr(data-tooltip);
+  color: #32485c;
+  background: #ffffff;
+  box-shadow: 0 8px 22px rgba(21, 52, 72, 0.14);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.55;
+  opacity: 0;
+  pointer-events: none;
+  text-align: left;
+  transform: translateY(3px);
+  transition:
+    opacity 0.14s ease,
+    transform 0.14s ease;
+  visibility: hidden;
+  white-space: normal;
+}
+
+.control-help:hover,
+.control-help:focus-visible {
+  border-color: #5f84b3;
+  color: #24558d;
+  background: #eef4ff;
+  outline: none;
+}
+
+.control-help:hover::after,
+.control-help:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
 .control-field select,
 .control-field input,
 .sankey-controls button,
@@ -5431,6 +5743,24 @@ function exportPng() {
   color: var(--sankey-ink);
   background: #ffffff;
   box-shadow: none;
+}
+
+.control-field select {
+  appearance: none;
+  padding-right: 32px;
+  background-color: #ffffff;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='m2 2 4 4 4-4' fill='none' stroke='%23566879' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.control-field select:hover:not(:disabled) {
+  border-color: #8398ac;
+  background-color: #fbfdff;
 }
 
 .control-field select,
@@ -5477,6 +5807,19 @@ function exportPng() {
     background 0.15s ease;
 }
 
+.weight-reset-group {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(96px, 1fr) 70px;
+  align-items: end;
+  gap: 6px;
+}
+
+.weight-reset-group .compact-field {
+  min-width: 0;
+  max-width: none;
+}
+
 .sankey-controls .clear-lock-button {
   min-width: 96px;
 }
@@ -5490,7 +5833,7 @@ function exportPng() {
   align-items: end;
   justify-content: flex-end;
   gap: 6px;
-  padding-left: 12px;
+  padding-left: 10px;
   border-left: 1px solid var(--sankey-border);
 }
 
@@ -5889,8 +6232,7 @@ function exportPng() {
   outline-offset: 2px;
 }
 
-.sankey-controls :disabled,
-.location-search :disabled {
+.sankey-controls :disabled {
   border-color: #d7dee6 !important;
   color: #8a96a3 !important;
   background: #f3f5f7 !important;
@@ -6221,9 +6563,15 @@ function exportPng() {
   }
 
   .level-field,
+  .scope-field,
   .display-field,
+  .weight-reset-group,
   .toolbar-actions {
     grid-column: 1 / -1;
+  }
+
+  .weight-reset-group {
+    grid-template-columns: minmax(0, 1fr) 78px;
   }
 
   .compact-field {
@@ -6232,7 +6580,7 @@ function exportPng() {
 
   .toolbar-actions {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     padding-top: 7px;
     padding-left: 0;
     border-top: 1px solid var(--sankey-border);
@@ -6244,9 +6592,9 @@ function exportPng() {
   .sankey-controls {
     grid-template-columns:
       minmax(260px, 1fr)
-      minmax(150px, 180px)
+      minmax(160px, 190px)
       minmax(180px, 0.8fr)
-      minmax(96px, 120px);
+      minmax(190px, 220px);
   }
 
   .toolbar-actions {
@@ -6256,6 +6604,163 @@ function exportPng() {
     padding-left: 0;
     border-top: 1px solid var(--sankey-border);
     border-left: 0;
+  }
+}
+</style>
+
+<style scoped>
+.control-field > .sankey-select {
+  width: 100%;
+}
+
+.search-field > .sankey-node-search {
+  width: 100%;
+}
+
+@media (min-width: 1321px) {
+  .sankey-controls {
+    grid-template-columns:
+      minmax(230px, 270px)
+      minmax(280px, 1.15fr)
+      150px
+      minmax(180px, 220px)
+      minmax(180px, 210px)
+      minmax(200px, auto);
+  }
+}
+
+@media (min-width: 721px) and (max-width: 1320px) {
+  .sankey-controls {
+    grid-template-columns:
+      minmax(230px, 1fr)
+      minmax(280px, 1.2fr)
+      150px
+      minmax(180px, 220px);
+  }
+
+  .weight-reset-group {
+    grid-column: 1 / 2;
+  }
+
+  .toolbar-actions {
+    grid-column: 2 / -1;
+    justify-self: end;
+    padding-top: 7px;
+    padding-left: 0;
+    border-top: 1px solid var(--sankey-border);
+    border-left: 0;
+  }
+}
+
+.mobile-overview-button,
+.mobile-swipe-hint {
+  display: none;
+}
+
+.overview-scope-switch {
+  width: fit-content;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  margin-bottom: 14px;
+  padding: 3px;
+  border: 1px solid #d8e0e7;
+  border-radius: 7px;
+  background: #f2f5f7;
+}
+
+.overview-scope-switch button {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #687987;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.overview-scope-switch button:hover {
+  color: #315f88;
+}
+
+.overview-scope-switch button.is-active {
+  background: #fff;
+  color: #245f8e;
+  box-shadow: 0 1px 3px rgba(28, 55, 76, 0.1);
+}
+
+.overview-scope-switch button:focus-visible {
+  outline: 2px solid #2566d4;
+  outline-offset: 1px;
+}
+
+@media (max-width: 720px) {
+  .mobile-overview-button {
+    display: inline-flex;
+  }
+
+  .toolbar-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .search-field {
+    grid-column: 1 / -1;
+  }
+
+  .toolbar-actions .control-button {
+    min-width: 0;
+    padding-right: 8px;
+    padding-left: 8px;
+    font-size: 12px;
+  }
+
+  .stage-axis {
+    display: none !important;
+  }
+
+  .chart-panel {
+    position: relative;
+  }
+
+  .mobile-swipe-hint {
+    position: absolute;
+    z-index: 8;
+    top: 112px;
+    right: 14px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 11px;
+    border: 1px solid rgba(102, 136, 169, 0.34);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.94);
+    color: #315f88;
+    box-shadow: 0 5px 16px rgba(31, 61, 84, 0.14);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 650;
+    cursor: pointer;
+    backdrop-filter: blur(5px);
+  }
+
+  .mobile-swipe-hint b {
+    font-size: 15px;
+    line-height: 1;
+  }
+
+  .overview-scope-switch {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    width: 100%;
+    margin: 0 0 14px;
+  }
+
+  .overview-scope-switch button {
+    min-height: 34px;
   }
 }
 </style>

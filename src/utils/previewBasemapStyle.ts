@@ -72,7 +72,12 @@ export const PREVIEW_MAP_MIN_ZOOM = 1.1
 export const PREVIEW_MAP_MAX_ZOOM = 8
 export const PREVIEW_COUNTRY_LEVEL_END = 3.85
 export const PREVIEW_ADMIN1_LEVEL_END = 6.6
-export const PREVIEW_CITY_BOUNDARY_FADE_START = 6.1
+export const PREVIEW_CITY_BOUNDARY_FADE_START = 6.35
+export const PREVIEW_COUNTRY_BOUNDARY_FADE_START = 2.55
+export const PREVIEW_COUNTRY_BOUNDARY_MAJOR_VISIBLE_ZOOM = 3.45
+const PREVIEW_COUNTRY_BOUNDARY_MEDIUM_VISIBLE_ZOOM = 3.85
+const PREVIEW_COUNTRY_BOUNDARY_SMALL_FADE_START = 3.35
+const PREVIEW_COUNTRY_BOUNDARY_SMALL_VISIBLE_ZOOM = 4.35
 
 export const PREVIEW_BOUNDARY_LAYER_IDS = [
   'presentation-admin2-borders',
@@ -172,7 +177,7 @@ export function buildPreviewBasemapLayers(
       paint: {
         'line-color': '#adb7bc',
         'line-width': ['interpolate', ['linear'], ['zoom'], 6.35, 0.35, 7, 0.5, 8, 0.7],
-        'line-opacity': presentationBoundaryOpacity('adm2', 0.56),
+        'line-opacity': 0.56,
       },
     },
     boundaryLayer(
@@ -180,8 +185,8 @@ export function buildPreviewBasemapLayers(
       'preview_china_city_boundaries',
       PREVIEW_CITY_BOUNDARY_FADE_START,
       '#a8b2b7',
-      [6.1, 0.35, 6.6, 0.5, 8, 0.7],
-      ['interpolate', ['linear'], ['zoom'], 6.1, 0, 6.6, 0.52],
+      [6.35, 0.35, 6.6, 0.5, 8, 0.7],
+      0.52,
       undefined,
       undefined,
       'round',
@@ -214,7 +219,7 @@ export function buildPreviewBasemapLayers(
       0,
       '#77848b',
       [1, 0.65, 2.05, 0.8],
-      0.5,
+      0,
       ['>=', ['get', 'max_area'], 150],
       2.05,
       'butt',
@@ -225,9 +230,9 @@ export function buildPreviewBasemapLayers(
       2.05,
       '#707d84',
       [2.05, 0.8, 4, 1.05, 6, 1.3, 8, 1.6],
-      0.6,
+      countryBoundaryFadeOpacity(0.6, PREVIEW_COUNTRY_BOUNDARY_MAJOR_VISIBLE_ZOOM),
       ['>=', ['get', 'max_area'], 150],
-      undefined,
+      8.01,
       'butt',
     ),
     boundaryLayer(
@@ -236,9 +241,9 @@ export function buildPreviewBasemapLayers(
       2.05,
       '#78858c',
       [2.05, 0.75, 4, 1, 6, 1.28, 8, 1.6],
-      0.57,
+      countryBoundaryFadeOpacity(0.57, PREVIEW_COUNTRY_BOUNDARY_MEDIUM_VISIBLE_ZOOM),
       ['all', ['>=', ['get', 'max_area'], 18], ['<', ['get', 'max_area'], 150]],
-      undefined,
+      8.01,
       'butt',
     ),
     boundaryLayer(
@@ -247,9 +252,13 @@ export function buildPreviewBasemapLayers(
       3.05,
       '#818d93',
       [3.05, 0.65, 5, 0.95, 6.5, 1.25, 8, 1.6],
-      0.54,
+      countryBoundaryFadeOpacity(
+        0.54,
+        PREVIEW_COUNTRY_BOUNDARY_SMALL_VISIBLE_ZOOM,
+        PREVIEW_COUNTRY_BOUNDARY_SMALL_FADE_START,
+      ),
       ['<', ['get', 'max_area'], 18],
-      undefined,
+      8.01,
       'butt',
     ),
     controlledLabelLayer(
@@ -266,8 +275,8 @@ export function buildPreviewBasemapLayers(
         medium: true,
         halo: 1.9,
         letterSpacing: 0.025,
-        allowOverlap: true,
-        ignorePlacement: true,
+        allowOverlap: false,
+        ignorePlacement: false,
       },
     ),
     controlledLabelLayer(
@@ -285,8 +294,8 @@ export function buildPreviewBasemapLayers(
         medium: true,
         halo: 1.75,
         letterSpacing: 0.018,
-        allowOverlap: true,
-        ignorePlacement: true,
+        allowOverlap: false,
+        ignorePlacement: false,
       },
     ),
     controlledLabelLayer(
@@ -303,7 +312,7 @@ export function buildPreviewBasemapLayers(
         maxArea: 18,
         excludeWorldPriority: true,
         halo: 1.6,
-        ignorePlacement: true,
+        ignorePlacement: false,
       },
     ),
     {
@@ -344,8 +353,8 @@ export function buildPreviewBasemapLayers(
         medium: true,
         halo: 1.9,
         letterSpacing: 0.012,
-        allowOverlap: true,
-        ignorePlacement: true,
+        allowOverlap: false,
+        ignorePlacement: false,
       },
     ),
     controlledLabelLayer(
@@ -364,8 +373,8 @@ export function buildPreviewBasemapLayers(
         halo: 1.9,
         letterSpacing: 0.012,
         persistToMax: true,
-        allowOverlap: true,
-        ignorePlacement: true,
+        allowOverlap: false,
+        ignorePlacement: false,
       },
     ),
     controlledLabelLayer(
@@ -383,8 +392,8 @@ export function buildPreviewBasemapLayers(
         persistToMax: true,
         textOffset: [0, 1.05],
         textAnchor: 'top',
-        allowOverlap: true,
-        ignorePlacement: true,
+        allowOverlap: false,
+        ignorePlacement: false,
       },
     ),
   ]
@@ -435,10 +444,7 @@ function presentationBoundaryOpacity(level: 'adm1' | 'adm2', opacity: number) {
   )
 }
 
-function presentationLabelLayers(
-  level: 'adm1' | 'adm2',
-  locale: PreviewMapLocale,
-): StyleLayer[] {
+function presentationLabelLayers(level: 'adm1' | 'adm2', locale: PreviewMapLocale): StyleLayer[] {
   const isAdmin1 = level === 'adm1'
   const profiles = isAdmin1 ? ADMIN1_LABEL_PROFILES : ADMIN2_LABEL_PROFILES
   return profiles.map((profile) => {
@@ -461,29 +467,34 @@ function presentationLabelLayers(
         ['==', ['get', 'presentation_level'], level],
         ['==', ['get', 'detail_profile'], profile],
         [
-          '!=',
-          ['coalesce', ['get', 'display_name_local'], ['get', 'display_name_en'], ''],
-          '',
+          'any',
+          ['!=', ['coalesce', ['get', 'display_name_zh'], ''], ''],
+          ['!=', ['coalesce', ['get', 'display_name_local'], ''], ''],
+          ['!=', ['coalesce', ['get', 'display_name_en'], ''], ''],
         ],
       ],
       layout: {
         'text-field':
           locale === 'en'
             ? [
-                'coalesce',
+                'case',
+                ['!=', ['coalesce', ['get', 'display_name_en'], ''], ''],
                 ['get', 'display_name_en'],
-                ['get', 'display_name_local'],
-                '',
+                ['coalesce', ['get', 'display_name_local'], ''],
               ]
             : [
                 'case',
-                ['==', ['get', 'name_zh_verified'], true],
+                [
+                  'all',
+                  ['==', ['get', 'name_zh_verified'], true],
+                  ['!=', ['coalesce', ['get', 'display_name_zh'], ''], ''],
+                ],
                 ['get', 'display_name_zh'],
                 [
-                  'coalesce',
+                  'case',
+                  ['!=', ['coalesce', ['get', 'display_name_local'], ''], ''],
                   ['get', 'display_name_local'],
-                  ['get', 'display_name_en'],
-                  '',
+                  ['coalesce', ['get', 'display_name_en'], ''],
                 ],
               ],
         'text-font': ['Noto Sans Medium'],
@@ -557,6 +568,14 @@ function boundaryLayer(
       'line-opacity': opacity,
     },
   }
+}
+
+function countryBoundaryFadeOpacity(
+  opacity: number,
+  visibleZoom: number,
+  fadeStart = PREVIEW_COUNTRY_BOUNDARY_FADE_START,
+) {
+  return ['interpolate', ['linear'], ['zoom'], fadeStart, 0, visibleZoom, opacity]
 }
 
 type LabelOptions = {

@@ -19,6 +19,7 @@ import {
   pathsForLevel1Scope,
   sankeyHoverTargetKey,
   smartSankeyLimit,
+  summarizeSankeyOverview,
   upstreamContext,
   upstreamLayerText,
 } from '../utils/icd11SankeyDisplay'
@@ -119,12 +120,35 @@ describe('icd11Sankey service', () => {
 })
 
 describe('icd11Sankey display helpers', () => {
-  it('uses smart limits based on category path density', () => {
-    expect(smartSankeyLimit(412)).toBe(100)
-    expect(smartSankeyLimit(112)).toBe(50)
-    expect(smartSankeyLimit(80)).toBe(50)
-    expect(smartSankeyLimit(79)).toBeNull()
-    expect(smartSankeyLimit(3)).toBeNull()
+  it('uses responsive smart caps without hiding smaller result sets', () => {
+    expect(smartSankeyLimit(412, 50)).toBe(50)
+    expect(smartSankeyLimit(50, 50)).toBeNull()
+    expect(smartSankeyLimit(21, 20)).toBe(20)
+    expect(smartSankeyLimit(20, 20)).toBeNull()
+  })
+
+  it('summarizes a complete Level1 independently from visible path limits', () => {
+    const paths = [
+      { ...path('p1', '内分泌疾病', '2型糖尿病', '二甲双胍', '乳酸', 10), mappingRows: 3 },
+      { ...path('p2', '内分泌疾病', null, '二甲双胍', '二甲双胍', 4), mappingRows: 2 },
+      { ...path('p3', '营养性疾病', '肥胖症', '奥利司他', '奥利司他', 2), mappingRows: 1 },
+    ]
+
+    const summary = summarizeSankeyOverview(paths)
+
+    expect(summary).toMatchObject({
+      totalWeight: 16,
+      mappingRows: 6,
+      relations: 3,
+      level1: 1,
+      level2: 2,
+      level3: 2,
+      drug: 2,
+      biomarker: 3,
+      level2OnlyPaths: 1,
+      level3Paths: 2,
+    })
+    expect(summary.topLevel2[0]).toMatchObject({ name: '内分泌疾病', value: 14 })
   })
 
   it('aggregates relation shares for pie charts', () => {
@@ -435,6 +459,7 @@ function path(
     biomarker,
     biomarkerAliases: [],
     weight,
+    mappingRows: 1,
     share: 0,
     nodeIds: level3
       ? ['level1', 'level2', `level3::${level3}`, `drug::${drug}`, `biomarker::${biomarker}`]

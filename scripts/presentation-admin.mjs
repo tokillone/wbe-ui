@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { buildPresentationNameResolver } from './presentation-names.mjs'
+import { buildPresentationNameResolver, cleanPresentationLabel } from './presentation-names.mjs'
 
 export const PRESENTATION_ADMIN1_ZOOM = Object.freeze({
   adm1_le25: 3.85,
@@ -16,8 +16,10 @@ export const PRESENTATION_ADMIN2_ZOOM = Object.freeze({
   standard: 6.85,
   dense: 7.3,
   veryDense: 7.7,
-  china: 6.1,
+  china: 6.35,
 })
+
+export const PRESENTATION_ADMIN2_BOUNDARY_ZOOM = 6.35
 
 const ADMIN1_EXCEPTIONS = Object.freeze({
   china: { rule: 'local-china-province-standard', sourceLevel: 'local_CHN_admin1' },
@@ -26,6 +28,13 @@ const ADMIN1_EXCEPTIONS = Object.freeze({
   unitedkingdom: { rule: 'four-constituent-countries', sourceLevel: 'CGAZ_ADM1' },
   unitedsofamerica: { rule: 'state-level', sourceLevel: 'CGAZ_ADM1' },
   spain: { rule: 'autonomous-communities', sourceLevel: 'CGAZ_ADM1' },
+})
+
+const ADMIN1_GEO_KEY_OVERRIDES = Object.freeze({
+  // The pinned CGAZ feature is named like the territory, while the official
+  // Census municipality is Northern Islands. Keep the presentation parent key
+  // aligned with the canonical ADM1 key used by its election districts.
+  'northernmarianaislands|northernmarianaislands': 'northernmarianaislands|northernislands',
 })
 
 const ADMIN2_PROFILE_OVERRIDES = Object.freeze({
@@ -38,6 +47,14 @@ const ADMIN2_PROFILE_OVERRIDES = Object.freeze({
   italy: 'standard',
   china: 'china',
 })
+
+const EGYPT_ADM1_REGRESSION = Object.freeze([
+  { aliases: ['asyut', 'assiut'], expectedChinese: '艾斯尤特' },
+  { aliases: ['sohag', 'suhaj'], expectedChinese: '索哈杰' },
+  { aliases: ['qena', 'qina'], expectedChinese: '基纳' },
+  { aliases: ['aswan'], expectedChinese: '阿斯旺' },
+  { aliases: ['redsea'], expectedChinese: '红海' },
+])
 
 export function admin1DetailProfile(unitCount) {
   if (unitCount <= 25) return 'adm1_le25'
@@ -73,6 +90,7 @@ export function buildPresentationAdministration(options) {
     controlledLabels,
     cldrSnapshotPath,
     officialNameOverridesPath,
+    nameQualityReportPath,
   } = options
 
   const cgazAdmin1Path = join(workDir, 'presentation-cgaz-adm1.geojson')
@@ -102,6 +120,7 @@ export function buildPresentationAdministration(options) {
   const nameResolver = buildPresentationNameResolver({
     countries,
     controlledLabels,
+    canonicalAdmin1: businessAdmin1,
     cldrSnapshotPath,
     officialOverridesPath: officialNameOverridesPath,
   })
@@ -118,57 +137,99 @@ export function buildPresentationAdministration(options) {
   countryKeyByIso.set('TWN', 'china')
 
   const admin1Features = []
+  const admin1Candidates = []
   const admin1Keys = new Set()
   const sourceSelection = new Map()
   const addAdmin1 = (feature, metadata) => {
     const countryKey = metadata.countryKey
-    const displayNameLocal = String(
+    const displayNameLocal = cleanPresentationLabel(
       metadata.displayNameLocal ?? metadata.displayNameEn ?? '',
-    ).trim()
-    const displayNameEn = String(metadata.displayNameEn ?? displayNameLocal).trim()
-    if (!countryKey || !displayNameLocal || !renderablePolygonGeometry(feature.geometry)) return
-    const baseGeoKey = `${countryKey}|${normalizeKey(displayNameEn || displayNameLocal) || 'region'}`
-    const geoKey = uniqueGeoKey(baseGeoKey, admin1Keys)
-    const sourceGeoKey = String(metadata.sourceGeoKey ?? '')
-    const names = nameResolver.resolve({
+    )
+    const displayNameEn = cleanPresentationLabel(metadata.displayNameEn ?? displayNameLocal)
+    if (!countryKey || !renderablePolygonGeometry(feature.geometry)) return
+    admin1Candidates.push({
+      feature,
+      metadata,
       countryKey,
-      presentationLevel: 'adm1',
-      geoKey,
-      sourceGeoKey,
-      localName: displayNameLocal,
-      aliases: [displayNameEn, ...sourceNameAliases(feature.properties)],
+      displayNameLocal,
+      displayNameEn,
+      sourceAliases: sourceNameAliases(feature.properties),
+      sourceGeoKey: String(metadata.sourceGeoKey ?? ''),
     })
-    admin1Features.push({
-      type: 'Feature',
-      id: geoKey,
-      properties: {
-        country_key: countryKey,
-        geo_key: geoKey,
-        parent_geo_key: countryKey,
-        presentation_level: 'adm1',
-        detail_profile: '',
-        source_level: metadata.sourceLevel,
-        source_geo_key: sourceGeoKey,
-        display_name: names.display_name_zh || names.display_name_local,
-        display_name_local: names.display_name_local,
-        display_name_zh: names.display_name_zh,
-        display_name_en: displayNameEn,
-        name_zh_source: names.name_zh_source,
-        name_zh_verified: names.name_zh_verified,
-        subdivision_code: names.subdivision_code ?? '',
-        zh_draft_status: names.zh_draft_status ?? '',
-        area_km2: round(geometryAreaKm2(feature.geometry), 3),
-        unit_count: 0,
-        density_per_100k_km2: 0,
-        priority: 0,
-      },
-      geometry: feature.geometry,
+  }
+
+  const materializeAdmin1 = () => {
+    const candidates = admin1Candidates.map((candidate) => {
+      const generatedGeoKey = `${candidate.countryKey}|${normalizeKey(candidate.displayNameEn || candidate.displayNameLocal || candidate.sourceAliases[0]) || 'region'}`
+      const baseGeoKey = ADMIN1_GEO_KEY_OVERRIDES[generatedGeoKey] ?? generatedGeoKey
+      const geoKey = uniqueGeoKey(baseGeoKey, admin1Keys)
+      return {
+        ...candidate,
+        geoKey,
+        spatialKey: candidate.sourceGeoKey || geoKey,
+      }
     })
-    if (!sourceSelection.has(countryKey)) {
-      sourceSelection.set(countryKey, {
-        sourceLevel: metadata.sourceLevel,
-        rule: ADMIN1_EXCEPTIONS[countryKey]?.rule ?? 'default-cgaz-adm1',
+    nameResolver.prepareSpatialMatches(
+      candidates.map((candidate) => ({
+        countryKey: candidate.countryKey,
+        spatialKey: candidate.spatialKey,
+        geometry: candidate.feature.geometry,
+      })),
+    )
+    for (const candidate of candidates) {
+      const {
+        feature,
+        metadata,
+        countryKey,
+        displayNameLocal,
+        displayNameEn,
+        sourceAliases,
+        sourceGeoKey,
+        geoKey,
+        spatialKey,
+      } = candidate
+      const names = nameResolver.resolve({
+        countryKey,
+        presentationLevel: 'adm1',
+        geoKey,
+        sourceGeoKey,
+        localName: displayNameLocal,
+        aliases: [displayNameEn, ...sourceAliases],
+        spatialKey,
       })
+      admin1Features.push({
+        type: 'Feature',
+        id: geoKey,
+        properties: {
+          country_key: countryKey,
+          geo_key: geoKey,
+          parent_geo_key: countryKey,
+          presentation_level: 'adm1',
+          detail_profile: '',
+          source_level: metadata.sourceLevel,
+          source_geo_key: sourceGeoKey,
+          display_name: names.display_name_zh || names.display_name_local,
+          display_name_local: names.display_name_local,
+          display_name_zh: names.display_name_zh,
+          display_name_en: names.display_name_en,
+          name_zh_source: names.name_zh_source,
+          name_zh_verified: names.name_zh_verified,
+          name_zh_reference_key: names.name_zh_reference_key ?? '',
+          subdivision_code: names.subdivision_code ?? '',
+          zh_draft_status: names.zh_draft_status ?? '',
+          area_km2: round(geometryAreaKm2(feature.geometry), 3),
+          unit_count: 0,
+          density_per_100k_km2: 0,
+          priority: 0,
+        },
+        geometry: feature.geometry,
+      })
+      if (!sourceSelection.has(countryKey)) {
+        sourceSelection.set(countryKey, {
+          sourceLevel: metadata.sourceLevel,
+          rule: ADMIN1_EXCEPTIONS[countryKey]?.rule ?? 'default-cgaz-adm1',
+        })
+      }
     }
   }
 
@@ -206,7 +267,7 @@ export function buildPresentationAdministration(options) {
     })
   }
 
-  const admin1ByCountry = groupBy(admin1Features, (feature) => feature.properties.country_key)
+  const admin1ByCountry = groupBy(admin1Candidates, (candidate) => candidate.countryKey)
   const fallbackAdmin1ByCountry = groupBy(businessAdmin1.features ?? [], (feature) =>
     canonicalCountryKey(feature.properties?.country_key),
   )
@@ -233,6 +294,9 @@ export function buildPresentationAdministration(options) {
     }
   }
 
+  materializeAdmin1()
+  const manyToOneNameAudit = rejectVerifiedManyToOneNames(admin1Features)
+
   const finalAdmin1ByCountry = groupBy(admin1Features, (feature) => feature.properties.country_key)
   for (const [countryKey, features] of finalAdmin1ByCountry) {
     const profile = countryKey === 'china' ? 'china' : admin1DetailProfile(features.length)
@@ -254,6 +318,15 @@ export function buildPresentationAdministration(options) {
       geometryAreaKm2(feature.geometry),
     ]),
   )
+  const admin1SubdivisionCodesByCountry = new Map()
+  for (const feature of admin1Features) {
+    const props = feature.properties ?? {}
+    const subdivisionCode = String(props.subdivision_code ?? '').trim()
+    if (!subdivisionCode || props.name_zh_verified !== true) continue
+    const codes = admin1SubdivisionCodesByCountry.get(props.country_key) ?? new Set()
+    codes.add(subdivisionCode)
+    admin1SubdivisionCodesByCountry.set(props.country_key, codes)
+  }
   const admin2Candidates = []
   for (const feature of worldCities.features ?? []) {
     const countryKey = canonicalCountryKey(feature.properties?.country_key)
@@ -261,8 +334,18 @@ export function buildPresentationAdministration(options) {
     admin2Candidates.push({
       feature,
       countryKey,
-      displayNameLocal: feature.properties?.display_name ?? feature.properties?.name,
-      displayNameEn: feature.properties?.name ?? feature.properties?.display_name,
+      displayNameLocal:
+        feature.properties?.display_name_local ??
+        feature.properties?.display_name ??
+        feature.properties?.name,
+      displayNameEn:
+        feature.properties?.display_name_en ??
+        feature.properties?.name ??
+        feature.properties?.display_name,
+      displayNameZh: feature.properties?.display_name_zh,
+      nameZhSource: feature.properties?.name_zh_source,
+      nameZhVerified: feature.properties?.name_zh_verified,
+      subdivisionCode: feature.properties?.subdivision_code,
       sourceLevel: feature.properties?.source_level ?? 'CGAZ_ADM2',
       sourceGeoKey: feature.properties?.geo_key,
       edgeSource: 'world-city',
@@ -297,27 +380,44 @@ export function buildPresentationAdministration(options) {
   const unmatchedAdmin2 = []
   for (const candidate of admin2Candidates) {
     const parents = finalAdmin1ByCountry.get(candidate.countryKey) ?? []
-    const parent = presentationParent(candidate.feature.geometry, parents)
+    const parent = presentationParent(candidate.feature.geometry, parents, candidate.sourceGeoKey)
     if (!parent) {
       unmatchedAdmin2.push(String(candidate.sourceGeoKey ?? candidate.displayNameEn ?? ''))
       continue
     }
-    const displayNameLocal = String(
+    const displayNameLocal = cleanPresentationLabel(
       candidate.displayNameLocal ?? candidate.displayNameEn ?? '',
-    ).trim()
-    const displayNameEn = String(candidate.displayNameEn ?? displayNameLocal).trim()
-    if (!displayNameLocal || !renderablePolygonGeometry(candidate.feature.geometry)) continue
-    const baseGeoKey = `${parent.properties.geo_key}|${normalizeKey(displayNameEn || displayNameLocal) || 'region'}`
-    const geoKey = uniqueGeoKey(baseGeoKey, admin2Keys)
+    )
+    const displayNameEn = cleanPresentationLabel(candidate.displayNameEn ?? displayNameLocal)
+    if (!renderablePolygonGeometry(candidate.feature.geometry)) continue
+    const sourceAliases = sourceNameAliases(candidate.feature.properties)
+    const baseGeoKey = `${parent.properties.geo_key}|${normalizeKey(displayNameEn || displayNameLocal || sourceAliases[0]) || 'region'}`
     const sourceGeoKey = String(candidate.sourceGeoKey ?? '')
-    const names = nameResolver.resolve({
-      countryKey: candidate.countryKey,
-      presentationLevel: 'adm2',
-      geoKey,
-      sourceGeoKey,
-      localName: displayNameLocal,
-      aliases: [displayNameEn, ...sourceNameAliases(candidate.feature.properties)],
-    })
+    const geoKey = uniqueGeoKey(sourceGeoKey || baseGeoKey, admin2Keys)
+    const suppliedChinese = cleanPresentationLabel(candidate.displayNameZh ?? '')
+    const names =
+      suppliedChinese && candidate.nameZhVerified && candidate.nameZhSource
+        ? {
+            display_name_zh: suppliedChinese,
+            display_name_local: displayNameLocal,
+            display_name_en: displayNameEn,
+            name_zh_source: String(candidate.nameZhSource),
+            name_zh_verified: true,
+            name_zh_reference_key: sourceGeoKey,
+            subdivision_code: String(candidate.subdivisionCode ?? ''),
+            zh_draft_status: '',
+          }
+        : nameResolver.resolve({
+            countryKey: candidate.countryKey,
+            presentationLevel: 'adm2',
+            geoKey,
+            sourceGeoKey,
+            localName: displayNameLocal,
+            aliases: [displayNameEn, ...sourceAliases],
+            blockedCldrSubdivisionCodes: admin1SubdivisionCodesByCountry.get(
+              candidate.countryKey,
+            ),
+          })
     admin2Features.push({
       type: 'Feature',
       id: geoKey,
@@ -333,9 +433,10 @@ export function buildPresentationAdministration(options) {
         display_name: names.display_name_zh || names.display_name_local,
         display_name_local: names.display_name_local,
         display_name_zh: names.display_name_zh,
-        display_name_en: displayNameEn,
+        display_name_en: names.display_name_en,
         name_zh_source: names.name_zh_source,
         name_zh_verified: names.name_zh_verified,
+        name_zh_reference_key: names.name_zh_reference_key ?? '',
         subdivision_code: names.subdivision_code ?? '',
         zh_draft_status: names.zh_draft_status ?? '',
         area_km2: round(geometryAreaKm2(candidate.feature.geometry), 3),
@@ -404,11 +505,18 @@ export function buildPresentationAdministration(options) {
         admin2VerifiedChineseCount: verifiedChineseCount(admin2),
         admin2OriginalFallbackCount: originalNameFallbackCount(admin2),
         admin2DetailProfile: admin2[0]?.properties.detail_profile ?? '',
+        admin2BoundaryMinZoom: admin2.length ? PRESENTATION_ADMIN2_BOUNDARY_ZOOM : null,
+        admin2LabelMinZoom: admin2.length
+          ? presentationLabelMinZoom(PRESENTATION_ADMIN2_ZOOM[admin2[0]?.properties.detail_profile])
+          : null,
+        // Kept for compatibility with older reports; this is the label threshold.
         admin2MinZoom: PRESENTATION_ADMIN2_ZOOM[admin2[0]?.properties.detail_profile] ?? null,
         admin2DensityPer100kKm2: admin2[0]?.properties.density_per_100k_km2 ?? 0,
       }
     })
 
+  const nameResolution = nameResolver.report()
+  const egyptNameRegression = egyptNameRegressionAudit(admin1Features)
   const report = {
     policyVersion: 1,
     defaultAdmin1Source: 'CGAZ_ADM1',
@@ -419,6 +527,7 @@ export function buildPresentationAdministration(options) {
     unmatchedAdmin2Sample: unmatchedAdmin2.slice(0, 20),
     detailZooms: {
       admin1: PRESENTATION_ADMIN1_ZOOM,
+      admin2Boundary: PRESENTATION_ADMIN2_BOUNDARY_ZOOM,
       admin2: PRESENTATION_ADMIN2_ZOOM,
     },
     labelCoverage: {
@@ -433,13 +542,27 @@ export function buildPresentationAdministration(options) {
       chinaAdmin1NonChineseDisplayCount: nonChineseChinaDisplayCount(admin1Labels),
       chinaAdmin2NonChineseDisplayCount: nonChineseChinaDisplayCount(admin2Labels),
     },
-    nameResolution: nameResolver.report(),
+    labelSanitizationAudit: {
+      corruptVisibleLabelCount: corruptVisibleLabelCount([admin1Labels, admin2Labels]),
+      hiddenLabelCount:
+        admin1Labels.features.length -
+        labelCoverage(admin1Labels).named +
+        (admin2Labels.features.length - labelCoverage(admin2Labels).named),
+    },
+    nameResolution,
+    nameRegressionAudit: {
+      egypt: egyptNameRegression,
+    },
+    manyToOneNameAudit,
     edgeAudit: {
       admin1SegmentCount: admin1BoundaryResult.segmentKeys.size,
       admin2SegmentCount: admin2BoundaryResult.segmentKeys.size,
       rejectedCrossParentSegments: admin2BoundaryResult.rejectedCrossParentSegments,
+      rejectedCrossSourceParentSegments: admin2BoundaryResult.rejectedCrossSourceParentSegments,
       removedAdm1CoincidentSegments: admin2BoundaryResult.removedAdm1CoincidentSegments,
       removedDuplicateSegments: admin2BoundaryResult.removedDuplicateSegments,
+      sourceSharedSegmentCount: admin2BoundaryResult.expectedSourceSegmentKeys.size,
+      sourceSharedEdgeMissingCount: admin2BoundaryResult.missingSourceSegmentCount,
       coincidentSegmentCount: intersectionSize(
         admin1BoundaryResult.segmentKeys,
         admin2BoundaryResult.segmentKeys,
@@ -447,14 +570,45 @@ export function buildPresentationAdministration(options) {
     },
     countryPolicies,
   }
-  if (report.labelCoverage.admin1.rate !== 1 || report.labelCoverage.admin2.rate !== 1) {
-    throw new Error('Presentation administration contains an empty label')
+  if (nameQualityReportPath) {
+    writeFileSync(nameQualityReportPath, `${JSON.stringify(report, null, 2)}\n`)
   }
   if (
     report.nameCoverage.admin1.unverifiedChineseFieldCount !== 0 ||
     report.nameCoverage.admin2.unverifiedChineseFieldCount !== 0
   ) {
     throw new Error('Presentation administration contains an unverified Chinese name')
+  }
+  if (report.nameCoverage.admin1.verifiedChineseRate < 0.97) {
+    throw new Error(
+      `Presentation ADM1 verified Chinese coverage is below 97%: ${report.nameCoverage.admin1.verifiedChineseRate}; ${JSON.stringify({ sourceDistribution: report.nameCoverage.admin1.sourceDistribution, nameResolution: report.nameResolution, fallbackSample: report.nameCoverage.admin1.originalFallbackSample })}`,
+    )
+  }
+  // Exact CLDR names that are already claimed by a verified ADM1 unit are
+  // intentionally rejected at ADM2. This prevents names such as Washington
+  // County from inheriting the state label 华盛顿州 while retaining verified
+  // ADM2 CLDR names whose codes do not collide with the parent level.
+  if (report.nameCoverage.admin2.verifiedChineseRate < 0.034) {
+    throw new Error(
+      `Presentation ADM2 verified Chinese coverage regressed: ${report.nameCoverage.admin2.verifiedChineseRate}`,
+    )
+  }
+  if (report.labelSanitizationAudit.corruptVisibleLabelCount !== 0) {
+    throw new Error('Presentation administration contains a visible corrupt label')
+  }
+  if (report.manyToOneNameAudit.remainingVerifiedDuplicateCount !== 0) {
+    throw new Error(
+      `Presentation administration contains ${report.manyToOneNameAudit.remainingVerifiedDuplicateCount} verified ADM1 many-to-one name assignments`,
+    )
+  }
+  if (
+    report.nameRegressionAudit.egypt.admin1Count !== 27 ||
+    report.nameRegressionAudit.egypt.redSeaChineseCount !== 1 ||
+    report.nameRegressionAudit.egypt.mismatches.length !== 0
+  ) {
+    throw new Error(
+      `Egypt ADM1 name regression failed: ${JSON.stringify(report.nameRegressionAudit.egypt)}`,
+    )
   }
   if (
     report.languageTransitionAudit.chinaAdmin1NonChineseDisplayCount !== 0 ||
@@ -465,11 +619,18 @@ export function buildPresentationAdministration(options) {
   if (report.edgeAudit.coincidentSegmentCount !== 0) {
     throw new Error('Presentation ADM1 and ADM2 contain coincident line segments')
   }
+  if (report.edgeAudit.sourceSharedEdgeMissingCount !== 0) {
+    throw new Error(
+      `Presentation ADM2 is missing ${report.edgeAudit.sourceSharedEdgeMissingCount} eligible source shared segments`,
+    )
+  }
 
   return {
     collections: {
+      admin1Polygons: { type: 'FeatureCollection', features: admin1Features },
       admin1Boundaries: admin1BoundaryResult.collection,
       admin1Labels,
+      admin2Polygons: { type: 'FeatureCollection', features: admin2Features },
       admin2Boundaries: admin2BoundaryResult.collection,
       admin2Labels,
     },
@@ -481,6 +642,11 @@ export function writePresentationCollection(workDir, id, collection) {
   const path = join(workDir, `${id}.geojson`)
   writeFileSync(path, `${JSON.stringify(collection)}\n`)
   return { path, count: collection.features?.length ?? 0 }
+}
+
+export function presentationLabelMinZoom(profileStart) {
+  const start = Number(profileStart)
+  return Number.isFinite(start) ? Number(Math.min(8, start + 0.2).toFixed(2)) : null
 }
 
 function internalBoundaryCollection(features, presentationLevel) {
@@ -509,6 +675,7 @@ function internalBoundaryCollection(features, presentationLevel) {
     const leftFeature = featureByKey.get(owners[0])
     const rightFeature = featureByKey.get(owners[1])
     if (!leftFeature || !rightFeature) continue
+    if (leftFeature.properties.country_key !== rightFeature.properties.country_key) continue
     const pairKey = `${owners[0]}|~|${owners[1]}`
     const group = groups.get(pairKey) ?? {
       leftFeature,
@@ -550,7 +717,9 @@ function internalBoundaryCollection(features, presentationLevel) {
 function filteredAdmin2BoundaryCollection(edgeSources, childBySource, admin1Segments) {
   const features = []
   const segmentKeys = new Set()
+  const expectedSourceSegmentKeys = new Set()
   let rejectedCrossParentSegments = 0
+  let rejectedCrossSourceParentSegments = 0
   let removedAdm1CoincidentSegments = 0
   let removedDuplicateSegments = 0
   for (const source of edgeSources) {
@@ -566,6 +735,13 @@ function filteredAdmin2BoundaryCollection(edgeSources, childBySource, admin1Segm
         rejectedCrossParentSegments += segmentCount
         continue
       }
+      const leftSourceParent = sourceAdministrativeParentKey(left.properties.source_geo_key)
+      const rightSourceParent = sourceAdministrativeParentKey(right.properties.source_geo_key)
+      if (leftSourceParent && rightSourceParent && leftSourceParent !== rightSourceParent) {
+        rejectedCrossParentSegments += segmentCount
+        rejectedCrossSourceParentSegments += segmentCount
+        continue
+      }
       const lines = []
       for (const line of geometryLines(feature.geometry)) {
         for (let index = 1; index < line.length; index += 1) {
@@ -577,6 +753,7 @@ function filteredAdmin2BoundaryCollection(edgeSources, childBySource, admin1Segm
             removedAdm1CoincidentSegments += 1
             continue
           }
+          expectedSourceSegmentKeys.add(key)
           if (segmentKeys.has(key)) {
             removedDuplicateSegments += 1
             continue
@@ -608,12 +785,18 @@ function filteredAdmin2BoundaryCollection(edgeSources, childBySource, admin1Segm
       })
     }
   }
+  const missingSourceSegmentCount = [...expectedSourceSegmentKeys].filter(
+    (key) => !segmentKeys.has(key),
+  ).length
   return {
     collection: { type: 'FeatureCollection', features },
     segmentKeys,
     rejectedCrossParentSegments,
+    rejectedCrossSourceParentSegments,
     removedAdm1CoincidentSegments,
     removedDuplicateSegments,
+    expectedSourceSegmentKeys,
+    missingSourceSegmentCount,
   }
 }
 
@@ -634,7 +817,18 @@ function labelCollection(features) {
   }
 }
 
-function presentationParent(geometry, parents) {
+function presentationParent(geometry, parents, sourceGeoKey = '') {
+  const sourceKey = String(sourceGeoKey ?? '').trim()
+  const sourceParentKey = sourceAdministrativeParentKey(sourceKey)
+  const sourceMatched = parents.find((parent) => {
+    const geoKey = String(parent.properties?.geo_key ?? '')
+    const parentSourceKey = String(parent.properties?.source_geo_key ?? '')
+    return (
+      (sourceParentKey && (geoKey === sourceParentKey || parentSourceKey === sourceParentKey)) ||
+      (sourceKey && (geoKey === sourceKey || parentSourceKey === sourceKey))
+    )
+  })
+  if (sourceMatched) return sourceMatched
   const point = geometryInteriorPoint(geometry)
   if (point) {
     const inside = parents
@@ -653,6 +847,14 @@ function presentationParent(geometry, parents) {
       .filter((item) => item.overlap > 0)
       .sort((left, right) => right.overlap - left.overlap)[0]?.parent ?? null
   )
+}
+
+function sourceAdministrativeParentKey(sourceGeoKey) {
+  const parts = String(sourceGeoKey ?? '')
+    .split('|')
+    .map((part) => part.trim())
+    .filter(Boolean)
+  return parts.length >= 2 ? parts.slice(0, -1).join('|') : ''
 }
 
 function sourceNameAliases(props = {}) {
@@ -715,6 +917,28 @@ function nameCoverage(collection) {
     originalFallbackRate: total ? round(originalFallback / total, 6) : 0,
     unverifiedChineseFieldCount,
     sourceDistribution,
+    originalFallbackSample: features
+      .filter((feature) => !String(feature.properties?.display_name_zh ?? '').trim())
+      .slice(0, 500)
+      .map((feature) => ({
+        countryKey: feature.properties?.country_key,
+        geoKey: feature.properties?.geo_key,
+        sourceGeoKey: feature.properties?.source_geo_key,
+        displayNameLocal: feature.properties?.display_name_local,
+        displayNameEn: feature.properties?.display_name_en,
+      })),
+    originalFallbackByCountry: Object.fromEntries(
+      [
+        ...groupBy(
+          features.filter((feature) => !String(feature.properties?.display_name_zh ?? '').trim()),
+          (feature) => feature.properties?.country_key,
+        ),
+      ]
+        .map(([countryKey, countryFeatures]) => [countryKey, countryFeatures.length])
+        .sort(
+          (left, right) => right[1] - left[1] || String(left[0]).localeCompare(String(right[0])),
+        ),
+    ),
   }
 }
 
@@ -727,9 +951,8 @@ function verifiedChineseCount(features) {
 }
 
 function originalNameFallbackCount(features) {
-  return features.filter(
-    (feature) => !String(feature.properties?.display_name_zh ?? '').trim(),
-  ).length
+  return features.filter((feature) => !String(feature.properties?.display_name_zh ?? '').trim())
+    .length
 }
 
 function nonChineseChinaDisplayCount(collection) {
@@ -739,6 +962,104 @@ function nonChineseChinaDisplayCount(collection) {
     const displayName = props.display_name_zh || props.display_name_local || props.display_name_en
     return !hasCjk(displayName)
   }).length
+}
+
+function corruptVisibleLabelCount(collections) {
+  return collections
+    .flatMap((collection) => collection.features ?? [])
+    .filter((feature) =>
+      [
+        feature.properties?.display_name,
+        feature.properties?.display_name_zh,
+        feature.properties?.display_name_local,
+        feature.properties?.display_name_en,
+      ]
+        .filter(Boolean)
+        .some((value) => !cleanPresentationLabel(value)),
+    ).length
+}
+
+function egyptNameRegressionAudit(features) {
+  const egypt = features.filter((feature) => feature.properties?.country_key === 'egypt')
+  const records = egypt.map((feature) => ({
+    englishKey: normalizeKey(
+      feature.properties?.display_name_en || feature.properties?.display_name_local,
+    ).replace(/(?:governorate|governate|province|region)$/, ''),
+    chinese: String(feature.properties?.display_name_zh ?? ''),
+    source: String(feature.properties?.name_zh_source ?? ''),
+  }))
+  const mismatches = []
+  for (const expected of EGYPT_ADM1_REGRESSION) {
+    const matches = records.filter((record) => expected.aliases.includes(record.englishKey))
+    if (matches.length !== 1 || matches[0].chinese !== expected.expectedChinese) {
+      mismatches.push({ expected, matches })
+    }
+  }
+  return {
+    admin1Count: egypt.length,
+    redSeaChineseCount: records.filter((record) => record.chinese === '红海').length,
+    mismatches,
+  }
+}
+
+function rejectVerifiedManyToOneNames(features) {
+  const groups = groupBy(
+    features.filter(
+      (feature) =>
+        feature.properties?.name_zh_verified === true &&
+        String(feature.properties?.display_name_zh ?? '').trim(),
+    ),
+    (feature) => `${feature.properties.country_key}|${feature.properties.display_name_zh}`,
+  )
+  const rejectedGroups = []
+  for (const [key, group] of groups) {
+    const normalizedSourceNames = new Set(
+      group.map((feature) =>
+        normalizeKey(
+          feature.properties?.display_name_en || feature.properties?.display_name_local || '',
+        ),
+      ),
+    )
+    if (normalizedSourceNames.size < 2) continue
+    rejectedGroups.push({
+      key,
+      geoKeys: group.map((feature) => feature.properties?.geo_key),
+      sources: group.map((feature) => feature.properties?.name_zh_source),
+    })
+    for (const feature of group) {
+      const props = feature.properties
+      props.display_name_zh = ''
+      props.display_name = props.display_name_local || props.display_name_en || ''
+      props.name_zh_verified = false
+      props.name_zh_source = 'rejected-many-to-one'
+      props.name_zh_reference_key = ''
+    }
+  }
+  const remainingVerifiedDuplicateCount = [
+    ...groupBy(
+      features.filter(
+        (feature) =>
+          feature.properties?.name_zh_verified === true &&
+          String(feature.properties?.display_name_zh ?? '').trim(),
+      ),
+      (feature) => `${feature.properties.country_key}|${feature.properties.display_name_zh}`,
+    ).values(),
+  ].filter(
+    (group) =>
+      new Set(
+        group.map((feature) =>
+          normalizeKey(
+            feature.properties?.display_name_en || feature.properties?.display_name_local || '',
+          ),
+        ),
+      ).size > 1,
+  ).length
+  return {
+    rejectedGroupCount: rejectedGroups.length,
+    rejectedFeatureCount: rejectedGroups.reduce((sum, group) => sum + group.geoKeys.length, 0),
+    remainingVerifiedDuplicateCount,
+    rejectedSample: rejectedGroups.slice(0, 20),
+  }
 }
 
 function assertCountryCount(index, countryKey, expected) {

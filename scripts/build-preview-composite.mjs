@@ -18,10 +18,15 @@ import { fileURLToPath } from 'node:url'
 
 import { CONTINENT_COUNTRY_SAMPLES } from './preview-map-audit-config.mjs'
 import { applyControlledLabelPointOverrides } from './preview-label-overrides.mjs'
+import { auditPreviewTileBoundaries } from './audit-preview-tile-boundaries.mjs'
 import {
   buildPresentationAdministration,
+  PRESENTATION_ADMIN2_BOUNDARY_ZOOM,
+  PRESENTATION_ADMIN2_ZOOM,
+  presentationLabelMinZoom,
   writePresentationCollection,
 } from './presentation-admin.mjs'
+import { cleanPresentationLabel } from './presentation-names.mjs'
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const sourceDir = resolve(
@@ -37,11 +42,14 @@ const outputArchive = resolve(
 )
 const generatedDir = join(rootDir, 'public/tiles/generated')
 const renderDir = join(rootDir, 'public/geo/render')
+const regionIndexPath = join(renderDir, 'region-index.json')
 const reportPath = join(generatedDir, 'preview-composite-report.json')
+const boundaryLegalEndpointsPath = join(generatedDir, 'boundary-legal-endpoints.json')
 const workDir = mkdtempSync(join(tmpdir(), 'wbe-preview-composite-'))
 const controlledLabelsPath = join(sourceDir, 'controlled-labels.geojson')
 const cldrSnapshotPath = join(sourceDir, 'cldr-subdivisions-48.json')
 const officialNameOverridesPath = join(sourceDir, 'official-admin-name-zh.json')
+const boundarySourceManifestPath = join(sourceDir, 'boundary-source-manifest.json')
 const worldCountriesPath = join(renderDir, 'world-countries.geojson')
 const worldCountryLinesPath = join(renderDir, 'world-countries-lines.geojson')
 const worldAdmin1Path = join(renderDir, 'world-admin1.geojson')
@@ -82,8 +90,19 @@ const BOUNDARY_DEDUPLICATION = {
   maxAngleDegrees: 8,
   minOverlapPx: 2,
   minCandidateOverlapRatio: 0.7,
-  gridSizePx: 8,
+  gridSizePx: 16,
+  partialNearSegmentRemoval: false,
+  ownershipPolicy: 'exact-segment-first-owner',
 }
+const RENDERED_BOUNDARY_LAYER_RANGES = Object.freeze({
+  country: [3, 8],
+  admin1: [4, 8],
+  // Fractional zoom 6.35 is rendered from z6 vector tiles, so child
+  // boundaries must participate in ownership/reconciliation from z6.
+  admin2: [6, 8],
+  chinaProvince: [4, 8],
+  chinaCity: [6, 8],
+})
 
 const layerSpecs = [
   {
@@ -125,18 +144,6 @@ const layerSpecs = [
     maxzoom: 8,
   },
   {
-    id: 'preview_region_outlines',
-    transform: 'region-outlines',
-    minzoom: 0,
-    maxzoom: 8,
-  },
-  {
-    id: 'preview_region_display_outlines',
-    transform: 'region-display-outlines',
-    minzoom: 0,
-    maxzoom: 8,
-  },
-  {
     id: 'preview_region_polygons',
     transform: 'region-polygons',
     minzoom: 0,
@@ -165,18 +172,23 @@ const layerSpecs = [
 
 try {
   requireCommands(['tippecanoe', 'tile-join', 'pmtiles'])
+  mkdirSync(generatedDir, { recursive: true })
   ;[
     ...directArchives,
     ...canonicalBoundaryInputs,
     cgazAdmin1ShapePath,
     mapshaperBin,
+    regionIndexPath,
     cldrSnapshotPath,
     officialNameOverridesPath,
+    boundarySourceManifestPath,
     ...layerSpecs.filter((spec) => spec.file).map((spec) => join(sourceDir, spec.file)),
     ...layerSpecs.filter((spec) => spec.input).map((spec) => spec.input),
   ].forEach(requireFile)
 
   const worldCountries = JSON.parse(readFileSync(worldCountriesPath, 'utf8'))
+  const boundarySourceManifest = JSON.parse(readFileSync(boundarySourceManifestPath, 'utf8'))
+  validateBoundarySourceManifest(boundarySourceManifest)
   const rawControlledLabels = JSON.parse(readFileSync(controlledLabelsPath, 'utf8'))
   const { collection: controlledLabels, applied: controlledLabelOverrides } =
     applyControlledLabelPointOverrides(rawControlledLabels)
@@ -197,7 +209,13 @@ try {
     controlledLabels,
     cldrSnapshotPath,
     officialNameOverridesPath,
+    nameQualityReportPath: join(generatedDir, 'presentation-name-quality-report.json'),
   })
+  const enrichedRegionIndex = enrichPresentationRegionIndex(
+    JSON.parse(readFileSync(regionIndexPath, 'utf8')),
+    presentationAdministration.collections,
+  )
+  validateEnrichedRegionIndex(enrichedRegionIndex)
   const renderedBoundaryCleanup = cleanRenderedBoundaryCollections({
     country: JSON.parse(readFileSync(worldCountryLinesPath, 'utf8')),
     admin1: filterCollection(
@@ -214,19 +232,39 @@ try {
   const renderedBoundaryOverlapAudit = auditRenderedBoundaryOverlaps({
     ...renderedBoundaryCleanup.collections,
   })
+  writeFileSync(
+    join(generatedDir, 'boundary-exact-overlap-diagnostic.json'),
+    `${JSON.stringify(renderedBoundaryOverlapAudit, null, 2)}\n`,
+  )
   if (renderedBoundaryOverlapAudit.totalCoincidentSegmentCount !== 0) {
     throw new Error(
-      `Visible boundary layers contain ${renderedBoundaryOverlapAudit.totalCoincidentSegmentCount} coincident segments`,
+      `Visible boundary layers contain ${renderedBoundaryOverlapAudit.totalCoincidentSegmentCount} coincident segments: ${JSON.stringify(
+        renderedBoundaryOverlapAudit.pairs.filter((pair) => pair.coincidentSegmentCount),
+      )}`,
     )
   }
   const tolerantBoundaryOverlapAudit = auditTolerantBoundaryOverlaps(
     renderedBoundaryCleanup.collections,
   )
+  writeFileSync(
+    join(generatedDir, 'boundary-overlap-diagnostic.json'),
+    `${JSON.stringify(tolerantBoundaryOverlapAudit, null, 2)}\n`,
+  )
   if (tolerantBoundaryOverlapAudit.totalDuplicateLikeSegmentCount !== 0) {
+    const failures = {
+      layers: Object.fromEntries(
+        Object.entries(tolerantBoundaryOverlapAudit.layers).filter(([, value]) => value.total),
+      ),
+      pairs: tolerantBoundaryOverlapAudit.pairs.filter((pair) => pair.total),
+    }
     throw new Error(
-      `Visible boundary layers contain ${tolerantBoundaryOverlapAudit.totalDuplicateLikeSegmentCount} duplicate-like segments within the Z8 tolerance`,
+      `Visible boundary layers contain ${tolerantBoundaryOverlapAudit.totalDuplicateLikeSegmentCount} duplicate-like segments within the Z8 tolerance: ${JSON.stringify(failures)}`,
     )
   }
+  const boundaryLegalEndpoints = buildBoundaryLegalEndpointManifest(
+    renderedBoundaryCleanup.collections,
+  )
+  writeFileSync(boundaryLegalEndpointsPath, `${JSON.stringify(boundaryLegalEndpoints)}\n`)
   const labelCounts = Object.fromEntries(
     ['country', 'admin1', 'city'].map((level) => [
       level,
@@ -234,8 +272,6 @@ try {
         .length,
     ]),
   )
-  let regionOutlineCoverage = null
-  let regionDisplayOutlineAudit = null
   let regionPolygonCoverage = null
   const layerFeatureCounts = {}
   const cleanedBoundaryLayerCollections = {
@@ -280,16 +316,6 @@ try {
       )
       input = result.path
       layerFeatureCounts[spec.id] = result.count
-    } else if (spec.transform === 'region-outlines') {
-      const result = writeRegionOutlineCollection(spec)
-      input = result.path
-      regionOutlineCoverage = result.coverage
-      layerFeatureCounts[spec.id] = result.count
-    } else if (spec.transform === 'region-display-outlines') {
-      const result = writeRegionDisplayOutlineCollection(spec)
-      input = result.path
-      regionDisplayOutlineAudit = result.audit
-      layerFeatureCounts[spec.id] = result.count
     } else if (spec.transform === 'region-polygons') {
       const result = writeRegionPolygonCollection(spec)
       input = result.path
@@ -316,12 +342,13 @@ try {
       '--no-feature-limit',
       '--no-tile-size-limit',
     ]
-    if (spec.transform === 'region-display-outlines') {
-      args.push('--simplification', '1.5', '--simplification-at-maximum-zoom', '0.25')
-    } else if (spec.transform === 'region-polygons') {
+    if (spec.transform === 'region-polygons') {
       args.push('--simplification', '1', '--simplification-at-maximum-zoom', '0.15')
     } else {
       args.push('--no-line-simplification')
+    }
+    if (spec.id.includes('boundar') || spec.id === 'preview_country_overview') {
+      args.push('--full-detail', '15', '--low-detail', '15', '--minimum-detail', '15')
     }
     if (spec.featureLevel || spec.transform?.endsWith('-labels')) args.push('--drop-rate', '1')
     args.push(input)
@@ -356,10 +383,28 @@ try {
   ])
   run('pmtiles', ['verify', '--quiet', temporaryOutput])
   renameSync(temporaryOutput, outputArchive)
+  const boundaryTileOverlapAudit = await auditPreviewTileBoundaries(outputArchive, {
+    legalEndpointsPath: boundaryLegalEndpointsPath,
+  })
+  writeFileSync(
+    join(generatedDir, 'boundary-tile-diagnostic.json'),
+    `${JSON.stringify(boundaryTileOverlapAudit, null, 2)}\n`,
+  )
+  if (
+    boundaryTileOverlapAudit.exactDuplicateCount !== 0 ||
+    boundaryTileOverlapAudit.nearDuplicateLikeCount !== 0 ||
+    boundaryTileOverlapAudit.crossLayerOverlapCount !== 0 ||
+    boundaryTileOverlapAudit.interiorDanglingEndpointCount !== 0 ||
+    boundaryTileOverlapAudit.tileSeamDanglingEndpointCount !== 0
+  ) {
+    throw new Error(
+      `Final Z0-Z8 boundary audit failed: exact=${boundaryTileOverlapAudit.exactDuplicateCount}, near=${boundaryTileOverlapAudit.nearDuplicateLikeCount}, cross-layer=${boundaryTileOverlapAudit.crossLayerOverlapCount}, dangling=${boundaryTileOverlapAudit.interiorDanglingEndpointCount}, seam=${boundaryTileOverlapAudit.tileSeamDanglingEndpointCount}`,
+    )
+  }
 
-  mkdirSync(generatedDir, { recursive: true })
   const header = JSON.parse(runCapture('pmtiles', ['show', '--header-json', outputArchive]))
   const metadata = JSON.parse(runCapture('pmtiles', ['show', '--metadata', outputArchive]))
+  writeFileSync(regionIndexPath, `${JSON.stringify(enrichedRegionIndex, null, 2)}\n`)
   const inputs = [
     ...new Set([
       ...directArchives,
@@ -368,6 +413,7 @@ try {
       controlledLabelsPath,
       cldrSnapshotPath,
       officialNameOverridesPath,
+      boundarySourceManifestPath,
       ...layerSpecs.filter((spec) => spec.file).map((spec) => join(sourceDir, spec.file)),
     ]),
   ]
@@ -391,17 +437,13 @@ try {
     countryLabelRepairs,
     controlledLabelOverrides,
     presentationAdministration: presentationAdministration.report,
+    boundarySources: boundarySourceManifest,
     renderedBoundaryCleanup: renderedBoundaryCleanup.report,
     renderedBoundaryOverlapAudit,
     tolerantBoundaryOverlapAudit,
-    regionOutlineCoverage,
-    regionDisplayOutlineAudit,
+    boundaryTileOverlapAudit,
     regionPolygonCoverage,
-    displayOutlineSimplification: {
-      simplification: 1.5,
-      simplificationAtMaximumZoom: 0.25,
-      staticAdministrativeBoundariesUnchanged: true,
-    },
+    regionIndexCoverage: enrichedRegionIndex.presentation,
     previewLayers: layerSpecs.map(({ id, minzoom, maxzoom, featureLevel }) => ({
       id,
       minzoom,
@@ -427,21 +469,33 @@ function filterCollection(collection, predicate) {
 }
 
 function cleanRenderedBoundaryCollections(collections) {
-  const country = cleanBoundaryCollection('country', collections.country, [])
-  const admin1 = cleanBoundaryCollection('admin1', collections.admin1, [
-    { name: 'country', collection: country.collection },
+  const country = deduplicateExactBoundaryCollection('country', collections.country)
+  const admin1Exact = deduplicateExactBoundaryCollection('admin1', collections.admin1)
+  const admin2Exact = deduplicateExactBoundaryCollection('admin2', collections.admin2)
+  const chinaProvinceExact = deduplicateExactBoundaryCollection(
+    'chinaProvince',
+    collections.chinaProvince,
+  )
+  const chinaCityExact = deduplicateExactBoundaryCollection('chinaCity', collections.chinaCity)
+  for (const result of [country, admin1Exact, admin2Exact, chinaProvinceExact, chinaCityExact]) {
+    nodeBoundaryResultAtTileSeams(result)
+  }
+  const admin1 = assignHierarchyBoundaryOwnership('admin1', admin1Exact, [country])
+  const admin2 = assignHierarchyBoundaryOwnership('admin2', admin2Exact, [admin1, country])
+  const chinaProvince = assignHierarchyBoundaryOwnership('chinaProvince', chinaProvinceExact, [
+    country,
   ])
-  const chinaProvince = cleanBoundaryCollection('chinaProvince', collections.chinaProvince, [
-    { name: 'country', collection: country.collection },
+  const chinaCity = assignHierarchyBoundaryOwnership('chinaCity', chinaCityExact, [
+    chinaProvince,
+    country,
   ])
-  const admin2 = cleanBoundaryCollection('admin2', collections.admin2, [
-    { name: 'country', collection: country.collection },
-    { name: 'admin1', collection: admin1.collection },
-  ])
-  const chinaCity = cleanBoundaryCollection('chinaCity', collections.chinaCity, [
-    { name: 'country', collection: country.collection },
-    { name: 'chinaProvince', collection: chinaProvince.collection },
-  ])
+  for (const result of [country, admin1, admin2, chinaProvince, chinaCity]) {
+    nodeBoundaryResultAtTileSeams(result)
+  }
+  enforceFinalExactParentOwnership(admin1, [country])
+  enforceFinalExactParentOwnership(admin2, [admin1, country])
+  enforceFinalExactParentOwnership(chinaProvince, [country])
+  enforceFinalExactParentOwnership(chinaCity, [chinaProvince, country])
   const cleaned = { country, admin1, admin2, chinaProvince, chinaCity }
   return {
     collections: Object.fromEntries(
@@ -459,42 +513,556 @@ function cleanRenderedBoundaryCollections(collections) {
   }
 }
 
-function cleanBoundaryCollection(layerName, collection, higherPrioritySources) {
-  const records = collectBoundarySegments(collection, layerName)
+function nodeBoundaryResultAtTileSeams(result) {
+  result.collection = {
+    type: 'FeatureCollection',
+    features: (result.collection.features ?? []).map((feature) => ({
+      ...feature,
+      geometry: nodeBoundaryGeometryAtTileSeams(feature.geometry),
+    })),
+  }
+  result.report.hierarchyOwnership ??= {}
+  result.report.hierarchyOwnership.tileSeamNodeZoom = BOUNDARY_DEDUPLICATION.zoom
+}
+
+function nodeBoundaryGeometryAtTileSeams(geometry) {
+  const lines = lineCoordinates(geometry).map((line) => {
+    const output = []
+    for (let index = 1; index < line.length; index += 1) {
+      const points = nodeBoundarySegmentAtTileSeams(line[index - 1], line[index])
+      if (!points.length) continue
+      if (!output.length) output.push(points[0])
+      output.push(...points.slice(1))
+    }
+    return output
+  })
+  return {
+    type: lines.length === 1 ? 'LineString' : 'MultiLineString',
+    coordinates: lines.length === 1 ? lines[0] : lines,
+  }
+}
+
+function nodeBoundarySegmentAtTileSeams(start, end) {
+  if (!Array.isArray(start) || !Array.isArray(end)) return []
+  if (Math.abs(Number(end[0]) - Number(start[0])) > 180) return [start, end]
+  const zoom = BOUNDARY_DEDUPLICATION.zoom
+  const pixelStart = boundaryWorldPixel(start, zoom)
+  const pixelEnd = boundaryWorldPixel(end, zoom)
+  const ratios = new Set([0, 1])
+  for (const axis of [0, 1]) {
+    const left = pixelStart[axis]
+    const right = pixelEnd[axis]
+    const delta = right - left
+    if (Math.abs(delta) < 1e-9) continue
+    const minimumBoundary = Math.floor(Math.min(left, right) / 512) + 1
+    const maximumBoundary = Math.ceil(Math.max(left, right) / 512) - 1
+    for (let boundary = minimumBoundary; boundary <= maximumBoundary; boundary += 1) {
+      const ratio = (boundary * 512 - left) / delta
+      if (ratio > 1e-9 && ratio < 1 - 1e-9) ratios.add(ratio)
+    }
+  }
+  const coordinates = [...ratios]
+    .sort((left, right) => left - right)
+    .map((ratio) =>
+      boundaryWorldPixelToCoordinate(
+        [
+          pixelStart[0] + (pixelEnd[0] - pixelStart[0]) * ratio,
+          pixelStart[1] + (pixelEnd[1] - pixelStart[1]) * ratio,
+        ],
+        zoom,
+      ),
+    )
+  return coordinates.filter(
+    (coordinate, index) =>
+      index === 0 ||
+      pointDistance(
+        boundaryWorldPixel(coordinates[index - 1], zoom),
+        boundaryWorldPixel(coordinate, zoom),
+      ) > 1e-6,
+  )
+}
+
+function boundaryWorldPixelToCoordinate([x, y], zoom) {
+  const size = BOUNDARY_DEDUPLICATION.tileSize * 2 ** zoom
+  const longitude = (x / size) * 360 - 180
+  const mercator = Math.PI - (2 * Math.PI * y) / size
+  const latitude = (Math.atan(Math.sinh(mercator)) * 180) / Math.PI
+  return [longitude, latitude]
+}
+
+function enforceFinalExactParentOwnership(childResult, parentResults) {
+  const parentSegmentKeys = new Set()
+  for (const parentResult of parentResults) {
+    for (const record of collectBoundarySegments(parentResult.collection, 'parent')) {
+      parentSegmentKeys.add(record.exactKey)
+    }
+  }
+  const keptByFeature = new Map()
+  let removedSegmentCount = 0
+  for (const record of collectBoundarySegments(childResult.collection, 'child')) {
+    if (parentSegmentKeys.has(record.exactKey)) {
+      removedSegmentCount += 1
+      continue
+    }
+    const segments = keptByFeature.get(record.featureIndex) ?? []
+    segments.push([record.start, record.end])
+    keptByFeature.set(record.featureIndex, segments)
+  }
+  const sourceFeatures = childResult.collection.features
+  childResult.collection = {
+    type: 'FeatureCollection',
+    features: [...keptByFeature.entries()].map(([featureIndex, segments]) => {
+      const sourceFeature = sourceFeatures[featureIndex]
+      const lines = stitchBoundarySegments(segments)
+      return {
+        ...sourceFeature,
+        geometry: {
+          type: lines.length === 1 ? 'LineString' : 'MultiLineString',
+          coordinates: lines.length === 1 ? lines[0] : lines,
+        },
+      }
+    }),
+  }
+  childResult.report.hierarchyOwnership.finalExactParentOwnedSegmentCount = removedSegmentCount
+}
+
+function assignHierarchyBoundaryOwnership(layerName, childResult, parentResults) {
+  const baseMinZoom = ['admin1', 'chinaProvince'].includes(layerName) ? 4 : 7
+  const childRecords = collectBoundarySegments(
+    childResult.collection,
+    layerName,
+    BOUNDARY_DEDUPLICATION.zoom,
+  )
+  const parentIndexes = []
+  for (let zoom = baseMinZoom; zoom <= BOUNDARY_DEDUPLICATION.zoom; zoom += 1) {
+    const index = createBoundarySpatialIndex()
+    for (const parentResult of parentResults) {
+      const parentLayerName = parentResult.report?.hierarchyOwnership?.layerName ?? 'country'
+      for (const record of collectBoundarySegments(
+        parentResult.collection,
+        parentLayerName,
+        zoom,
+      )) {
+        addBoundarySpatialRecord(index, record)
+      }
+    }
+    parentIndexes.push({ zoom, index })
+  }
+  const segmentsByFeature = new Map()
+  const report = {
+    auditZoom: BOUNDARY_DEDUPLICATION.zoom,
+    inputSegmentCount: childResult.report.inputSegmentCount,
+    keptSegmentCount: 0,
+    removedWithinExact: childResult.report.removedWithinExact,
+    removedWithinNear: 0,
+    removedAgainst: {},
+    removedByCountry: { ...childResult.report.removedByCountry },
+    samples: [],
+  }
+  let parentOwnedThroughMaxZoomArcCount = 0
+  let topologyNodedParentOwnedSubarcCount = 0
+  let topologyNodedPartialArcCount = 0
+  for (const sourceRecord of childRecords) {
+    const transfer = transferBoundarySubarcsToParent(sourceRecord, parentIndexes)
+    const keptSegments = transfer.records.map((record) => [record.start, record.end])
+    if (transfer.intervalCount) {
+      topologyNodedParentOwnedSubarcCount += transfer.intervalCount
+      if (keptSegments.length) topologyNodedPartialArcCount += 1
+      const firstMatch = transfer.matches[0]
+      incrementBoundaryRemoval(
+        report,
+        sourceRecord,
+        firstMatch?.kind ?? 'near',
+        firstMatch?.record.layerName ?? 'parent',
+        firstMatch?.record,
+      )
+    }
+    if (!keptSegments.length) {
+      parentOwnedThroughMaxZoomArcCount += 1
+      continue
+    }
+    const group = segmentsByFeature.get(sourceRecord.featureIndex) ?? {
+      featureIndex: sourceRecord.featureIndex,
+      segments: [],
+    }
+    group.segments.push(...keptSegments)
+    segmentsByFeature.set(sourceRecord.featureIndex, group)
+    report.keptSegmentCount += keptSegments.length
+  }
+  const features = [...segmentsByFeature.values()].map((group) => {
+    const sourceFeature = childResult.collection.features[group.featureIndex]
+    const lines = stitchBoundarySegments(group.segments)
+    return {
+      ...sourceFeature,
+      tippecanoe: { ...(sourceFeature.tippecanoe ?? {}), minzoom: baseMinZoom },
+      properties: {
+        ...(sourceFeature.properties ?? {}),
+        boundary_min_zoom: baseMinZoom,
+      },
+      geometry: {
+        type: lines.length === 1 ? 'LineString' : 'MultiLineString',
+        coordinates: lines.length === 1 ? lines[0] : lines,
+      },
+    }
+  })
+  return {
+    collection: { type: 'FeatureCollection', features },
+    report: {
+      ...report,
+      hierarchyOwnership: {
+        layerName,
+        ownerLayers: parentResults.map(
+          (parentResult) => parentResult.report?.hierarchyOwnership?.layerName ?? 'country',
+        ),
+        baseMinZoom,
+        deferredArcCount: 0,
+        parentOwnedThroughMaxZoomArcCount,
+        topologyNodedParentOwnedSubarcCount,
+        topologyNodedPartialArcCount,
+        reassignedExactArcCount: Object.values(report.removedAgainst).reduce(
+          (sum, counts) => sum + counts.exact,
+          0,
+        ),
+        reassignedNearArcCount: Object.values(report.removedAgainst).reduce(
+          (sum, counts) => sum + counts.near,
+          0,
+        ),
+        policy: 'topology-noded-subarc-transfer-to-visible-parent',
+      },
+      partialNearSegmentRemoval: false,
+    },
+  }
+}
+
+function transferBoundarySubarcsToParent(sourceRecord, parentIndexes) {
+  let records = [sourceRecord]
+  const matches = []
+  let intervalCount = 0
+  for (let pass = 0; pass < 8; pass += 1) {
+    let changed = false
+    const next = []
+    for (const record of records) {
+      const ownershipByZoom = parentIndexes.map(({ zoom, index }) =>
+        boundaryParentOwnedIntervals(boundaryRecordAtZoom(record, zoom), index, 1.75, 1),
+      )
+      const ownership = {
+        intervals: mergeBoundaryIntervals(
+          ownershipByZoom.flatMap((candidate) => candidate.intervals),
+        ),
+        matches: ownershipByZoom.flatMap((candidate) => candidate.matches),
+      }
+      if (!ownership.intervals.length) {
+        next.push(record)
+        continue
+      }
+      changed = true
+      intervalCount += ownership.intervals.length
+      matches.push(...ownership.matches)
+      for (const [start, end] of subtractBoundaryIntervals(record, ownership.intervals)) {
+        next.push(
+          boundarySubrecord(
+            record,
+            snapBoundaryCoordinateToParents(start, record, parentIndexes),
+            snapBoundaryCoordinateToParents(end, record, parentIndexes),
+          ),
+        )
+      }
+    }
+    records = next
+    if (!changed || !records.length) break
+  }
+  return { records, matches, intervalCount }
+}
+
+function snapBoundaryCoordinateToParents(coordinate, sourceRecord, parentIndexes) {
+  let best = null
+  for (const { zoom, index } of parentIndexes) {
+    const pixel = boundaryWorldPixel(coordinate, zoom)
+    const probe = {
+      ...boundaryRecordAtZoom(sourceRecord, zoom),
+      pixelStart: pixel,
+      pixelEnd: pixel,
+      pixelLength: 0,
+    }
+    for (const candidate of queryBoundarySpatialIndex(index, probe, 1.75)) {
+      if (!boundaryRecordsCanRepresentSameLine(sourceRecord, candidate)) continue
+      const vector = subtractPoint(candidate.pixelEnd, candidate.pixelStart)
+      const lengthSquared = dotPoint(vector, vector)
+      if (!lengthSquared) continue
+      const ratio = Math.max(
+        0,
+        Math.min(1, dotPoint(subtractPoint(pixel, candidate.pixelStart), vector) / lengthSquared),
+      )
+      const projected = [
+        candidate.pixelStart[0] + vector[0] * ratio,
+        candidate.pixelStart[1] + vector[1] * ratio,
+      ]
+      const distance = pointDistance(pixel, projected)
+      if (distance > 1.75 || (best && best.normalizedDistance <= distance / 1.75)) continue
+      best = {
+        normalizedDistance: distance / 1.75,
+        coordinate: interpolateBoundaryCoordinate(candidate.start, candidate.end, ratio),
+      }
+    }
+  }
+  return best?.coordinate ?? coordinate
+}
+
+function boundaryRecordAtZoom(record, zoom) {
+  const pixelStart = boundaryWorldPixel(record.start, zoom)
+  const pixelEnd = boundaryWorldPixel(record.end, zoom)
+  return {
+    ...record,
+    pixelStart,
+    pixelEnd,
+    pixelLength: pointDistance(pixelStart, pixelEnd),
+  }
+}
+
+function boundarySubrecord(source, start, end) {
+  const pixelStart = boundaryWorldPixel(start)
+  const pixelEnd = boundaryWorldPixel(end)
+  return {
+    ...source,
+    start,
+    end,
+    pixelStart,
+    pixelEnd,
+    pixelLength: pointDistance(pixelStart, pixelEnd),
+    exactKey: boundarySegmentKey(start, end),
+  }
+}
+
+function boundaryParentOwnedIntervals(
+  record,
+  parentIndex,
+  tolerancePx = BOUNDARY_DEDUPLICATION.tolerancePx,
+  minOverlapPx = BOUNDARY_DEDUPLICATION.minOverlapPx,
+) {
+  const intervals = []
+  const matches = []
+  for (const candidate of queryBoundarySpatialIndex(parentIndex, record, tolerancePx)) {
+    if (record.exactKey === candidate.exactKey) {
+      intervals.push([0, 1])
+      matches.push({ kind: 'exact', record: candidate })
+      continue
+    }
+    if (!boundaryRecordsCanRepresentSameLine(record, candidate)) continue
+    if (!boundarySegmentsAreNearCoincident(record, candidate, tolerancePx, minOverlapPx, 0.7)) {
+      continue
+    }
+    const interval = boundaryCoincidentIntervalOnRecord(record, candidate, minOverlapPx)
+    if (!interval) continue
+    intervals.push(interval)
+    matches.push({ kind: 'near', record: candidate })
+  }
+  return { intervals: mergeBoundaryIntervals(intervals), matches }
+}
+
+function boundaryCoincidentIntervalOnRecord(
+  record,
+  candidate,
+  minOverlapPx = BOUNDARY_DEDUPLICATION.minOverlapPx,
+) {
+  const vector = subtractPoint(record.pixelEnd, record.pixelStart)
+  const length = record.pixelLength
+  if (!length) return null
+  const axis = [vector[0] / length, vector[1] / length]
+  const projections = [candidate.pixelStart, candidate.pixelEnd].map((point) =>
+    dotPoint(subtractPoint(point, record.pixelStart), axis),
+  )
+  const start = Math.max(0, Math.min(...projections))
+  const end = Math.min(length, Math.max(...projections))
+  return end - start >= minOverlapPx ? [start / length, end / length] : null
+}
+
+function mergeBoundaryIntervals(intervals) {
+  const sorted = intervals
+    .map(([start, end]) => [Math.max(0, start), Math.min(1, end)])
+    .filter(([start, end]) => end > start)
+    .sort((left, right) => left[0] - right[0] || left[1] - right[1])
+  const merged = []
+  for (const interval of sorted) {
+    const previous = merged.at(-1)
+    if (!previous || interval[0] > previous[1] + 1e-9) merged.push([...interval])
+    else previous[1] = Math.max(previous[1], interval[1])
+  }
+  return merged
+}
+
+function subtractBoundaryIntervals(record, intervals) {
+  if (!intervals.length) return [[record.start, record.end]]
+  const retained = []
+  let cursor = 0
+  for (const [start, end] of intervals) {
+    if (start > cursor + 1e-9) retained.push([cursor, start])
+    cursor = Math.max(cursor, end)
+  }
+  if (cursor < 1 - 1e-9) retained.push([cursor, 1])
+  return retained
+    .map(([start, end]) => [
+      interpolateBoundaryCoordinate(record.start, record.end, start),
+      interpolateBoundaryCoordinate(record.start, record.end, end),
+    ])
+    .filter(([start, end]) => {
+      const length = pointDistance(boundaryWorldPixel(start), boundaryWorldPixel(end))
+      return Number.isFinite(length) && length >= BOUNDARY_DEDUPLICATION.minOverlapPx
+    })
+}
+
+function interpolateBoundaryCoordinate(start, end, ratio) {
+  return [start[0] + (end[0] - start[0]) * ratio, start[1] + (end[1] - start[1]) * ratio]
+}
+
+function deduplicateExactBoundaryCollection(layerName, collection) {
+  const records = collectBoundarySegments(collection, layerName, BOUNDARY_DEDUPLICATION.zoom)
+  const seen = new Set()
+  const keptByFeature = new Map()
+  const removedByCountry = {}
+  let removedWithinExact = 0
+  for (const record of records) {
+    if (seen.has(record.exactKey)) {
+      removedWithinExact += 1
+      const country = record.countryKey || '__unknown__'
+      const counts = removedByCountry[country] ?? { exact: 0, near: 0 }
+      counts.exact += 1
+      removedByCountry[country] = counts
+      continue
+    }
+    seen.add(record.exactKey)
+    const lines = keptByFeature.get(record.featureIndex) ?? []
+    lines.push([record.start, record.end])
+    keptByFeature.set(record.featureIndex, lines)
+  }
+  const features = [...keptByFeature.entries()].map(([featureIndex, segments]) => {
+    const feature = collection.features[featureIndex]
+    const lines = stitchBoundarySegments(segments)
+    return {
+      ...feature,
+      geometry: {
+        type: lines.length === 1 ? 'LineString' : 'MultiLineString',
+        coordinates: lines.length === 1 ? lines[0] : lines,
+      },
+    }
+  })
+  return {
+    collection: { type: 'FeatureCollection', features },
+    report: {
+      auditZooms: [BOUNDARY_DEDUPLICATION.zoom],
+      inputSegmentCount: records.length,
+      keptSegmentCount: records.length - removedWithinExact,
+      removedWithinExact,
+      removedWithinNear: 0,
+      removedAgainst: {},
+      removedByCountry,
+      partialNearSegmentRemoval: false,
+    },
+  }
+}
+
+function cleanBoundaryCollectionAtZooms(layerName, collection, higherPrioritySources, zooms) {
+  const stages = []
+  let current = collection
+  for (const zoom of zooms) {
+    const result = cleanBoundaryCollection(layerName, current, higherPrioritySources, zoom)
+    current = result.collection
+    stages.push(result.report)
+  }
+  const removedAgainst = {}
+  const removedByCountry = {}
+  for (const stage of stages) {
+    for (const [name, counts] of Object.entries(stage.removedAgainst)) {
+      const target = removedAgainst[name] ?? { exact: 0, near: 0 }
+      target.exact += counts.exact
+      target.near += counts.near
+      removedAgainst[name] = target
+    }
+    for (const [country, counts] of Object.entries(stage.removedByCountry)) {
+      const target = removedByCountry[country] ?? { exact: 0, near: 0 }
+      target.exact += counts.exact
+      target.near += counts.near
+      removedByCountry[country] = target
+    }
+  }
+  return {
+    collection: current,
+    report: {
+      auditZooms: zooms,
+      stages,
+      inputSegmentCount: stages[0]?.inputSegmentCount ?? 0,
+      keptSegmentCount: stages.at(-1)?.keptSegmentCount ?? 0,
+      removedWithinExact: stages.reduce((sum, stage) => sum + stage.removedWithinExact, 0),
+      removedWithinNear: stages.reduce((sum, stage) => sum + stage.removedWithinNear, 0),
+      removedAgainst,
+      removedByCountry,
+    },
+  }
+}
+
+function cleanBoundaryCollection(
+  layerName,
+  collection,
+  higherPrioritySources,
+  auditZoom = 8,
+  options = {},
+) {
+  const records = collectBoundarySegments(collection, layerName, auditZoom)
   const higherPriorityIndex = createBoundarySpatialIndex()
   for (const source of higherPrioritySources) {
-    for (const record of collectBoundarySegments(source.collection, source.name)) {
+    for (const record of collectBoundarySegments(source.collection, source.name, auditZoom)) {
       addBoundarySpatialRecord(higherPriorityIndex, record)
     }
   }
   const withinIndex = createBoundarySpatialIndex()
   const removed = new Set()
   const report = {
+    auditZoom,
     inputSegmentCount: records.length,
     keptSegmentCount: 0,
     removedWithinExact: 0,
     removedWithinNear: 0,
     removedAgainst: {},
     removedByCountry: {},
+    legalParentJunctionNearCount: 0,
+    samples: [],
   }
   const longestFirst = [...records].sort(
     (left, right) => right.pixelLength - left.pixelLength || left.id - right.id,
   )
   for (const record of longestFirst) {
-    const higherMatch = findBoundaryCoincidence(record, higherPriorityIndex)
+    const hasLegalParentJunction =
+      options.ignoreLegalParentJunctions &&
+      boundaryRecordHasLegalParentJunction(record, higherPriorityIndex)
+    if (hasLegalParentJunction) report.legalParentJunctionNearCount += 1
+    const higherMatch = hasLegalParentJunction
+      ? null
+      : findBoundaryCoincidence(record, higherPriorityIndex, (candidate) =>
+          boundaryRecordsCanRepresentSameLine(record, candidate),
+        )
     if (higherMatch) {
       removed.add(record.id)
-      incrementBoundaryRemoval(report, record, higherMatch.kind, higherMatch.record.layerName)
+      incrementBoundaryRemoval(
+        report,
+        record,
+        higherMatch.kind,
+        higherMatch.record.layerName,
+        higherMatch.record,
+      )
       continue
     }
-    const withinMatch = findBoundaryCoincidence(
-      record,
-      withinIndex,
-      (candidate) => candidate.semanticPair === record.semanticPair,
-    )
+    const withinMatch = options.skipWithin
+      ? null
+      : findBoundaryCoincidence(
+          record,
+          withinIndex,
+          (candidate) =>
+            candidate.exactKey === record.exactKey ||
+            (candidate.featureIndex !== record.featureIndex &&
+              candidate.semanticPair === record.semanticPair),
+        )
     if (withinMatch) {
       removed.add(record.id)
-      incrementBoundaryRemoval(report, record, withinMatch.kind, 'within')
+      incrementBoundaryRemoval(report, record, withinMatch.kind, 'within', withinMatch.record)
       continue
     }
     addBoundarySpatialRecord(withinIndex, record)
@@ -509,11 +1077,12 @@ function cleanBoundaryCollection(layerName, collection, higherPrioritySources) {
   for (const [featureIndex, lines] of linesByFeature) {
     if (!lines.length) continue
     const feature = collection.features[featureIndex]
+    const stitchedLines = stitchBoundarySegments(lines)
     features.push({
       ...feature,
       geometry: {
-        type: lines.length === 1 ? 'LineString' : 'MultiLineString',
-        coordinates: lines.length === 1 ? lines[0] : lines,
+        type: stitchedLines.length === 1 ? 'LineString' : 'MultiLineString',
+        coordinates: stitchedLines.length === 1 ? stitchedLines[0] : stitchedLines,
       },
     })
   }
@@ -521,7 +1090,75 @@ function cleanBoundaryCollection(layerName, collection, higherPrioritySources) {
   return { collection: { type: 'FeatureCollection', features }, report }
 }
 
-function incrementBoundaryRemoval(report, record, kind, against) {
+function stitchBoundarySegments(segments) {
+  const endpointIndex = new Map()
+  const entries = segments.map(([start, end], index) => {
+    const startKey = boundaryCoordinateKey(start)
+    const endKey = boundaryCoordinateKey(end)
+    for (const key of [startKey, endKey]) {
+      const values = endpointIndex.get(key) ?? []
+      values.push(index)
+      endpointIndex.set(key, values)
+    }
+    return { start, end, startKey, endKey }
+  })
+  const remaining = new Set(entries.map((_, index) => index))
+  const lines = []
+  while (remaining.size) {
+    const seedIndex =
+      [...remaining].find((index) => {
+        const entry = entries[index]
+        return (
+          (endpointIndex.get(entry.startKey)?.length ?? 0) !== 2 ||
+          (endpointIndex.get(entry.endKey)?.length ?? 0) !== 2
+        )
+      }) ?? remaining.values().next().value
+    const seed = entries[seedIndex]
+    const startKey =
+      (endpointIndex.get(seed.startKey)?.length ?? 0) !== 2 ? seed.startKey : seed.endKey
+    const line = []
+    let currentKey = startKey
+    while (true) {
+      const nextIndex = (endpointIndex.get(currentKey) ?? []).find((index) => remaining.has(index))
+      if (nextIndex == null) break
+      const entry = entries[nextIndex]
+      remaining.delete(nextIndex)
+      const forward = entry.startKey === currentKey
+      const currentPoint = forward ? entry.start : entry.end
+      const nextPoint = forward ? entry.end : entry.start
+      if (!line.length) line.push(currentPoint)
+      line.push(nextPoint)
+      currentKey = forward ? entry.endKey : entry.startKey
+    }
+    if (line.length >= 2) lines.push(line)
+  }
+  return lines
+}
+
+function boundaryRecordsCanRepresentSameLine(left, right) {
+  if (left.layerName === right.layerName) {
+    return (
+      left.exactKey === right.exactKey ||
+      (left.featureIndex !== right.featureIndex && left.semanticPair === right.semanticPair)
+    )
+  }
+  const countryRecord =
+    left.layerName === 'country' ? left : right.layerName === 'country' ? right : null
+  if (countryRecord) {
+    const childRecord = countryRecord === left ? right : left
+    return boundaryOwnerKeys(countryRecord.semanticPair).includes(childRecord.countryKey)
+  }
+  return Boolean(left.countryKey && left.countryKey === right.countryKey)
+}
+
+function boundaryOwnerKeys(semanticPair) {
+  return String(semanticPair ?? '')
+    .split('|~|')
+    .map((value) => value.trim())
+    .filter(Boolean)
+}
+
+function incrementBoundaryRemoval(report, record, kind, against, matchedRecord = null) {
   if (against === 'within') {
     const key = kind === 'exact' ? 'removedWithinExact' : 'removedWithinNear'
     report[key] += 1
@@ -534,6 +1171,28 @@ function incrementBoundaryRemoval(report, record, kind, against) {
   const countryEntry = report.removedByCountry[countryKey] ?? { exact: 0, near: 0 }
   countryEntry[kind] += 1
   report.removedByCountry[countryKey] = countryEntry
+  if (report.samples.length < 80) {
+    report.samples.push({
+      kind,
+      against,
+      layerName: record.layerName,
+      countryKey: record.countryKey,
+      semanticPair: record.semanticPair,
+      start: record.start,
+      end: record.end,
+      pixelLength: roundBoundaryMetric(record.pixelLength),
+      matchedLayerName: matchedRecord?.layerName ?? '',
+      matchedCountryKey: matchedRecord?.countryKey ?? '',
+      matchedSemanticPair: matchedRecord?.semanticPair ?? '',
+      matchedStart: matchedRecord?.start ?? null,
+      matchedEnd: matchedRecord?.end ?? null,
+      matchedPixelLength: roundBoundaryMetric(matchedRecord?.pixelLength),
+    })
+  }
+}
+
+function roundBoundaryMetric(value) {
+  return Number.isFinite(value) ? Number(value.toFixed(3)) : null
 }
 
 function mergeBoundaryRemovalCountryReports(reports) {
@@ -546,10 +1205,12 @@ function mergeBoundaryRemovalCountryReports(reports) {
       merged[countryKey] = entry
     }
   }
-  return Object.fromEntries(Object.entries(merged).sort(([left], [right]) => left.localeCompare(right)))
+  return Object.fromEntries(
+    Object.entries(merged).sort(([left], [right]) => left.localeCompare(right)),
+  )
 }
 
-function collectBoundarySegments(collection, layerName) {
+function collectBoundarySegments(collection, layerName, auditZoom = 8) {
   const records = []
   for (let featureIndex = 0; featureIndex < (collection.features ?? []).length; featureIndex += 1) {
     const feature = collection.features[featureIndex]
@@ -563,10 +1224,10 @@ function collectBoundarySegments(collection, layerName) {
         const start = normalizedBoundaryCoordinate(line[segmentIndex - 1])
         const end = normalizedBoundaryCoordinate(line[segmentIndex])
         if (!start || !end || (start[0] === end[0] && start[1] === end[1])) continue
-        const pixelStart = boundaryWorldPixel(start)
-        const pixelEnd = boundaryWorldPixel(end)
+        const pixelStart = boundaryWorldPixel(start, auditZoom)
+        const pixelEnd = boundaryWorldPixel(end, auditZoom)
         const pixelLength = pointDistance(pixelStart, pixelEnd)
-        if (!Number.isFinite(pixelLength) || pixelLength <= 0) continue
+        if (!Number.isFinite(pixelLength) || pixelLength <= 1e-6) continue
         records.push({
           id: records.length,
           featureIndex,
@@ -578,6 +1239,7 @@ function collectBoundarySegments(collection, layerName) {
           exactKey: boundarySegmentKey(start, end),
           semanticPair,
           countryKey,
+          parentGeoKey: String(properties.parent_geo_key ?? ''),
           layerName,
         })
       }
@@ -600,8 +1262,8 @@ function normalizedBoundaryCoordinate(coordinate) {
   return Number.isFinite(longitude) && Number.isFinite(latitude) ? [longitude, latitude] : null
 }
 
-function boundaryWorldPixel([longitude, latitude]) {
-  const size = BOUNDARY_DEDUPLICATION.tileSize * 2 ** BOUNDARY_DEDUPLICATION.zoom
+function boundaryWorldPixel([longitude, latitude], zoom = BOUNDARY_DEDUPLICATION.zoom) {
+  const size = BOUNDARY_DEDUPLICATION.tileSize * 2 ** zoom
   const clampedLatitude = Math.max(-85.05112878, Math.min(85.05112878, latitude))
   const sine = Math.sin((clampedLatitude * Math.PI) / 180)
   return [
@@ -629,21 +1291,32 @@ function addBoundarySpatialRecord(index, record) {
   }
 }
 
-function queryBoundarySpatialIndex(index, record) {
+function queryBoundarySpatialIndex(
+  index,
+  record,
+  tolerancePx = BOUNDARY_DEDUPLICATION.tolerancePx,
+) {
   const ids = new Set()
-  for (const key of boundaryGridKeys(record)) {
+  for (const key of boundaryGridKeys(record, tolerancePx)) {
     for (const id of index.cells.get(key) ?? []) ids.add(id)
   }
   return [...ids].map((id) => index.records[id])
 }
 
-function boundaryGridKeys(record) {
-  const tolerance = BOUNDARY_DEDUPLICATION.tolerancePx
+function boundaryGridKeys(record, tolerance = BOUNDARY_DEDUPLICATION.tolerancePx) {
   const cellSize = BOUNDARY_DEDUPLICATION.gridSizePx
-  const minX = Math.floor((Math.min(record.pixelStart[0], record.pixelEnd[0]) - tolerance) / cellSize)
-  const maxX = Math.floor((Math.max(record.pixelStart[0], record.pixelEnd[0]) + tolerance) / cellSize)
-  const minY = Math.floor((Math.min(record.pixelStart[1], record.pixelEnd[1]) - tolerance) / cellSize)
-  const maxY = Math.floor((Math.max(record.pixelStart[1], record.pixelEnd[1]) + tolerance) / cellSize)
+  const minX = Math.floor(
+    (Math.min(record.pixelStart[0], record.pixelEnd[0]) - tolerance) / cellSize,
+  )
+  const maxX = Math.floor(
+    (Math.max(record.pixelStart[0], record.pixelEnd[0]) + tolerance) / cellSize,
+  )
+  const minY = Math.floor(
+    (Math.min(record.pixelStart[1], record.pixelEnd[1]) - tolerance) / cellSize,
+  )
+  const maxY = Math.floor(
+    (Math.max(record.pixelStart[1], record.pixelEnd[1]) + tolerance) / cellSize,
+  )
   const keys = []
   for (let x = minX; x <= maxX; x += 1) {
     for (let y = minY; y <= maxY; y += 1) keys.push(`${x}:${y}`)
@@ -651,18 +1324,83 @@ function boundaryGridKeys(record) {
   return keys
 }
 
-function findBoundaryCoincidence(record, index, predicate = () => true) {
-  for (const candidate of queryBoundarySpatialIndex(index, record)) {
+function findBoundaryCoincidence(
+  record,
+  index,
+  predicate = () => true,
+  tolerancePx = BOUNDARY_DEDUPLICATION.tolerancePx,
+  minOverlapPx = BOUNDARY_DEDUPLICATION.minOverlapPx,
+  minCandidateOverlapRatio = BOUNDARY_DEDUPLICATION.minCandidateOverlapRatio,
+  acceptMatch = () => true,
+) {
+  for (const candidate of queryBoundarySpatialIndex(index, record, tolerancePx)) {
     if (!predicate(candidate)) continue
-    if (record.exactKey === candidate.exactKey) return { kind: 'exact', record: candidate }
-    if (boundarySegmentsAreNearCoincident(record, candidate)) {
-      return { kind: 'near', record: candidate }
+    if (record.exactKey === candidate.exactKey) {
+      const match = { kind: 'exact', record: candidate }
+      if (acceptMatch(match)) return match
+      continue
+    }
+    if (
+      boundarySegmentsAreNearCoincident(
+        record,
+        candidate,
+        tolerancePx,
+        minOverlapPx,
+        minCandidateOverlapRatio,
+      )
+    ) {
+      const match = { kind: 'near', record: candidate }
+      if (acceptMatch(match)) return match
     }
   }
   return null
 }
 
-function boundarySegmentsAreNearCoincident(left, right) {
+function boundaryNearMatchIsLegalParentJunction(child, match) {
+  if (match.kind !== 'near') return false
+  const parent = match.record
+  const expectedParentLayer =
+    child.layerName === 'admin2' ? 'admin1' : child.layerName === 'chinaCity' ? 'chinaProvince' : ''
+  if (!expectedParentLayer || parent.layerName !== expectedParentLayer) return false
+  if (!child.parentGeoKey || !boundaryOwnerKeys(parent.semanticPair).includes(child.parentGeoKey)) {
+    return false
+  }
+  const tolerance = BOUNDARY_DEDUPLICATION.tolerancePx
+  const startConnected =
+    pointToSegmentDistance(child.pixelStart, parent.pixelStart, parent.pixelEnd) <= tolerance
+  const endConnected =
+    pointToSegmentDistance(child.pixelEnd, parent.pixelStart, parent.pixelEnd) <= tolerance
+  // A child edge may meet its visible parent at one shallow-angle endpoint.
+  // Two connected endpoints mean that the whole child arc is parent-owned.
+  return startConnected !== endConnected
+}
+
+function boundaryRecordHasLegalParentJunction(record, parentIndex) {
+  for (const candidate of queryBoundarySpatialIndex(
+    parentIndex,
+    record,
+    BOUNDARY_DEDUPLICATION.tolerancePx,
+  )) {
+    if (!boundaryRecordsCanRepresentSameLine(record, candidate)) continue
+    if (record.exactKey === candidate.exactKey) continue
+    if (
+      !boundarySegmentsAreNearCoincident(record, candidate) ||
+      !boundaryNearMatchIsLegalParentJunction(record, { kind: 'near', record: candidate })
+    ) {
+      continue
+    }
+    return true
+  }
+  return false
+}
+
+function boundarySegmentsAreNearCoincident(
+  left,
+  right,
+  tolerancePx = BOUNDARY_DEDUPLICATION.tolerancePx,
+  minOverlapPx = BOUNDARY_DEDUPLICATION.minOverlapPx,
+  minCandidateOverlapRatio = BOUNDARY_DEDUPLICATION.minCandidateOverlapRatio,
+) {
   const leftVector = subtractPoint(left.pixelEnd, left.pixelStart)
   const rightVector = subtractPoint(right.pixelEnd, right.pixelStart)
   const leftLength = left.pixelLength
@@ -670,23 +1408,38 @@ function boundarySegmentsAreNearCoincident(left, right) {
   const cosine = Math.abs(dotPoint(leftVector, rightVector) / (leftLength * rightLength))
   const minimumCosine = Math.cos((BOUNDARY_DEDUPLICATION.maxAngleDegrees * Math.PI) / 180)
   if (cosine < minimumCosine) return false
-  const axis = [leftVector[0] / leftLength, leftVector[1] / leftLength]
-  const rightStartProjection = dotPoint(subtractPoint(right.pixelStart, left.pixelStart), axis)
-  const rightEndProjection = dotPoint(subtractPoint(right.pixelEnd, left.pixelStart), axis)
-  const overlap = Math.max(
-    0,
-    Math.min(leftLength, Math.max(rightStartProjection, rightEndProjection)) -
-      Math.max(0, Math.min(rightStartProjection, rightEndProjection)),
+  const reference = leftLength >= rightLength ? left : right
+  const candidate = reference === left ? right : left
+  const referenceVector = subtractPoint(reference.pixelEnd, reference.pixelStart)
+  const referenceLength = Math.hypot(referenceVector[0], referenceVector[1])
+  const axis = [referenceVector[0] / referenceLength, referenceVector[1] / referenceLength]
+  const candidateStart = subtractPoint(candidate.pixelStart, reference.pixelStart)
+  const candidateEnd = subtractPoint(candidate.pixelEnd, reference.pixelStart)
+  const candidateStartProjection = dotPoint(candidateStart, axis)
+  const candidateEndProjection = dotPoint(candidateEnd, axis)
+  const overlapStart = Math.max(0, Math.min(candidateStartProjection, candidateEndProjection))
+  const overlapEnd = Math.min(
+    referenceLength,
+    Math.max(candidateStartProjection, candidateEndProjection),
   )
-  if (overlap < BOUNDARY_DEDUPLICATION.minOverlapPx) return false
-  if (overlap / leftLength < BOUNDARY_DEDUPLICATION.minCandidateOverlapRatio) return false
-  const leftMidpoint = midpoint(left.pixelStart, left.pixelEnd)
-  const rightMidpoint = midpoint(right.pixelStart, right.pixelEnd)
+  const overlap = Math.max(0, overlapEnd - overlapStart)
+  if (overlap < minOverlapPx) return false
+  if (overlap / Math.min(leftLength, rightLength) < minCandidateOverlapRatio) {
+    return false
+  }
+  const overlapStartPoint = [
+    reference.pixelStart[0] + axis[0] * overlapStart,
+    reference.pixelStart[1] + axis[1] * overlapStart,
+  ]
+  const overlapEndPoint = [
+    reference.pixelStart[0] + axis[0] * overlapEnd,
+    reference.pixelStart[1] + axis[1] * overlapEnd,
+  ]
   return (
-    pointToInfiniteLineDistance(leftMidpoint, right.pixelStart, right.pixelEnd) <=
-      BOUNDARY_DEDUPLICATION.tolerancePx &&
-    pointToInfiniteLineDistance(rightMidpoint, left.pixelStart, left.pixelEnd) <=
-      BOUNDARY_DEDUPLICATION.tolerancePx
+    pointToInfiniteLineDistance(overlapStartPoint, candidate.pixelStart, candidate.pixelEnd) <=
+      tolerancePx &&
+    pointToInfiniteLineDistance(overlapEndPoint, candidate.pixelStart, candidate.pixelEnd) <=
+      tolerancePx
   )
 }
 
@@ -698,10 +1451,6 @@ function dotPoint(left, right) {
   return left[0] * right[0] + left[1] * right[1]
 }
 
-function midpoint(left, right) {
-  return [(left[0] + right[0]) / 2, (left[1] + right[1]) / 2]
-}
-
 function pointDistance(left, right) {
   return Math.hypot(left[0] - right[0], left[1] - right[1])
 }
@@ -710,10 +1459,9 @@ function pointToInfiniteLineDistance(point, lineStart, lineEnd) {
   const vector = subtractPoint(lineEnd, lineStart)
   const length = Math.hypot(vector[0], vector[1])
   if (!length) return Number.POSITIVE_INFINITY
-  return Math.abs(
-    vector[0] * (lineStart[1] - point[1]) -
-      (lineStart[0] - point[0]) * vector[1],
-  ) / length
+  return (
+    Math.abs(vector[0] * (lineStart[1] - point[1]) - (lineStart[0] - point[0]) * vector[1]) / length
+  )
 }
 
 function auditTolerantBoundaryOverlaps(collections) {
@@ -724,7 +1472,7 @@ function auditTolerantBoundaryOverlaps(collections) {
     const within = cleanBoundaryCollection(name, collections[name], []).report
     const exact = within.removedWithinExact
     const near = within.removedWithinNear
-    layers[name] = { exact, near, total: exact + near }
+    layers[name] = { exact, near, total: exact + near, samples: within.samples }
     totalDuplicateLikeSegmentCount += exact + near
   }
   const pairs = []
@@ -732,12 +1480,37 @@ function auditTolerantBoundaryOverlaps(collections) {
     for (let rightIndex = leftIndex + 1; rightIndex < names.length; rightIndex += 1) {
       const left = names[leftIndex]
       const right = names[rightIndex]
-      const report = cleanBoundaryCollection(right, collections[right], [
-        { name: left, collection: collections[left] },
-      ]).report
+      if (!renderedBoundaryRangesOverlap(left, right)) {
+        pairs.push({
+          left,
+          right,
+          exact: 0,
+          near: 0,
+          total: 0,
+          simultaneouslyVisible: false,
+          samples: [],
+        })
+        continue
+      }
+      const report = cleanBoundaryCollection(
+        right,
+        collections[right],
+        [{ name: left, collection: collections[left] }],
+        BOUNDARY_DEDUPLICATION.zoom,
+        { ignoreLegalParentJunctions: true },
+      ).report
       const against = report.removedAgainst[left] ?? { exact: 0, near: 0 }
       const total = against.exact + against.near
-      pairs.push({ left, right, exact: against.exact, near: against.near, total })
+      pairs.push({
+        left,
+        right,
+        exact: against.exact,
+        near: against.near,
+        total,
+        legalParentJunctionNearCount: report.legalParentJunctionNearCount,
+        simultaneouslyVisible: true,
+        samples: report.samples.filter((sample) => sample.against === left),
+      })
       totalDuplicateLikeSegmentCount += total
     }
   }
@@ -747,6 +1520,83 @@ function auditTolerantBoundaryOverlaps(collections) {
     pairs,
     totalDuplicateLikeSegmentCount,
   }
+}
+
+function renderedBoundaryRangesOverlap(left, right) {
+  const leftRange = RENDERED_BOUNDARY_LAYER_RANGES[left]
+  const rightRange = RENDERED_BOUNDARY_LAYER_RANGES[right]
+  if (!leftRange || !rightRange) return true
+  return Math.max(leftRange[0], rightRange[0]) <= Math.min(leftRange[1], rightRange[1])
+}
+
+function buildBoundaryLegalEndpointManifest(collections) {
+  const sourceLayers = {
+    preview_presentation_admin1_boundaries: {
+      name: 'admin1',
+      collection: collections.admin1,
+    },
+    preview_presentation_admin2_boundaries: {
+      name: 'admin2',
+      collection: collections.admin2,
+    },
+    preview_china_province_boundaries: {
+      name: 'chinaProvince',
+      collection: collections.chinaProvince,
+    },
+    preview_china_city_boundaries: {
+      name: 'chinaCity',
+      collection: collections.chinaCity,
+    },
+  }
+  const zooms = {}
+  for (let zoom = 0; zoom <= 8; zoom += 1) {
+    const layers = {}
+    for (const [layerName, source] of Object.entries(sourceLayers)) {
+      const range = RENDERED_BOUNDARY_LAYER_RANGES[source.name]
+      if (!range || zoom < range[0] || zoom > range[1]) continue
+      const endpoints = new Map()
+      for (const feature of source.collection.features ?? []) {
+        if (!sourceBoundaryFeatureVisible(layerName, feature, zoom)) continue
+        for (const line of lineCoordinates(feature.geometry)) {
+          for (let index = 1; index < line.length; index += 1) {
+            for (const point of [line[index - 1], line[index]]) {
+              const key = boundaryCoordinateKey(point)
+              if (!key) continue
+              const entry = endpoints.get(key) ?? { degree: 0, point }
+              entry.degree += 1
+              endpoints.set(key, entry)
+            }
+          }
+        }
+      }
+      layers[layerName] = [...endpoints.values()]
+        .filter((entry) => entry.degree === 1)
+        .map((entry) => entry.point)
+    }
+    zooms[zoom] = layers
+  }
+  return {
+    policy: 'source-topology-degree-one-endpoints-only',
+    coordinatePrecision: 5,
+    zooms,
+  }
+}
+
+function sourceBoundaryFeatureVisible(layerName, feature, zoom) {
+  const minzoom = Number(feature.tippecanoe?.minzoom ?? 0)
+  const maxzoom = Number(feature.tippecanoe?.maxzoom ?? 8)
+  if (zoom < minzoom || zoom > maxzoom) return false
+  if (layerName === 'preview_presentation_admin1_boundaries') {
+    const starts = {
+      adm1_le25: 3.85,
+      adm1_26_80: 4.25,
+      adm1_81_160: 4.75,
+      adm1_gt160: 5.25,
+      china: 3.85,
+    }
+    return zoom >= Number(starts[feature.properties?.detail_profile] ?? 99)
+  }
+  return true
 }
 
 function auditRenderedBoundaryOverlaps(collections) {
@@ -760,16 +1610,18 @@ function auditRenderedBoundaryOverlaps(collections) {
     for (let rightIndex = leftIndex + 1; rightIndex < names.length; rightIndex += 1) {
       const left = names[leftIndex]
       const right = names[rightIndex]
+      if (!renderedBoundaryRangesOverlap(left, right)) {
+        pairs.push({ left, right, coincidentSegmentCount: 0, simultaneouslyVisible: false })
+        continue
+      }
       const coincidentSegmentCount = setIntersectionSize(segmentSets[left], segmentSets[right])
       totalCoincidentSegmentCount += coincidentSegmentCount
-      pairs.push({ left, right, coincidentSegmentCount })
+      pairs.push({ left, right, coincidentSegmentCount, simultaneouslyVisible: true })
     }
   }
   return {
     precision: 5,
-    segmentCounts: Object.fromEntries(
-      names.map((name) => [name, segmentSets[name].size]),
-    ),
+    segmentCounts: Object.fromEntries(names.map((name) => [name, segmentSets[name].size])),
     pairs,
     totalCoincidentSegmentCount,
   }
@@ -809,6 +1661,217 @@ function setIntersectionSize(left, right) {
   const [smaller, larger] = left.size <= right.size ? [left, right] : [right, left]
   for (const value of smaller) if (larger.has(value)) count += 1
   return count
+}
+
+function enrichPresentationRegionIndex(baseIndex, collections) {
+  const baseRegions = (baseIndex.regions ?? [])
+    .filter((entry) => entry.presentation_index !== true)
+    .map((entry) => ({ ...entry }))
+  const regionByKey = new Map(
+    baseRegions.map((entry) => [`${entry.level}|${entry.geo_key}`, entry]),
+  )
+  const admin1NameIndex = new Map()
+  for (const entry of baseRegions.filter((candidate) => candidate.level === 'admin1')) {
+    for (const alias of indexSearchAliases(entry)) {
+      const key = `${entry.country_key}|${normalizeAdministrativeIndexName(alias)}`
+      if (key.endsWith('|')) continue
+      const values = admin1NameIndex.get(key) ?? new Set()
+      values.add(entry)
+      admin1NameIndex.set(key, values)
+    }
+  }
+  const labelsByKey = new Map(
+    [
+      ...(collections.admin1Labels?.features ?? []),
+      ...(collections.admin2Labels?.features ?? []),
+    ].map((feature) => [String(feature.properties?.geo_key ?? ''), feature]),
+  )
+  let enrichedAdmin1Count = 0
+  let addedAdmin2Count = 0
+  for (const [presentationLevel, polygons] of [
+    ['adm1', collections.admin1Polygons],
+    ['adm2', collections.admin2Polygons],
+  ]) {
+    for (const feature of polygons?.features ?? []) {
+      const props = feature.properties ?? {}
+      const geoKey = String(props.geo_key ?? '')
+      const countryKey = String(props.country_key ?? '')
+      if (!geoKey || !countryKey) continue
+      const level = presentationLevel === 'adm2' ? 'city' : 'admin1'
+      const exact = regionByKey.get(`${level}|${geoKey}`)
+      let existing = exact
+      if (!existing && level === 'admin1') {
+        const candidates = new Set()
+        for (const alias of [props.display_name_en, props.display_name_local, props.display_name]) {
+          const normalized = normalizeAdministrativeIndexName(alias)
+          if (!normalized) continue
+          for (const candidate of admin1NameIndex.get(`${countryKey}|${normalized}`) ?? []) {
+            candidates.add(candidate)
+          }
+        }
+        if (candidates.size === 1) existing = [...candidates][0]
+      }
+      const bbox = geometryBbox(feature.geometry)
+      if (!bbox) continue
+      const labelFeature = labelsByKey.get(geoKey)
+      const labelPoint =
+        labelFeature?.geometry?.coordinates ?? representativePoint(feature.geometry)
+      const displayNameZh = props.name_zh_verified
+        ? cleanPresentationLabel(props.display_name_zh)
+        : ''
+      const displayNameEn = cleanPresentationLabel(props.display_name_en)
+      const displayNameLocal = cleanPresentationLabel(props.display_name_local)
+      const searchAliases = uniqueCleanIndexLabels([
+        displayNameZh,
+        displayNameEn,
+        displayNameLocal,
+        props.display_name,
+        props.source_geo_key,
+      ])
+      const names = {
+        display_name: displayNameZh || displayNameLocal || displayNameEn,
+        display_name_zh: displayNameZh,
+        display_name_en: displayNameEn,
+        display_name_local: displayNameLocal,
+        name_zh_source: String(props.name_zh_source ?? ''),
+        name_zh_reference_key: String(props.name_zh_reference_key ?? ''),
+        search_aliases: uniqueCleanIndexLabels([
+          ...(existing?.search_aliases ?? []),
+          ...searchAliases,
+        ]),
+        name: displayNameEn || displayNameLocal,
+      }
+      if (existing) {
+        Object.assign(existing, names)
+        if (level === 'city') {
+          existing.boundary_min_zoom = PRESENTATION_ADMIN2_BOUNDARY_ZOOM
+          existing.label_min_zoom = presentationLabelMinZoom(
+            PRESENTATION_ADMIN2_ZOOM[String(props.detail_profile ?? '')],
+          )
+        }
+        if (level === 'admin1') enrichedAdmin1Count += 1
+        continue
+      }
+      const detailProfile = String(props.detail_profile ?? '')
+      const entry = {
+        level,
+        geo_key: geoKey,
+        parent_geo_key: String(props.parent_geo_key ?? ''),
+        country_key: countryKey,
+        ...names,
+        center: labelPoint,
+        label_point: labelPoint,
+        area: Math.max(0.000001, Number(geometryArea(feature.geometry).toFixed(6))),
+        bbox: bbox.map((value) => Number(value.toFixed(6))),
+        boundary_min_zoom: PRESENTATION_ADMIN2_BOUNDARY_ZOOM,
+        label_min_zoom: presentationLabelMinZoom(PRESENTATION_ADMIN2_ZOOM[detailProfile]),
+        source_level: String(props.source_level ?? ''),
+        presentation_index: true,
+      }
+      baseRegions.push(entry)
+      regionByKey.set(`${level}|${geoKey}`, entry)
+      if (level === 'city') addedAdmin2Count += 1
+    }
+  }
+  const admin2ByCountry = new Map()
+  for (const entry of baseRegions.filter((candidate) => candidate.level === 'city')) {
+    admin2ByCountry.set(entry.country_key, (admin2ByCountry.get(entry.country_key) ?? 0) + 1)
+  }
+  return {
+    ...baseIndex,
+    generatedAt: new Date().toISOString(),
+    regions: baseRegions,
+    presentation: {
+      enrichedAdmin1Count,
+      addedAdmin2Count,
+      admin2Count: [...admin2ByCountry.values()].reduce((sum, count) => sum + count, 0),
+      brazilAdmin2Count: admin2ByCountry.get('brazil') ?? 0,
+      indiaAdmin2Count: admin2ByCountry.get('india') ?? 0,
+      admin2BoundaryMinZoom: PRESENTATION_ADMIN2_BOUNDARY_ZOOM,
+      corruptVisibleLabelCount: baseRegions.filter(
+        (entry) => entry.display_name && !cleanPresentationLabel(entry.display_name),
+      ).length,
+      hiddenLabelCount: baseRegions.filter((entry) => !cleanPresentationLabel(entry.display_name))
+        .length,
+    },
+  }
+}
+
+function validateEnrichedRegionIndex(index) {
+  const presentation = index.presentation ?? {}
+  if (presentation.brazilAdmin2Count < 5569) {
+    throw new Error(`Brazil ADM2 coverage is below 5,569: ${presentation.brazilAdmin2Count}`)
+  }
+  if (presentation.indiaAdmin2Count < 735) {
+    throw new Error(`India ADM2 coverage is below 735: ${presentation.indiaAdmin2Count}`)
+  }
+  if (presentation.corruptVisibleLabelCount !== 0) {
+    throw new Error(
+      `Region index contains ${presentation.corruptVisibleLabelCount} corrupt visible labels`,
+    )
+  }
+  const invalidAdm2Zooms = (index.regions ?? []).filter(
+    (entry) =>
+      entry.level === 'city' &&
+      (entry.boundary_min_zoom !== PRESENTATION_ADMIN2_BOUNDARY_ZOOM ||
+        !Number.isFinite(entry.label_min_zoom) ||
+        entry.label_min_zoom < entry.boundary_min_zoom),
+  )
+  if (invalidAdm2Zooms.length) {
+    throw new Error(`Region index contains ${invalidAdm2Zooms.length} invalid ADM2 zoom policies`)
+  }
+}
+
+function indexSearchAliases(entry) {
+  return uniqueCleanIndexLabels([
+    entry.display_name,
+    entry.display_name_zh,
+    entry.display_name_en,
+    entry.display_name_local,
+    entry.name,
+    ...(entry.search_aliases ?? []),
+  ])
+}
+
+function uniqueCleanIndexLabels(values) {
+  return [...new Set(values.map(cleanPresentationLabel).filter(Boolean))]
+}
+
+function normalizeAdministrativeIndexName(value) {
+  return cleanPresentationLabel(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9\u3400-\u9fff]+/g, ' ')
+    .replace(
+      /\b(?:autonomous community|autonomous region|governorate|governate|voivodeship|prefecture|department|departement|territory|province|republic|district|oblast|region|county|state|krai)\s*$/,
+      '',
+    )
+    .replace(/\s+/g, '')
+}
+
+function validateBoundarySourceManifest(manifest) {
+  if (manifest?.schema_version !== 1) {
+    throw new Error('Boundary source manifest has an unsupported schema version')
+  }
+  for (const source of manifest.generated_geometry_sources ?? []) {
+    if (
+      !String(source.id ?? '').trim() ||
+      !/^https:\/\//.test(String(source.url ?? '')) ||
+      !String(source.license ?? '').trim() ||
+      !/^[a-f0-9]{64}$/.test(String(source.sha256 ?? ''))
+    ) {
+      throw new Error(`Boundary source manifest entry is incomplete: ${source.id ?? 'unknown'}`)
+    }
+  }
+  for (const reference of manifest.validation_references ?? []) {
+    if (!/^https:\/\//.test(String(reference.url ?? '')) || reference.ingested !== false) {
+      throw new Error(
+        `Validation-only source must use HTTPS and ingested=false: ${reference.id ?? 'unknown'}`,
+      )
+    }
+  }
 }
 
 function writeControlledLabelSubset(collection, spec) {

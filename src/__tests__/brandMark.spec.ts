@@ -6,12 +6,11 @@ import { describe, expect, it } from 'vitest'
 
 import BrandMark from '../components/BrandMark.vue'
 
-const brandedViews = [
+const platformViews = [
   'HomeView.vue',
   'Icd11SankeyView.vue',
   'CoreMarkerPriorityView.vue',
   'DataEntryView.vue',
-  'AuthView.vue',
 ]
 
 describe('shared blue brand mark', () => {
@@ -24,10 +23,16 @@ describe('shared blue brand mark', () => {
     expect(wrapper.get('.site-emblem').attributes('aria-hidden')).toBe('true')
   })
 
-  it.each(brandedViews)('%s uses the shared component', (fileName) => {
-    const source = readFileSync(resolve(process.cwd(), 'src/views', fileName), 'utf8')
-    expect(source).toContain("import BrandMark from '../components/BrandMark.vue'")
+  it('the platform header owns the shared brand mark', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/components/PlatformHeader.vue'), 'utf8')
+    expect(source).toContain("import BrandMark from './BrandMark.vue'")
     expect(source).toContain('<BrandMark')
+  })
+
+  it.each(platformViews)('%s uses the unified platform header', (fileName) => {
+    const source = readFileSync(resolve(process.cwd(), 'src/views', fileName), 'utf8')
+    expect(source).toContain("import PlatformHeader from '../components/PlatformHeader.vue'")
+    expect(source).toContain('<PlatformHeader')
   })
 
   it('MapVisualizationView.vue uses the shared component through MapPageHeader', () => {
@@ -42,8 +47,8 @@ describe('shared blue brand mark', () => {
 
     expect(viewSource).toContain("import MapPageHeader from '../components/map/MapPageHeader.vue'")
     expect(viewSource).toContain('<MapPageHeader')
-    expect(headerSource).toContain("import BrandMark from '../BrandMark.vue'")
-    expect(headerSource).toContain('<BrandMark')
+    expect(headerSource).toContain("import PlatformHeader from '../PlatformHeader.vue'")
+    expect(headerSource).toContain('<PlatformHeader')
   })
 
   it('MethodologyVerificationView.vue uses the shared component through PageHeader', () => {
@@ -60,7 +65,13 @@ describe('shared blue brand mark', () => {
       "import PageHeader from '../components/methodology/PageHeader.vue'",
     )
     expect(viewSource).toContain('<PageHeader')
-    expect(headerSource).toContain("import BrandMark from '../BrandMark.vue'")
-    expect(headerSource).toContain('<BrandMark')
+    expect(headerSource).toContain("import PlatformHeader from '../PlatformHeader.vue'")
+    expect(headerSource).toContain('<PlatformHeader')
+  })
+
+  it('keeps the standalone authentication screen branded', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/views/AuthView.vue'), 'utf8')
+    expect(source).toContain("import BrandMark from '../components/BrandMark.vue'")
+    expect(source).toContain('<BrandMark')
   })
 })

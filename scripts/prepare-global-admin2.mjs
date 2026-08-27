@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -35,8 +36,11 @@ const edgePath = resolve(generatedDir, 'world-city-edges.geojson')
 const labelPath = resolve(generatedDir, 'world-city-labels.geojson')
 const reportPath = resolve(generatedDir, 'world-cities-report.json')
 const rawOutputPath = resolve(generatedDir, '.world-cities.raw.geojson')
+const topologyOutputPath = resolve(generatedDir, '.world-cities.topology.geojson')
 const countryPath = resolve(rootDir, 'public/geo/world-countries.geojson')
 const admin1Path = resolve(rootDir, 'public/geo/world-admin1.geojson')
+const supplementDir = resolve(rootDir, 'scripts/data/preview-map/admin2-supplements')
+const supplementScopePath = resolve(rootDir, 'scripts/data/preview-map/admin2-coverage-scope.json')
 
 const args = new Set(process.argv.slice(2))
 const forceDownload = args.has('--force-download')
@@ -95,6 +99,22 @@ if (forceBuild || !existsSync(joinedPath)) {
 const countries = readJson(countryPath)
 const currentAdmin1 = readJson(admin1Path)
 const joined = readJson(joinedPath)
+const supplementScope = readJson(supplementScopePath)
+const supplementCountryAllowlist = new Set(
+  (supplementScope.candidates ?? []).map((candidate) => candidate.country_key),
+)
+const supplementResearch = loadSupplementResearch()
+const reviewedCountryKeys = new Set(
+  supplementResearch.flatMap((item) =>
+    item.research.candidates.map((candidate) => canonicalCountryKey(candidate.country_key)),
+  ),
+)
+const supplementCollections = loadSupplementCollections()
+const supplementCountryKeys = new Set(
+  supplementCollections.flatMap((item) =>
+    item.collection.features.map((feature) => canonicalCountryKey(feature.properties?.country_key)),
+  ),
+)
 const countryKeyByIso = new Map(
   countries.features.flatMap((feature) => {
     const iso = String(feature.properties?.['ISO3166-1-Alpha-3'] ?? '').toUpperCase()
@@ -121,7 +141,11 @@ for (const feature of currentAdmin1.features ?? []) {
   if (!adminKeysByCountry.has(countryKey)) adminKeysByCountry.set(countryKey, new Map())
   const index = adminKeysByCountry.get(countryKey)
   for (const alias of aliases) {
-    const normalized = normalizeKey(String(alias ?? '').split('|').pop())
+    const normalized = normalizeKey(
+      String(alias ?? '')
+        .split('|')
+        .pop(),
+    )
     if (normalized) index.set(normalized, geoKey)
   }
 }
@@ -149,6 +173,8 @@ for (const feature of joined.features ?? []) {
   if (iso === 'TWN') continue
   const countryKey = countryKeyByIso.get(iso)
   if (!countryKey) continue
+  if (reviewedCountryKeys.has(countryKey) && !supplementCountryKeys.has(countryKey)) continue
+  if (supplementCountryKeys.has(countryKey)) continue
   sourceCountryIsos.add(iso)
   const displayName = String(props.shapeName ?? '').trim() || String(props.shapeID ?? '')
   const parentName = String(props.parent_shapeName ?? '').trim()
@@ -163,6 +189,63 @@ for (const feature of joined.features ?? []) {
       sourceLevel: 'CGAZ_ADM2',
     }),
   )
+}
+
+for (const { file, collection } of supplementCollections) {
+  for (const feature of collection.features ?? []) {
+    const props = feature.properties ?? {}
+    const countryKey = canonicalCountryKey(props.country_key)
+    const displayNameLocal = String(
+      props.display_name_local ?? props.display_name ?? props.name ?? '',
+    ).trim()
+    const displayNameEn = String(props.display_name_en ?? props.name ?? displayNameLocal).trim()
+    const displayNameZh = String(props.display_name_zh ?? '').trim()
+    const sourceId = String(props.source_id ?? props.geo_key ?? '').trim()
+    const sourceUrl = String(props.source_url ?? '').trim()
+    const sourceAuthority = String(props.source_authority ?? '').trim()
+    const sourceLicense = String(props.source_license ?? '').trim()
+    const nameZhSource = String(props.name_zh_source ?? '').trim()
+    if (!countryKey || !supplementCountryAllowlist.has(countryKey)) {
+      throw new Error(`ADM2 supplement is outside the reviewed whitelist: ${file}:${countryKey}`)
+    }
+    if (!renderablePolygonGeometry(feature.geometry)) {
+      throw new Error(`ADM2 supplement geometry must be Polygon/MultiPolygon: ${file}:${sourceId}`)
+    }
+    if (
+      !displayNameLocal ||
+      !displayNameEn ||
+      !displayNameZh ||
+      !sourceId ||
+      !sourceUrl ||
+      !sourceAuthority ||
+      !sourceLicense ||
+      !nameZhSource
+    ) {
+      throw new Error(
+        `ADM2 supplement is missing required provenance or names: ${file}:${sourceId}`,
+      )
+    }
+    normalized.push(
+      normalizedCityFeature(feature, {
+        countryKey,
+        parentKey:
+          String(props.parent_geo_key ?? '').trim() ||
+          resolveParentKey(countryKey, props.parent_name ?? ''),
+        displayName: displayNameLocal,
+        displayNameLocal,
+        displayNameEn,
+        displayNameZh,
+        sourceId,
+        sourceLevel: 'official_supplement_adm2',
+        sourceUrl,
+        sourceAuthority,
+        sourceLicense,
+        sourceVersion: String(props.source_version ?? '').trim(),
+        nameZhSource,
+        subdivisionCode: String(props.subdivision_code ?? '').trim(),
+      }),
+    )
+  }
 }
 
 // Taiwan, Hong Kong and Macao are already represented in the local admin source
@@ -198,6 +281,7 @@ const admin1ByCountry = groupBy(currentAdmin1.features ?? [], (feature) =>
 for (const country of countries.features ?? []) {
   const countryKey = canonicalCountryKey(country.properties?.country_key)
   if (!countryKey || countryKey === 'china' || coveredCountryKeys.has(countryKey)) continue
+  if (reviewedCountryKeys.has(countryKey)) continue
   const fallbackAdmin1 = admin1ByCountry.get(countryKey) ?? []
   const fallbackFeatures = fallbackAdmin1.length ? fallbackAdmin1 : [country]
   for (const feature of fallbackFeatures) {
@@ -218,8 +302,15 @@ const rawRenderable = normalized.filter((feature) => geometryArea(feature.geomet
 rawRenderable.sort((left, right) =>
   String(left.properties.region_id).localeCompare(String(right.properties.region_id)),
 )
-writeJson(rawOutputPath, { type: 'FeatureCollection', features: rawRenderable })
-
+// The pinned CGAZ cache was already simplified and topology-normalized before
+// the ADM1 join. A second Mapshaper clean/output pass merged valid island parts,
+// so retain the complete eligible Polygon/MultiPolygon geometry verbatim here.
+const renderable = rawRenderable
+renderable.sort((left, right) =>
+  String(left.properties?.region_id ?? '').localeCompare(String(right.properties?.region_id ?? '')),
+)
+writeJson(outputPath, { type: 'FeatureCollection', features: renderable })
+writeJson(rawOutputPath, { type: 'FeatureCollection', features: renderable })
 run(
   mapshaperBin,
   [
@@ -233,70 +324,114 @@ run(
     'snap-interval=0.000001',
     '-merge-layers',
     'force',
-    'name=world_cities',
+    'name=world_cities_topology',
     '-o',
     'format=geojson',
     'precision=0.00001',
-    outputPath,
+    topologyOutputPath,
   ],
-  'normalize global city topology',
+  'normalize global city display-edge topology',
 )
+const topologyRenderable = readJson(topologyOutputPath).features ?? []
 rmSync(rawOutputPath, { force: true })
-
-const renderable = readJson(outputPath).features ?? []
-renderable.sort((left, right) =>
-  String(left.properties?.region_id ?? '').localeCompare(String(right.properties?.region_id ?? '')),
-)
-writeJson(outputPath, { type: 'FeatureCollection', features: renderable })
-const edgeCollection = topologyLineCollection(renderable)
+rmSync(topologyOutputPath, { force: true })
+const edgeCollection = topologyLineCollection(topologyRenderable)
 writeJson(edgePath, edgeCollection)
 run(
   mapshaperBin,
-  [
-    outputPath,
-    '-points',
-    'inner',
-    '-o',
-    'format=geojson',
-    'precision=0.00001',
-    labelPath,
-  ],
+  [outputPath, '-points', 'inner', '-o', 'format=geojson', 'precision=0.00001', labelPath],
   'build global city label points',
 )
 
 const countryKeys = new Set(
-  countries.features.map((feature) => canonicalCountryKey(feature.properties?.country_key)).filter(Boolean),
+  countries.features
+    .map((feature) => canonicalCountryKey(feature.properties?.country_key))
+    .filter(Boolean),
 )
-const covered = new Set(normalized.map((feature) => feature.properties.country_key))
+const covered = new Set(renderable.map((feature) => feature.properties.country_key))
+const missingCountryKeys = [...countryKeys].filter((key) => !covered.has(key)).sort()
+const reviewedWithoutGeometryCountryKeys = [...reviewedCountryKeys]
+  .filter((key) => !supplementCountryKeys.has(key))
+  .sort()
+const unexpectedMissingCountryKeys = missingCountryKeys.filter(
+  (key) => !reviewedCountryKeys.has(key),
+)
+const featureCountByCountry = Object.fromEntries(
+  [...covered]
+    .sort()
+    .map((countryKey) => [
+      countryKey,
+      renderable.filter((feature) => feature.properties.country_key === countryKey).length,
+    ]),
+)
 const report = {
   generatedAt: new Date().toISOString(),
   source: 'geoBoundaries CGAZ',
   sourceRevision,
   license: 'CC BY 4.0',
   sourceArchives: Object.fromEntries(
-    Object.entries(sources).map(([level, source]) => [level, { url: source.url, sha256: source.sha256 }]),
+    Object.entries(sources).map(([level, source]) => [
+      level,
+      { url: source.url, sha256: source.sha256 },
+    ]),
   ),
-  simplification: 'Mapshaper weighted 10%, keep-shapes, 0.00001 degree output precision',
+  simplification:
+    'Pinned CGAZ joined cache: Mapshaper weighted 10%, keep-shapes, 0.00001 degree output precision; no second geometry-clean pass',
   edgeTopology: {
     partitionField: 'country_key',
     policy:
-      'polygons are topology-normalized per country; unique inner edges are derived from that exact normalized geometry',
+      'all polygon components are preserved verbatim; a separate per-country cleaned topology assigns each unique display edge once',
+    polygonFeatureCount: renderable.length,
+    topologyFeatureCount: topologyRenderable.length,
     featureCount: edgeCollection.features.length,
     segmentCount: countLineSegments(edgeCollection),
   },
   featureCount: renderable.length,
+  featureCountByCountry,
+  polygonParts: {
+    source: rawRenderable.reduce((sum, feature) => sum + geometryPartCount(feature.geometry), 0),
+    emitted: renderable.reduce((sum, feature) => sum + geometryPartCount(feature.geometry), 0),
+    dropped:
+      rawRenderable.reduce((sum, feature) => sum + geometryPartCount(feature.geometry), 0) -
+      renderable.reduce((sum, feature) => sum + geometryPartCount(feature.geometry), 0),
+  },
   countryCount: covered.size,
   expectedCountryCount: countryKeys.size,
-  missingCountryKeys: [...countryKeys].filter((key) => !covered.has(key)).sort(),
+  missingCountryKeys,
+  reviewedWithoutGeometryCountryKeys,
+  unexpectedMissingCountryKeys,
   sourceCountryIsoCount: sourceCountryIsos.size,
   skippedDisputedFeatures: skippedDisputed,
   skippedMainlandChinaFeatures: skippedMainlandChina,
   unmatchedParentFeatures: unmatchedParents,
   duplicateGeoKeysResolved: [...duplicateKeyCounts.values()].filter((count) => count > 1).length,
+  supplements: {
+    files: supplementCollections.map((item) => item.file),
+    countryKeys: [...supplementCountryKeys].sort(),
+    featureCount: supplementCollections.reduce(
+      (sum, item) => sum + item.collection.features.length,
+      0,
+    ),
+    researchFiles: supplementResearch.map((item) => item.file),
+    reviewedCountryKeys: [...reviewedCountryKeys].sort(),
+  },
 }
 writeJson(reportPath, report)
-if (report.missingCountryKeys.length) {
-  throw new Error(`Global city coverage missing: ${report.missingCountryKeys.join(', ')}`)
+if (report.unexpectedMissingCountryKeys.length) {
+  throw new Error(
+    `Global city coverage has unreviewed gaps: ${report.unexpectedMissingCountryKeys.join(', ')}`,
+  )
+}
+if (report.polygonParts.dropped !== 0) {
+  throw new Error(`Global city preparation dropped ${report.polygonParts.dropped} polygon parts`)
+}
+if ((report.featureCountByCountry.brazil ?? 0) < 5569) {
+  throw new Error(
+    `Brazil ADM2 coverage is below 5,569: ${report.featureCountByCountry.brazil ?? 0}`,
+  )
+}
+if ((report.featureCountByCountry.india ?? 0) < 735) {
+  throw new Error(`India ADM2 coverage is below 735: ${report.featureCountByCountry.india ?? 0}`)
 }
 console.log(
   `Prepared ${report.featureCount} city-equivalent regions for ${report.countryCount} country keys.`,
@@ -308,7 +443,8 @@ function normalizedCityFeature(feature, options) {
   const candidate = `${parentPrefix}|${baseSlug}`
   const count = (duplicateKeyCounts.get(candidate) ?? 0) + 1
   duplicateKeyCounts.set(candidate, count)
-  const geoKey = count === 1 ? candidate : `${candidate}-${shortId(options.sourceId || String(count))}`
+  const geoKey =
+    count === 1 ? candidate : `${candidate}-${shortId(options.sourceId || String(count))}`
   return {
     type: 'Feature',
     properties: {
@@ -322,12 +458,72 @@ function normalizedCityFeature(feature, options) {
       name: options.displayName,
       source_id: options.sourceId,
       source_level: options.sourceLevel,
+      ...(options.sourceLevel === 'official_supplement_adm2'
+        ? {
+            display_name_local: options.displayNameLocal ?? options.displayName,
+            display_name_en: options.displayNameEn ?? options.displayName,
+            display_name_zh: options.displayNameZh ?? '',
+            name_zh_source: options.nameZhSource ?? '',
+            name_zh_verified: Boolean(options.displayNameZh && options.nameZhSource),
+            subdivision_code: options.subdivisionCode ?? '',
+            source_url: options.sourceUrl ?? '',
+            source_authority: options.sourceAuthority ?? '',
+            source_license: options.sourceLicense ?? '',
+            source_version: options.sourceVersion ?? '',
+          }
+        : {}),
     },
-    // City-equivalent regions are rendered as their principal land body. Small
-    // detached islands are intentionally omitted: they create noisy fragments
-    // and duplicate-looking coastal outlines at application zoom levels.
-    geometry: principalPolygonGeometry(feature.geometry),
+    // Preserve every source polygon component. Shared topology and tile-level
+    // simplification control visual density without deleting legal islands.
+    geometry: feature.geometry,
   }
+}
+
+function loadSupplementCollections() {
+  if (!existsSync(supplementDir)) return []
+  return readdirSync(supplementDir)
+    .filter((file) => file.endsWith('.geojson'))
+    .sort()
+    .map((file) => {
+      const collection = readJson(resolve(supplementDir, file))
+      if (collection?.type !== 'FeatureCollection' || !Array.isArray(collection.features)) {
+        throw new Error(`Invalid ADM2 supplement FeatureCollection: ${file}`)
+      }
+      return { file, collection }
+    })
+}
+
+function loadSupplementResearch() {
+  if (!existsSync(supplementDir)) return []
+  const seen = new Set()
+  return readdirSync(supplementDir)
+    .filter((file) => file.endsWith('-research.json'))
+    .sort()
+    .map((file) => {
+      const research = readJson(resolve(supplementDir, file))
+      if (!Array.isArray(research.candidates)) {
+        throw new Error(`Invalid ADM2 supplement research package: ${file}`)
+      }
+      for (const candidate of research.candidates) {
+        const countryKey = canonicalCountryKey(candidate.country_key)
+        if (!countryKey || !supplementCountryAllowlist.has(countryKey)) {
+          throw new Error(`ADM2 research is outside the reviewed whitelist: ${file}:${countryKey}`)
+        }
+        if (seen.has(countryKey)) {
+          throw new Error(`Duplicate ADM2 research country_key: ${countryKey}`)
+        }
+        seen.add(countryKey)
+      }
+      return { file, research }
+    })
+}
+
+function renderablePolygonGeometry(geometry) {
+  return (
+    (geometry?.type === 'Polygon' || geometry?.type === 'MultiPolygon') &&
+    Array.isArray(geometry.coordinates) &&
+    geometry.coordinates.length > 0
+  )
 }
 
 function topologyLineCollection(features) {
@@ -462,18 +658,10 @@ function countLineSegments(collection) {
   }, 0)
 }
 
-function principalPolygonGeometry(geometry) {
-  const polygons =
-    geometry?.type === 'Polygon'
-      ? [geometry.coordinates]
-      : geometry?.type === 'MultiPolygon'
-        ? geometry.coordinates
-        : []
-  const principal = polygons
-    .map((polygon) => ({ polygon, area: polygonArea(polygon) }))
-    .filter((item) => item.area > 0)
-    .sort((left, right) => right.area - left.area)[0]?.polygon
-  return principal ? { type: 'Polygon', coordinates: principal } : geometry
+function geometryPartCount(geometry) {
+  if (geometry?.type === 'Polygon') return 1
+  if (geometry?.type === 'MultiPolygon') return geometry.coordinates?.length ?? 0
+  return 0
 }
 
 function polygonArea(polygon) {

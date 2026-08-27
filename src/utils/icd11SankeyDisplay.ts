@@ -1,4 +1,9 @@
-import type { Icd11SankeyNode, Icd11SankeyPath } from '../types/icd11Sankey'
+import type {
+  Icd11SankeyNode,
+  Icd11SankeyPath,
+  Icd11SankeyStats,
+  Icd11SankeyTopItem,
+} from '../types/icd11Sankey'
 
 export type Icd11SankeyDisplayMode = 'smart' | 'all' | 'top20' | 'top50' | 'top100'
 export type Level1Scope = 'selected' | 'linked'
@@ -31,18 +36,71 @@ export interface UpstreamContext {
   level2OnlyPathCount: number
 }
 
-export function smartSankeyLimit(pathCount: number) {
-  if (pathCount > 200) return 100
-  if (pathCount >= 80) return 50
-  return null
+export interface Icd11SankeyOverviewStats extends Icd11SankeyStats {
+  topLevel2: Icd11SankeyTopItem[]
 }
 
-export function displayModeLimit(mode: Icd11SankeyDisplayMode, pathCount: number) {
-  if (mode === 'smart') return smartSankeyLimit(pathCount)
+export function smartSankeyLimit(pathCount: number, cap = 50) {
+  return pathCount > cap ? cap : null
+}
+
+export function displayModeLimit(
+  mode: Icd11SankeyDisplayMode,
+  pathCount: number,
+  smartLimit = 50,
+) {
+  if (mode === 'smart') return smartSankeyLimit(pathCount, smartLimit)
   if (mode === 'top20') return 20
   if (mode === 'top50') return 50
   if (mode === 'top100') return 100
   return null
+}
+
+export function summarizeSankeyOverview(paths: Icd11SankeyPath[]): Icd11SankeyOverviewStats {
+  const totalWeight = paths.reduce((sum, path) => sum + Number(path.weight || 0), 0)
+  const level3Paths = paths.filter((path) => path.mappingLevel === 'Level3' && path.level3)
+  const level2OnlyPaths = paths.filter((path) => path.mappingLevel === 'Level2')
+  const level3Weight = level3Paths.reduce((sum, path) => sum + Number(path.weight || 0), 0)
+  const level2OnlyWeight = level2OnlyPaths.reduce(
+    (sum, path) => sum + Number(path.weight || 0),
+    0,
+  )
+  const uniqueCount = (selector: (path: Icd11SankeyPath) => string | null | undefined) =>
+    new Set(paths.map(selector).filter((value): value is string => Boolean(value))).size
+  const topItems = (
+    source: Icd11SankeyPath[],
+    selector: (path: Icd11SankeyPath) => string | null | undefined,
+  ): Icd11SankeyTopItem[] =>
+    relationShareItems(source, selector)
+      .slice(0, 10)
+      .map(({ name, value, share }) => ({ name, value, share }))
+
+  const level1 = uniqueCount((path) => path.level1)
+  const level2 = uniqueCount((path) => path.level2)
+  const level3 = uniqueCount((path) => path.level3)
+  const drug = uniqueCount((path) => path.drug)
+  const biomarker = uniqueCount((path) => path.biomarker)
+
+  return {
+    totalWeight,
+    level1,
+    level2,
+    level3,
+    drug,
+    biomarker,
+    mappingRows: paths.reduce((sum, path) => sum + Number(path.mappingRows || 0), 0),
+    relations: paths.length,
+    maxNodes: Math.max(level1, level2, level3, drug, biomarker),
+    level2OnlyPaths: level2OnlyPaths.length,
+    level3Paths: level3Paths.length,
+    level2OnlyWeight,
+    level3Weight,
+    topLevel1: topItems(paths, (path) => path.level1),
+    topLevel2: topItems(paths, (path) => path.level2),
+    topLevel3: topItems(level3Paths, (path) => path.level3),
+    topDrug: topItems(paths, (path) => path.drug),
+    topBiomarker: topItems(paths, (path) => path.biomarker),
+  }
 }
 
 export function sortSankeyPaths(paths: Icd11SankeyPath[]) {

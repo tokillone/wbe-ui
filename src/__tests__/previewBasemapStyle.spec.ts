@@ -7,6 +7,8 @@ import {
   PREVIEW_BOUNDARY_LAYER_IDS,
   PREVIEW_CITY_BOUNDARY_FADE_START,
   PREVIEW_COUNTRY_LEVEL_END,
+  PREVIEW_COUNTRY_BOUNDARY_FADE_START,
+  PREVIEW_COUNTRY_BOUNDARY_MAJOR_VISIBLE_ZOOM,
   PREVIEW_LABEL_LAYER_IDS,
   PREVIEW_MAP_MAX_ZOOM,
   PREVIEW_MAP_MIN_ZOOM,
@@ -19,6 +21,7 @@ type TestLayer = {
   'source-layer'?: string
   minzoom?: number
   maxzoom?: number
+  filter?: unknown
   layout?: Record<string, unknown>
   paint?: Record<string, unknown>
 }
@@ -45,7 +48,7 @@ describe('preview composite basemap style', () => {
     expect(PREVIEW_MAP_MAX_ZOOM).toBe(8)
     expect(PREVIEW_COUNTRY_LEVEL_END).toBe(3.85)
     expect(PREVIEW_ADMIN1_LEVEL_END).toBe(6.6)
-    expect(PREVIEW_CITY_BOUNDARY_FADE_START).toBe(6.1)
+    expect(PREVIEW_CITY_BOUNDARY_FADE_START).toBe(6.35)
   })
 
   it('removes built-in labels and boundaries and uses one vector source', () => {
@@ -118,10 +121,15 @@ describe('preview composite basemap style', () => {
     )
     expect(chineseAdminText).toContain('name_zh_verified')
     expect(chineseAdminText).toContain('display_name_local')
+    const chineseAdmin2 = zhLayers.find((layer) => layer.id === 'presentation-admin2-labels-dense')
+    expect(JSON.stringify(chineseAdmin2?.filter)).toContain('"any"')
+    expect(JSON.stringify(chineseAdmin2?.filter)).toContain('display_name_local')
+    expect(JSON.stringify(chineseAdmin2?.layout?.['text-field'])).toContain('display_name_en')
   })
 
-  it('keeps China province borders above city borders while switching global meshes', () => {
+  it('keeps parent boundaries visible above their child boundaries through maximum zoom', () => {
     const layers = buildPreviewBasemapLayers(baseLayers, 'zh') as TestLayer[]
+    expect(layers.find((layer) => layer.id === 'country-major-borders')?.maxzoom).toBe(8.01)
     const presentationAdmin1 = layers.find((layer) => layer.id === 'presentation-admin1-borders')
     expect(presentationAdmin1?.maxzoom).toBeUndefined()
     expect(presentationAdmin1?.['source-layer']).toBe('preview_presentation_admin1_boundaries')
@@ -134,6 +142,7 @@ describe('preview composite basemap style', () => {
     expect(chinaProvince?.layout?.['line-cap']).toBe('round')
     expect(chinaProvince?.paint?.['line-color']).toBe('#8d9498')
     expect(chinaProvince?.paint?.['line-opacity']).toBe(0.6)
+    expect(chinaCity?.minzoom).toBe(6.35)
     expect(chinaProvince?.paint?.['line-width']).toEqual([
       'interpolate',
       ['linear'],
@@ -149,12 +158,10 @@ describe('preview composite basemap style', () => {
     ])
     expect(layers.find((layer) => layer.id === 'presentation-admin2-borders')?.minzoom).toBe(6.35)
     expect(
-      JSON.stringify(
-        layers.find((layer) => layer.id === 'presentation-admin2-borders')?.paint?.['line-opacity'],
-      ),
-    ).toContain('veryDense')
+      layers.find((layer) => layer.id === 'presentation-admin2-borders')?.paint?.['line-opacity'],
+    ).toBe(0.56)
     expect(chinaCity?.minzoom).toBe(PREVIEW_CITY_BOUNDARY_FADE_START)
-    expect(JSON.stringify(chinaCity?.paint?.['line-opacity'])).toContain('6.6')
+    expect(chinaCity?.paint?.['line-opacity']).toBe(0.52)
     expect(layers.indexOf(chinaProvince!)).toBeGreaterThan(layers.indexOf(chinaCity!))
     expect(layers.findIndex((layer) => layer.id === 'country-major-borders')).toBeGreaterThan(
       layers.indexOf(chinaProvince!),
@@ -165,15 +172,41 @@ describe('preview composite basemap style', () => {
     expect(new Set(layers.map((layer) => layer.id)).size).toBe(layers.length)
   })
 
+  it('hides country borders in the world overview and reveals them progressively', () => {
+    const layers = buildPreviewBasemapLayers(baseLayers, 'zh') as TestLayer[]
+    expect(
+      layers.find((layer) => layer.id === 'country-overview-borders')?.paint?.['line-opacity'],
+    ).toBe(0)
+    const majorOpacity = layers.find((layer) => layer.id === 'country-major-borders')?.paint?.[
+      'line-opacity'
+    ]
+    const mediumOpacity = layers.find((layer) => layer.id === 'country-medium-borders')?.paint?.[
+      'line-opacity'
+    ]
+    const smallOpacity = layers.find((layer) => layer.id === 'country-small-borders')?.paint?.[
+      'line-opacity'
+    ]
+    expect(majorOpacity).toEqual([
+      'interpolate',
+      ['linear'],
+      ['zoom'],
+      PREVIEW_COUNTRY_BOUNDARY_FADE_START,
+      0,
+      PREVIEW_COUNTRY_BOUNDARY_MAJOR_VISIBLE_ZOOM,
+      0.6,
+    ])
+    expect(JSON.stringify(mediumOpacity)).toContain('3.85')
+    expect(JSON.stringify(smallOpacity)).toContain('4.35')
+  })
+
   it('gives every profile a real minzoom without invisible collision labels', () => {
     const layers = buildPreviewBasemapLayers(baseLayers, 'zh') as TestLayer[]
     const adaptiveBoundaryExpressions = [
       layers.find((layer) => layer.id === 'presentation-admin1-borders')?.paint?.['line-opacity'],
       layers.find((layer) => layer.id === 'presentation-admin2-borders')?.paint?.['line-opacity'],
     ]
-    expect(
-      adaptiveBoundaryExpressions.every((expression) => countZoomOperators(expression) === 1),
-    ).toBe(true)
+    expect(countZoomOperators(adaptiveBoundaryExpressions[0])).toBe(1)
+    expect(countZoomOperators(adaptiveBoundaryExpressions[1])).toBe(0)
     const expectedMinzooms = new Map([
       ['presentation-admin1-labels-adm1_le25', 4.05],
       ['presentation-admin1-labels-adm1_26_80', 4.45],
@@ -184,7 +217,7 @@ describe('preview composite basemap style', () => {
       ['presentation-admin2-labels-standard', 7.05],
       ['presentation-admin2-labels-dense', 7.5],
       ['presentation-admin2-labels-veryDense', 7.9],
-      ['presentation-admin2-labels-china', 6.3],
+      ['presentation-admin2-labels-china', 6.55],
     ])
     for (const [id, minzoom] of expectedMinzooms) {
       const layer = layers.find((candidate) => candidate.id === id)

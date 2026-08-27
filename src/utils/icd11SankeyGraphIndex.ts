@@ -1,6 +1,7 @@
-import type { Icd11SankeyGraph, Icd11SankeyPath } from '../types/icd11Sankey'
+import type { Icd11SankeyGraph, Icd11SankeyNode, Icd11SankeyPath } from '../types/icd11Sankey'
 
 export interface Icd11SankeyGraphIndex {
+  nodeById: ReadonlyMap<string, Icd11SankeyNode>
   pathById: ReadonlyMap<string, Icd11SankeyPath>
   pathIdsByNode: ReadonlyMap<string, readonly string[]>
 }
@@ -12,6 +13,7 @@ export function icd11SankeyGraphIndex(graph: Icd11SankeyGraph): Icd11SankeyGraph
   if (cached) return cached
 
   const pathById = new Map<string, Icd11SankeyPath>()
+  const nodeById = new Map(graph.nodes.map((node) => [node.name, node]))
   const mutablePathIdsByNode = new Map<string, string[]>()
   for (const path of graph.paths) {
     pathById.set(path.pathId, path)
@@ -25,6 +27,7 @@ export function icd11SankeyGraphIndex(graph: Icd11SankeyGraph): Icd11SankeyGraph
     }
   }
   const index: Icd11SankeyGraphIndex = {
+    nodeById,
     pathById,
     pathIdsByNode: mutablePathIdsByNode,
   }
