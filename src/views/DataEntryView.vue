@@ -1,3129 +1,739 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 
 import PlatformHeader from '../components/PlatformHeader.vue'
+import { fetchUsers, updateUserPermissions, type AdminUserPage } from '../services/admin'
+import type { UserResponse } from '../services/auth'
 import {
-  bulkUpdateUserPermissions,
-  fetchUsers,
-  updateUserPermissions,
-  type AdminUserPage,
-  type BulkUserPermissionPayload,
-  type UserPermissionPayload,
-} from '../services/admin'
-import { fetchCurrentUser, logout as requestLogout, type UserResponse } from '../services/auth'
-import {
-  downloadReviewDraft,
-  downloadReviewPackageFile,
-  downloadUploadFile,
+  completeUploadReview,
+  cancelUploadSubmission,
+  downloadUploadIssues,
   downloadUploadTemplate,
+  fetchRefreshJobs,
+  fetchCanonicalTerms,
+  fetchDictionaryChanges,
+  fetchReviewRecords,
   fetchUploadBatch,
-  fetchReviewPackages,
-  fetchUploadRows,
+  fetchUploadProcessing,
   fetchUploads,
+  patchReviewRecord,
   publishUpload,
-  returnUpload,
-  uploadPreview,
-  uploadReviewPackage,
-  uploadSubmissionRevision,
+  requestDictionaryChange,
+  returnUploadReview,
+  reviewDictionaryChange,
+  retryRefreshJob,
+  submitReadyDoiGroups,
+  uploadCorrection,
+  uploadSubmission,
   type DataUploadBatch,
-  type DataUploadBatchPage,
-  type DataUploadPreview,
-  type DataUploadReviewPackage,
-  type DataUploadRowsPage,
+  type UploadProcessing,
+  type UploadCanonicalTerm,
+  type UploadDictionaryChange,
+  type UploadRefreshJob,
+  type UploadReviewPage,
+  type UploadReviewRecord,
 } from '../services/dataUploads'
-import { clearSession, getStoredSession, isAdmin, updateStoredUser } from '../services/session'
 import { getUserErrorMessage } from '../services/errors'
+import { getStoredSession, isAdmin } from '../services/session'
 
-type WorkspaceSection = 'upload' | 'batches' | 'users'
-type PermissionFilter = 'all' | 'true' | 'false'
-type BatchStatusFilter =
-  | 'all'
-  | 'PENDING_REVIEW'
-  | 'REVISION_REQUIRED'
-  | 'READY_TO_PUBLISH'
-  | 'PUBLISHING'
-  | 'PUBLISH_FAILED'
-  | 'VALIDATION_FAILED'
-  | 'PUBLISHED'
-type BatchScopeFilter = 'all' | 'mine' | 'pendingReview' | 'approved'
-type BatchUploaderTypeFilter = 'all' | 'viewer' | 'manager'
-type RowStatusFilter = 'all' | 'ERROR' | 'WARNING' | 'VALID' | 'SYNCED' | 'SKIPPED'
-type RowViewFilter = 'submission' | 'reviewPackage'
+type WorkspaceTab = 'workflow' | 'batches' | 'permissions'
 
-const PREVIEW_COLUMNS: Record<string, string[]> = {
-  原始数据: ['投稿行ID', '投稿类型', 'DOI', '文献标题', '来源记录编号', '生物标记物名称原文', '指标类型', '原始数值', '原始单位'],
+const stages = [
+  { number: '01', title: '准备文件', detail: '下载 SUBMISSION_V2，一行填一个原始观测值。' },
+  { number: '02', title: '校验筛选', detail: '按 DOI 整组拦截错误与库内重复。' },
+  { number: '03', title: '规范审核', detail: '并排核对原值、规范值和映射理由。' },
+  { number: '04', title: '发布与刷新', detail: '增量入库，地图与优先级后台构建新版本。' },
+]
+
+const standardFields = [
+  '目标类别', '目标物质类别', '目标物质子类', '目标物质细类',
+  '标准药物名称', '标准生物标记物名称', '标准CAS', '标准数值', '标准单位',
+]
+const siteFields = ['标准点位名称', '标准国家', '标准省州', '标准城市', '已有点位ID', '点位确认依据']
+const methodFields = ['标准采样方法', '标准分析方法', '采样主类', '采样对象', '比例方式', '采样部署时长', '被动采样器类型']
+const sankeyFields = ['疾病实体', 'ICD11一级编码', 'ICD11二级编码', 'ICD11三级编码', '映射层级', '匹配类型']
+const rawDisplayFields = ['DOI', '文献标题', '来源记录编号', '标记物原文', '采样方法', '分析方法', '点位名称', '国家', '采样时间', '指标类型', '原始值', '原始单位', '证据定位']
+const dictionaryTypeByField: Record<string, string> = {
+  '目标类别': 'TARGET_CATEGORY', '目标物质类别': 'SUBSTANCE_CATEGORY',
+  '目标物质子类': 'SUBSTANCE_SUBCLASS', '目标物质细类': 'SUBSTANCE_FINE',
+  '标准单位': 'UNIT', '标准国家': 'LOCATION_COUNTRY', '标准省州': 'LOCATION_PROVINCE',
+  '标准城市': 'LOCATION_CITY', '已有点位ID': 'CONFIRMED_SITE', 'ICD11一级编码': 'ICD11_LEVEL1',
+  'ICD11二级编码': 'ICD11_LEVEL2', 'ICD11三级编码': 'ICD11_LEVEL3',
 }
+const dictionaryTypes = [...new Set(Object.values(dictionaryTypeByField))]
 
-const FIELD_GROUPS = [
-  { title: '文献来源', fields: '投稿类型、DOI或已有文献编号、标题、年份、期刊/来源、来源文件名或URL' },
-  { title: '原始事实', fields: '来源记录编号、标记物原文、采样与分析方法、点位、采样时间' },
-  { title: '指标数值', fields: '指标类型、统计量、原始数值和单位；保留ND、<LOD、<LOQ等原文' },
-  { title: '证据追踪', fields: '数值来源、计算换算说明、页码/表号/Sheet/图号和原文证据' },
-]
-
-const STATUS_LABELS: Record<string, string> = {
-  PENDING_REVIEW: '待审核',
-  REVISION_REQUIRED: '退回修改',
-  READY_TO_PUBLISH: '待确认入库',
-  PUBLISHING: '入库中',
-  PUBLISH_FAILED: '入库失败',
-  VALIDATION_FAILED: '需修正',
-  PUBLISHED: '已入库',
-  VALID: '通过',
-  WARNING: '有警告',
-  ERROR: '错误',
-  SKIPPED: '已跳过',
-}
-
-const BATCH_STATUS_FILTERS = [
-  { value: 'all', label: '全部状态' },
-  { value: 'PENDING_REVIEW', label: '待审核' },
-  { value: 'REVISION_REQUIRED', label: '退回修改' },
-  { value: 'READY_TO_PUBLISH', label: '待确认入库' },
-  { value: 'PUBLISHING', label: '入库中' },
-  { value: 'PUBLISH_FAILED', label: '入库失败待重试' },
-  { value: 'VALIDATION_FAILED', label: '需修正' },
-  { value: 'PUBLISHED', label: '已入库' },
-]
-
-const BATCH_SCOPE_FILTERS = [
-  { value: 'all', label: '全部批次' },
-  { value: 'mine', label: '我的上传' },
-  { value: 'pendingReview', label: '待审核队列' },
-  { value: 'approved', label: '待同步队列' },
-]
-
-const BATCH_UPLOADER_FILTERS = [
-  { value: 'all', label: '全部上传人' },
-  { value: 'viewer', label: '普通用户上传' },
-  { value: 'manager', label: '管理人员上传' },
-]
-
-const ROW_STATUS_FILTERS = [
-  { value: 'all', label: '全部行' },
-  { value: 'ERROR', label: '错误' },
-  { value: 'WARNING', label: '警告' },
-  { value: 'VALID', label: '通过' },
-  { value: 'SYNCED', label: '已同步' },
-  { value: 'SKIPPED', label: '已跳过' },
-]
-
-const ROLE_LABELS: Record<UserResponse['role'], string> = {
-  admin: '系统管理员',
-  editor: '管理人员',
-  viewer: '普通用户',
-}
-
-const ROLE_FILTERS = [
-  { value: 'all', label: '全部角色' },
-  { value: 'admin', label: '系统管理员' },
-  { value: 'editor', label: '管理人员' },
-  { value: 'viewer', label: '普通用户' },
-]
-
-const PERMISSION_FILTERS = [
-  { value: 'all', label: '全部' },
-  { value: 'true', label: '已开启' },
-  { value: 'false', label: '已关闭' },
-]
-
-const PAGE_SIZE_OPTIONS = [10, 20, 50]
-const PREVIEW_ISSUE_LIMIT = 6
-const MAX_UPLOAD_FILE_SIZE = 50 * 1024 * 1024
-
-const BULK_ACTIONS = [
-  { value: 'role-editor', label: '设为管理人员' },
-  { value: 'role-viewer', label: '设为普通用户' },
-  { value: 'upload-on', label: '开启上传' },
-  { value: 'upload-off', label: '关闭上传' },
-  { value: 'review-on', label: '开启审核' },
-  { value: 'review-off', label: '关闭审核' },
-  { value: 'sync-on', label: '开启同步' },
-  { value: 'sync-off', label: '关闭同步' },
-  { value: 'download-on', label: '允许下载' },
-  { value: 'download-off', label: '禁止下载' },
-]
-
-const emptyUserPage: AdminUserPage = {
-  items: [],
-  page: 1,
-  size: 10,
-  total: 0,
-  totalPages: 0,
-}
-
-const emptyBatchPage: DataUploadBatchPage = {
-  items: [],
-  page: 1,
-  size: 20,
-  total: 0,
-  totalPages: 0,
-}
-
-function normalizeBatchPagePayload(payload: unknown, fallbackPage: number, fallbackSize: number): DataUploadBatchPage {
-  if (payload && typeof payload === 'object' && Array.isArray((payload as DataUploadBatchPage).items)) {
-    const page = payload as DataUploadBatchPage
-    return {
-      items: page.items,
-      page: Number.isFinite(page.page) ? page.page : fallbackPage,
-      size: Number.isFinite(page.size) ? page.size : fallbackSize,
-      total: Number.isFinite(page.total) ? page.total : page.items.length,
-      totalPages: Number.isFinite(page.totalPages) ? page.totalPages : (page.items.length ? 1 : 0),
-    }
-  }
-  if (Array.isArray(payload)) {
-    return {
-      items: payload as DataUploadBatch[],
-      page: fallbackPage,
-      size: fallbackSize,
-      total: payload.length,
-      totalPages: payload.length ? 1 : 0,
-    }
-  }
-  return { ...emptyBatchPage, page: fallbackPage, size: fallbackSize }
-}
-
-const session = getStoredSession()
-const router = useRouter()
-const currentUser = ref<UserResponse | null>(session?.user ?? null)
-const activeSection = ref<WorkspaceSection>('upload')
+const user = ref<UserResponse | null>(getStoredSession()?.user ?? null)
+const activeTab = ref<WorkspaceTab>('workflow')
+const activeStage = ref(1)
 const selectedFile = ref<File | null>(null)
-const isDragging = ref(false)
-const isUploading = ref(false)
-const isUploadingReviewPackage = ref(false)
-const isSyncing = ref(false)
-const isLoadingBatches = ref(false)
-const isLoadingRows = ref(false)
-const isLoadingUsers = ref(false)
-const isSavingUser = ref(false)
-const preview = ref<DataUploadPreview | null>(null)
-const activePreviewSheet = ref('原始数据')
+const correctionFile = ref<File | null>(null)
+const uploadInput = ref<HTMLInputElement | null>(null)
+const correctionInput = ref<HTMLInputElement | null>(null)
+const selectedUploadId = ref<number | null>(null)
 const selectedBatch = ref<DataUploadBatch | null>(null)
-const selectedRowsPage = ref<DataUploadRowsPage | null>(null)
-const reviewPackages = ref<DataUploadReviewPackage[]>([])
-const selectedReviewPackageFile = ref<File | null>(null)
-const batchPage = ref<DataUploadBatchPage>({ ...emptyBatchPage })
-const userPage = ref<AdminUserPage>({ ...emptyUserPage })
-const selectedUserIds = ref<Set<number>>(new Set())
-const editingUser = ref<UserResponse | null>(null)
-const bulkAction = ref('')
+const processing = ref<UploadProcessing | null>(null)
+const reviewPage = ref<UploadReviewPage | null>(null)
+const refreshJobs = ref<UploadRefreshJob[]>([])
+const batches = ref<DataUploadBatch[]>([])
+const batchPage = ref(1)
+const batchTotalPages = ref(0)
+const reviewPageNumber = ref(1)
+const busy = ref('')
+const notice = ref('')
+const error = ref('')
 const reviewNote = ref('')
-const message = ref('')
-const messageType = ref<'success' | 'error'>('success')
-const rowStatusFilter = ref<RowStatusFilter>('all')
-const rowViewFilter = ref<RowViewFilter>('submission')
-const batchFilters = reactive({
-  keyword: '',
-  status: 'all' as BatchStatusFilter,
-  scope: 'all' as BatchScopeFilter,
-  uploaderType: 'all' as BatchUploaderTypeFilter,
-})
-const userFilters = reactive({
-  keyword: '',
-  role: 'all' as UserResponse['role'] | 'all',
-  canUpload: 'all' as PermissionFilter,
-  canReviewUploads: 'all' as PermissionFilter,
-  canSyncData: 'all' as PermissionFilter,
-  canDownload: 'all' as PermissionFilter,
-})
-const permissionForm = reactive<UserPermissionPayload>({
-  role: 'viewer',
-  canUpload: false,
-  canReviewUploads: false,
-  canSyncData: false,
-  canDownload: true,
-})
+const overrideReason = ref('')
+const reviewReturnReason = ref('')
+const cancellationReason = ref('')
+const guideOpen = ref(true)
+const permissions = ref<AdminUserPage | null>(null)
+const canonicalTerms = reactive<Record<string, UploadCanonicalTerm[]>>({})
+const dictionaryRequests = ref<UploadDictionaryChange[]>([])
+const recordAuditReasons = reactive<Record<number, string>>({})
+const dictionaryDecisionReasons = reactive<Record<number, string>>({})
+const dictionaryDraft = reactive({ rowId: '', dictionaryType: 'TARGET_CATEGORY', proposedCode: '', proposedLabel: '', evidence: '' })
+let pollTimer: number | undefined
 
-const currentUserIsAdmin = computed(() => isAdmin(currentUser.value))
-const canUploadData = computed(() => currentUser.value?.role === 'admin' || currentUser.value?.canUpload === true)
-const canReviewUploads = computed(
-  () => currentUser.value?.role === 'admin' || currentUser.value?.canReviewUploads === true,
-)
-const canSyncData = computed(() => currentUser.value?.role === 'admin' || currentUser.value?.canSyncData === true)
-const currentUserCanDownload = computed(
-  () => currentUser.value?.role === 'admin' || currentUser.value?.canDownload !== false,
-)
-const canSeeBatchModule = computed(() => canUploadData.value || canReviewUploads.value || canSyncData.value)
-const selectedFileLabel = computed(() => selectedFile.value?.name ?? '拖拽或选择 WBE Excel 文件')
-const selectedReviewPackageLabel = computed(
-  () => selectedReviewPackageFile.value?.name ?? '选择包含五张工作表的审核包',
-)
-const activePreviewRows = computed(() => preview.value?.previewRowsBySheet?.[activePreviewSheet.value] ?? [])
-const activePreviewColumns = computed(() => PREVIEW_COLUMNS[activePreviewSheet.value] ?? [])
-const visibleHeaderErrors = computed(() => preview.value?.headerErrors.slice(0, PREVIEW_ISSUE_LIMIT) ?? [])
-const hiddenHeaderErrorCount = computed(() =>
-  Math.max(0, (preview.value?.headerErrors.length ?? 0) - PREVIEW_ISSUE_LIMIT),
-)
-const visibleBatchWarnings = computed(() => preview.value?.batchWarnings.slice(0, PREVIEW_ISSUE_LIMIT) ?? [])
-const hiddenBatchWarningCount = computed(() =>
-  Math.max(0, (preview.value?.batchWarnings.length ?? 0) - PREVIEW_ISSUE_LIMIT),
-)
-const previewBlockingMessage = computed(() => {
-  if (!preview.value) return ''
-  if (preview.value.batch.status === 'VALIDATION_FAILED') {
-    return '提交文件未通过校验。请检查“原始数据”的表头和问题行，修正后重新提交。'
-  }
-  if (preview.value.batch.errorRows > 0) {
-    return '存在阻断错误的行，不能进入审核。请查看行预览中的问题字段，修正后提交新版本。'
-  }
-  if (preview.value.batch.status === 'REVISION_REQUIRED') {
-    return '该提交已退回修改，请根据审核原因重新整理后提交新批次。'
-  }
-  if (preview.value.batch.status === 'PENDING_REVIEW') {
-    return '提交已进入人工审核。审核人员可直接下载系统生成的五表草稿。'
-  }
-  return ''
-})
+const canUpload = computed(() => user.value?.role === 'admin' || user.value?.canUpload)
+const canReview = computed(() => user.value?.role === 'admin' || user.value?.canReviewUploads)
+const canPublish = computed(() => user.value?.role === 'admin' || user.value?.canSyncData)
+const selfReview = computed(() => selectedBatch.value?.uploadedBy === user.value?.userId)
+const canReviewSelected = computed(() => canReview.value && (!selfReview.value || isAdmin(user.value)))
+const reviewRecords = computed(() => reviewPage.value?.records ?? [])
+const hasAction = (action: string) => processing.value?.availableActions?.includes(action) ?? false
 
-const currentReviewPackage = computed(() => {
-  const packageId = selectedBatch.value?.currentPackageId
-  return reviewPackages.value.find((item) => item.packageId === packageId) ?? null
-})
-
-const workspaceSections = computed(() => {
-  const sections: Array<{ key: WorkspaceSection; title: string; caption: string }> = []
-  if (canUploadData.value) {
-    sections.push({ key: 'upload', title: '上传录入', caption: '模板、校验、预览' })
-  }
-  if (canSeeBatchModule.value) {
-    sections.push({ key: 'batches', title: '上传批次', caption: '历史、审核、行预览' })
-  }
-  if (currentUserIsAdmin.value) {
-    sections.push({ key: 'users', title: '用户权限', caption: '分页、筛选、批量赋权' })
-  }
-  return sections
-})
-
-const activeHeaderLabel = computed(() => {
-  if (activeSection.value === 'batches') return '上传记录'
-  if (activeSection.value === 'users') return '权限管理'
-  return '上传录入'
-})
-
-const selectableCurrentPageUsers = computed(() => userPage.value.items.filter((user) => user.role !== 'admin'))
-const selectedCount = computed(() => selectedUserIds.value.size)
-const currentPageAllSelected = computed(
-  () =>
-    selectableCurrentPageUsers.value.length > 0 &&
-    selectableCurrentPageUsers.value.every((user) => selectedUserIds.value.has(user.userId)),
-)
-const currentPageSomeSelected = computed(
-  () =>
-    selectableCurrentPageUsers.value.some((user) => selectedUserIds.value.has(user.userId)) &&
-    !currentPageAllSelected.value,
-)
-
-watch(workspaceSections, (sections) => {
-  if (!sections.some((section) => section.key === activeSection.value)) {
-    activeSection.value = sections[0]?.key ?? 'upload'
-  }
-})
-
-watch(activeSection, (section) => {
-  if (section === 'batches') void loadBatches()
-  if (section === 'users' && currentUserIsAdmin.value) void loadUsers(1)
-})
-
-onMounted(async () => {
-  await refreshCurrentUser()
-  applyDefaultBatchView()
-  activeSection.value = workspaceSections.value[0]?.key ?? 'upload'
-  if (canSeeBatchModule.value) await loadBatches()
-  if (currentUserIsAdmin.value) await loadUsers(1)
-})
-
-async function refreshCurrentUser() {
-  const token = getStoredSession()?.token
-  if (!token) {
-    clearSession()
-    currentUser.value = null
-    await router.push('/')
-    return
-  }
-  try {
-    const user = await fetchCurrentUser(token)
-    currentUser.value = user
-    updateStoredUser(user)
-  } catch {
-    clearSession()
-    currentUser.value = null
-    await router.push('/')
-  }
+function setFeedback(message = '', failure = '') {
+  notice.value = message
+  error.value = failure
 }
 
-function applyDefaultBatchView() {
-  if (canUploadData.value || batchFilters.status !== 'all') return
-  if (canReviewUploads.value) {
-    batchFilters.scope = 'pendingReview'
-  } else if (canSyncData.value) {
-    batchFilters.scope = 'approved'
-  }
-}
-
-function setMessage(type: 'success' | 'error', text: string) {
-  messageType.value = type
-  message.value = text
-}
-
-function setActiveSection(section: WorkspaceSection) {
-  activeSection.value = section
+function stageFor(status?: string) {
+  if (status === 'PENDING_REVIEW') return 3
+  if (['READY_TO_PUBLISH', 'PUBLISHING', 'PUBLISHED', 'PARTIALLY_PUBLISHED', 'PUBLISH_FAILED'].includes(status ?? '')) return 4
+  if (status) return 2
+  return 1
 }
 
 function statusLabel(status: string) {
-  return STATUS_LABELS[status] ?? '状态待确认'
-}
-
-function roleLabel(role: UserResponse['role']) {
-  return ROLE_LABELS[role]
-}
-
-function formatDate(value?: string | null) {
-  if (!value) return '未记录'
-  return value.replace('T', ' ').slice(0, 16)
-}
-
-function formatMaybeDate(value?: string | null) {
-  return value ? formatDate(value) : '-'
-}
-
-function uploadRoleLabel(role?: string | null) {
-  if (role === 'admin') return '系统管理员'
-  if (role === 'editor') return '管理人员'
-  if (role === 'viewer') return '普通用户'
-  return '未知角色'
-}
-
-function uploadSourceLabel(batch: DataUploadBatch) {
-  if (batch.uploadedBy === currentUser.value?.userId) return '我的上传'
-  if (batch.uploadedByRole === 'viewer') return '普通用户上传'
-  if (batch.uploadedByRole === 'admin' || batch.uploadedByRole === 'editor') return '管理人员上传'
-  return '未知来源'
-}
-
-function userCapabilities(user: UserResponse) {
-  const caps = []
-  if (user.role === 'admin') caps.push('用户管理')
-  if (user.role === 'admin' || user.canUpload) caps.push('上传')
-  if (user.role === 'admin' || user.canReviewUploads) caps.push('审核')
-  if (user.role === 'admin' || user.canSyncData) caps.push('同步')
-  if (user.canDownload !== false) caps.push('下载')
-  return caps.length ? caps : ['无功能']
-}
-
-function permissionFilterValue(value: PermissionFilter) {
-  if (value === 'all') return 'all'
-  return value === 'true'
-}
-
-function validateSelectedFile(file: File) {
-  if (!file.name.toLowerCase().endsWith('.xlsx')) return '仅支持 .xlsx 文件'
-  if (file.size === 0) return '上传文件不能为空'
-  if (file.size > MAX_UPLOAD_FILE_SIZE) return '上传文件不能超过 50MB'
-  return ''
-}
-
-function selectUploadFile(file: File | null) {
-  if (!file) {
-    selectedFile.value = null
-    message.value = ''
-    return
+  const labels: Record<string, string> = {
+    PROCESSING: '校验中', READY_TO_SUBMIT: '待提交', NEEDS_CORRECTION: '需修正',
+    PENDING_REVIEW: '审核中', READY_TO_PUBLISH: '待发布', PUBLISHING: '发布中',
+    PUBLISHED: '已完成', PARTIALLY_PUBLISHED: '需修正', PUBLISH_FAILED: '待发布',
   }
-  const validationMessage = validateSelectedFile(file)
-  selectedFile.value = validationMessage ? null : file
-  if (validationMessage) {
-    setMessage('error', validationMessage)
-  } else {
-    message.value = ''
-  }
+  return labels[status] ?? status
 }
 
-function handleFileChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  selectUploadFile(input.files?.[0] ?? null)
+function groupLabel(status: string) {
+  return ({ READY: '合格', RESERVED: '已提交', HELD_ERROR: '整组暂缓', DUPLICATE_DATABASE: '重复跳过', RESERVATION_CONFLICT: '并发冲突', PUBLISHED: '已发布' } as Record<string, string>)[status] ?? status
 }
 
-function handleDrop(event: DragEvent) {
-  isDragging.value = false
-  selectUploadFile(event.dataTransfer?.files?.[0] ?? null)
-}
-
-async function handleDownloadTemplate() {
-  try {
-    await downloadUploadTemplate()
-    setMessage('success', 'Excel 模板已开始下载')
-  } catch (error) {
-    setMessage('error', getUserErrorMessage(error, '模板下载失败，请稍后重试'))
-  }
-}
-
-async function handleDownloadReviewDraft(batch: DataUploadBatch) {
-  try {
-    await downloadReviewDraft(batch.uploadId)
-    setMessage('success', '五表审核草稿已开始下载')
-  } catch (error) {
-    setMessage('error', getUserErrorMessage(error, '五表审核草稿下载失败，请稍后重试'))
-  }
-}
-
-async function handlePreview() {
-  if (!selectedFile.value) {
-    setMessage('error', '请先选择 .xlsx 文件')
-    return
-  }
-  const validationMessage = validateSelectedFile(selectedFile.value)
-  if (validationMessage) {
-    setMessage('error', validationMessage)
-    return
-  }
-  try {
-    isUploading.value = true
-    preview.value = await uploadPreview(selectedFile.value)
-    activePreviewSheet.value = preview.value.sheetSummaries?.[0]?.sheetName ?? '原始数据'
-    selectedBatch.value = null
-    selectedRowsPage.value = null
-    await loadBatches()
-    const { errorRows, warningRows, status } = preview.value.batch
-    if (errorRows > 0) {
-      setMessage('error', `解析完成，但存在 ${errorRows} 行阻断错误，请修正后重新上传。`)
-    } else if (status === 'PENDING_REVIEW') {
-      setMessage('success', `解析完成，已提交审核。提示警告 ${warningRows} 行。`)
-    } else {
-      setMessage('success', `解析完成，当前状态为「${statusLabel(status)}」。提示警告 ${warningRows} 行。`)
-    }
-  } catch (error) {
-    setMessage('error', getUserErrorMessage(error, '上传解析失败，请检查文件后重试'))
-  } finally {
-    isUploading.value = false
-  }
+function refreshLabel(job: UploadRefreshJob) {
+  const name = job.jobType === 'MAP' ? '地图统计' : '核心标记物优先级'
+  const status = ({ QUEUED: '排队中', RUNNING: '构建中', SUCCEEDED: '已切换', FAILED: '刷新失败' } as Record<string, string>)[job.status]
+  return `${name}·${status}`
 }
 
 async function loadBatches() {
-  await loadBatchPage(batchPage.value.page)
-}
-
-async function loadBatchPage(page = batchPage.value.page) {
   try {
-    isLoadingBatches.value = true
-    const response = await fetchUploads({
-      page,
-      size: batchPage.value.size,
-      keyword: batchFilters.keyword,
-      status: batchFilters.status,
-      scope: batchFilters.scope,
-      uploaderType: batchFilters.uploaderType,
-      sort: 'createdAt_desc',
-    })
-    batchPage.value = normalizeBatchPagePayload(response, page, batchPage.value.size)
-  } catch (error) {
-    setMessage('error', getUserErrorMessage(error, '上传记录加载失败，请稍后重试'))
-  } finally {
-    isLoadingBatches.value = false
+    const page = await fetchUploads({ page: batchPage.value, size: 20, sort: 'createdAt_desc' })
+    batches.value = page.items
+    batchTotalPages.value = page.totalPages
+  } catch (cause) {
+    setFeedback('', getUserErrorMessage(cause, '批次列表加载失败'))
   }
 }
 
-async function loadRows(batch: DataUploadBatch, page = 1) {
+async function loadReview(page = reviewPageNumber.value) {
+  if (!selectedUploadId.value || !canReview.value) return
+  reviewPageNumber.value = page
+  reviewPage.value = await fetchReviewRecords(selectedUploadId.value, page, 20)
+  await loadDictionaries()
+}
+
+async function loadDictionaries() {
+  const missing = dictionaryTypes.filter((type) => !canonicalTerms[type])
+  if (!missing.length) return
+  const values = await Promise.all(missing.map((type) => fetchCanonicalTerms(type)))
+  missing.forEach((type, index) => { canonicalTerms[type] = values[index] ?? [] })
+}
+
+function dataListId(field: string) {
+  return dictionaryTypeByField[field] ? `terms-${dictionaryTypeByField[field]}` : undefined
+}
+
+function termValue(type: string, term: UploadCanonicalTerm) {
+  return type.startsWith('ICD11_') || type === 'CONFIRMED_SITE' ? term.code : term.label
+}
+
+async function loadRefreshJobs() {
+  if (!selectedUploadId.value) return
+  refreshJobs.value = await fetchRefreshJobs(selectedUploadId.value)
+}
+
+async function selectBatch(uploadId: number) {
+  selectedUploadId.value = uploadId
+  busy.value = 'load'
+  setFeedback()
+  stopPolling()
   try {
-    isLoadingRows.value = true
-    if (selectedBatch.value?.uploadId !== batch.uploadId) {
-      rowStatusFilter.value = 'all'
-      rowViewFilter.value = batch.currentPackageId ? 'reviewPackage' : 'submission'
-    }
+    const [batch, state] = await Promise.all([fetchUploadBatch(uploadId), fetchUploadProcessing(uploadId)])
     selectedBatch.value = batch
-    const [rows, packages] = await Promise.all([
-      fetchUploadRows(batch.uploadId, page, 20, rowStatusFilter.value, rowViewFilter.value),
-      fetchReviewPackages(batch.uploadId),
-    ])
-    selectedRowsPage.value = rows
-    reviewPackages.value = packages
-  } catch (error) {
-    setMessage('error', getUserErrorMessage(error, '数据预览加载失败，请稍后重试'))
+    processing.value = state
+    activeStage.value = stageFor(state.internalStatus)
+    if (activeStage.value >= 3 && canReview.value) await loadReview(1)
+    if (activeStage.value === 4) await loadRefreshJobs()
+    schedulePolling()
+    activeTab.value = 'workflow'
+  } catch (cause) {
+    setFeedback('', getUserErrorMessage(cause, '批次详情加载失败'))
   } finally {
-    isLoadingRows.value = false
+    busy.value = ''
   }
 }
 
-async function applyBatchFilters() {
-  await loadBatchPage(1)
+async function refreshCurrent() {
+  if (!selectedUploadId.value) return
+  processing.value = await fetchUploadProcessing(selectedUploadId.value)
+  activeStage.value = stageFor(processing.value.internalStatus)
+  if (activeStage.value >= 3 && canReview.value) await loadReview()
+  if (activeStage.value === 4) await loadRefreshJobs()
 }
 
-async function changeBatchPageSize(event: Event) {
-  const select = event.target as HTMLSelectElement
-  batchPage.value = { ...batchPage.value, size: Number(select.value) }
-  await loadBatchPage(1)
+function stopPolling() {
+  if (pollTimer) window.clearTimeout(pollTimer)
+  pollTimer = undefined
 }
 
-async function changeRowStatusFilter() {
-  if (!selectedBatch.value) return
-  await loadRows(selectedBatch.value, 1)
+function schedulePolling() {
+  stopPolling()
+  const workflowRunning = ['PROCESSING', 'PUBLISHING'].includes(processing.value?.internalStatus ?? '')
+  const derivedRunning = refreshJobs.value.some((job) => ['QUEUED', 'RUNNING'].includes(job.status))
+  if (!workflowRunning && !derivedRunning) return
+  pollTimer = window.setTimeout(async () => {
+    try { await refreshCurrent() } finally { schedulePolling() }
+  }, 1200)
 }
 
-async function changeRowViewFilter() {
-  if (!selectedBatch.value) return
-  await loadRows(selectedBatch.value, 1)
+function chooseFile(event: Event, correction = false) {
+  const file = (event.target as HTMLInputElement).files?.[0] ?? null
+  if (file && (!file.name.toLowerCase().endsWith('.xlsx') || file.size > 50 * 1024 * 1024)) {
+    setFeedback('', '请选择 50MB 以内的无宏 .xlsx 文件')
+    return
+  }
+  if (correction) correctionFile.value = file
+  else selectedFile.value = file
 }
 
-function closeBatchDrawer() {
-  selectedBatch.value = null
-  selectedRowsPage.value = null
-  reviewPackages.value = []
-  selectedReviewPackageFile.value = null
-  reviewNote.value = ''
-  rowStatusFilter.value = 'all'
-  rowViewFilter.value = 'submission'
-}
-
-function canSyncBatch(batch: DataUploadBatch) {
-  return ['READY_TO_PUBLISH', 'PUBLISH_FAILED'].includes(batch.status) && canReviewUploads.value
-}
-
-async function handleBatchSync(batch: DataUploadBatch) {
-  if (!canSyncBatch(batch)) return
-  if (!window.confirm(`确定将「${batch.fileName}」的当前五表审核包增量写入正式库吗？此操作不会删除已有数据。`)) return
+async function startUpload(correction = false) {
+  const file = correction ? correctionFile.value : selectedFile.value
+  if (!file || !canUpload.value) return
+  busy.value = correction ? 'correction' : 'upload'
+  setFeedback()
   try {
-    isSyncing.value = true
-    const result = await publishUpload(batch.uploadId)
-    if (preview.value?.batch.uploadId === batch.uploadId) {
-      preview.value = { ...preview.value, batch: result.batch }
-    }
-    selectedBatch.value = result.batch
+    const accepted = correction && selectedUploadId.value
+      ? await uploadCorrection(selectedUploadId.value, file)
+      : await uploadSubmission(file)
     await loadBatches()
-    if (selectedRowsPage.value?.uploadId === batch.uploadId) {
-      await loadRows(result.batch, selectedRowsPage.value.page)
-    }
-    const sheetText = Object.entries(result.insertedRowsBySheet ?? {})
-      .map(([sheet, count]) => `${sheet} ${count} 行`)
-      .join('，')
-    const warningText = result.warnings.length ? `；${result.warnings.join('；')}` : ''
-    setMessage('success', `增量入库完成：新增 ${result.insertedRows} 个记录组，跳过重复 ${result.skippedRows} 个${sheetText ? `（${sheetText}）` : ''}${warningText}`)
-  } catch (error) {
-    setMessage('error', getUserErrorMessage(error, '增量入库未完成，正式数据未改变，请修复后重试'))
+    await selectBatch(accepted.uploadId)
+    setFeedback(accepted.reusedExistingBatch ? '文件与已有批次相同，已打开原批次。' : '文件已接收，正在后台校验。')
+    schedulePolling()
+  } catch (cause) {
+    setFeedback('', getUserErrorMessage(cause, '上传失败'))
   } finally {
-    isSyncing.value = false
+    busy.value = ''
   }
 }
 
-async function handleRejectBatch(batch: DataUploadBatch) {
-  if (
-    !canReviewUploads.value ||
-    !['PENDING_REVIEW', 'READY_TO_PUBLISH', 'PUBLISH_FAILED'].includes(batch.status)
-  ) return
-  if (!reviewNote.value.trim()) {
-    setMessage('error', '退回修改时必须填写具体原因')
-    return
-  }
-  if (!window.confirm(`确定退回「${batch.fileName}」并要求修改吗？`)) return
+async function submitGroups() {
+  if (!selectedUploadId.value) return
+  busy.value = 'submit'
   try {
-    const rejectedBatch = await returnUpload(batch.uploadId, reviewNote.value)
-    selectedBatch.value = rejectedBatch
+    processing.value = await submitReadyDoiGroups(selectedUploadId.value)
+    activeStage.value = stageFor(processing.value.internalStatus)
+    await loadReview(1)
     await loadBatches()
-    reviewNote.value = ''
-    setMessage('success', '提交已退回修改')
-  } catch (error) {
-    setMessage('error', getUserErrorMessage(error, '退回操作未完成，请刷新后重试'))
-  }
+    setFeedback('合格 DOI 已预约并提交审核；暂缓组保留在原批次。')
+  } catch (cause) {
+    setFeedback('', getUserErrorMessage(cause, '提交失败'))
+  } finally { busy.value = '' }
 }
 
-function handleReviewPackageFileChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0] ?? null
-  if (!file) {
-    selectedReviewPackageFile.value = null
+async function saveRecord(record: UploadReviewRecord) {
+  if (!selectedUploadId.value) return
+  const reason = recordAuditReasons[record.rowId]?.trim()
+  if (!reason) {
+    setFeedback('', `请先填写第 ${record.excelRowNumber} 行的审核依据。`)
     return
   }
-  const validationMessage = validateSelectedFile(file)
-  if (validationMessage) {
-    selectedReviewPackageFile.value = null
-    setMessage('error', validationMessage)
-    return
-  }
-  selectedReviewPackageFile.value = file
-}
-
-async function handleUploadReviewPackage(batch: DataUploadBatch) {
-  if (!selectedReviewPackageFile.value) {
-    setMessage('error', '请先选择五表审核包')
-    return
-  }
+  busy.value = `row-${record.rowId}`
   try {
-    isUploadingReviewPackage.value = true
-    const result = await uploadReviewPackage(batch.uploadId, selectedReviewPackageFile.value)
-    reviewPackages.value = await fetchReviewPackages(batch.uploadId)
-    await loadBatches()
-    const refreshed = await fetchUploadBatch(batch.uploadId)
-    selectedBatch.value = refreshed
-    rowViewFilter.value = refreshed.currentPackageId ? 'reviewPackage' : 'submission'
-    await loadRows(refreshed, 1)
-    selectedReviewPackageFile.value = null
-    if (result.status === 'VALID') {
-      setMessage('success', `五表审核包 V${result.versionNo} 校验通过，可以确认入库`)
-    } else {
-      setMessage('error', `五表审核包 V${result.versionNo} 未通过校验，请查看错误摘要`)
-    }
-  } catch (error) {
-    setMessage('error', getUserErrorMessage(error, '五表审核包上传失败，请检查文件后重试'))
-  } finally {
-    isUploadingReviewPackage.value = false
-  }
-}
-
-async function handleUploadRevision(batch: DataUploadBatch) {
-  if (!selectedReviewPackageFile.value) {
-    setMessage('error', '请先选择保留投稿行ID的修订工作簿')
-    return
-  }
-  try {
-    isUploadingReviewPackage.value = true
-    preview.value = await uploadSubmissionRevision(batch.uploadId, selectedReviewPackageFile.value)
-    const refreshed = await fetchUploadBatch(batch.uploadId)
-    selectedBatch.value = refreshed
-    selectedReviewPackageFile.value = null
-    await loadBatches()
-    await loadRows(refreshed, 1)
-    setMessage(refreshed.status === 'PENDING_REVIEW' ? 'success' : 'error',
-      refreshed.status === 'PENDING_REVIEW' ? '修订版本校验通过，已重新进入审核' : '修订版本仍有校验错误，请查看问题行')
-  } catch (error) {
-    setMessage('error', getUserErrorMessage(error, '修订版本上传失败，请检查投稿行ID和字段'))
-  } finally {
-    isUploadingReviewPackage.value = false
-  }
-}
-
-async function downloadPackage(batch: DataUploadBatch, item: DataUploadReviewPackage) {
-  try {
-    await downloadReviewPackageFile(batch.uploadId, item.packageId, item.fileName)
-  } catch (error) {
-    setMessage('error', getUserErrorMessage(error, '完整整理包下载失败，请稍后重试'))
-  }
-}
-
-async function downloadBatch(batch: DataUploadBatch) {
-  if (!currentUserCanDownload.value) {
-    setMessage('error', '当前账号已被禁止下载文件，请联系系统管理员调整权限')
-    return
-  }
-  try {
-    await downloadUploadFile(batch.uploadId, batch.fileName)
-  } catch (error) {
-    setMessage('error', getUserErrorMessage(error, '文件下载失败，请稍后重试'))
-  }
-}
-
-async function loadUsers(page = userPage.value.page) {
-  if (!currentUserIsAdmin.value) return
-  try {
-    isLoadingUsers.value = true
-    userPage.value = await fetchUsers({
-      page,
-      size: userPage.value.size,
-      keyword: userFilters.keyword,
-      role: userFilters.role,
-      canUpload: permissionFilterValue(userFilters.canUpload),
-      canReviewUploads: permissionFilterValue(userFilters.canReviewUploads),
-      canSyncData: permissionFilterValue(userFilters.canSyncData),
-      canDownload: permissionFilterValue(userFilters.canDownload),
+    const updated = await patchReviewRecord(selectedUploadId.value, record.rowId, {
+      standardized: record.standardized,
+      coreEligible: record.coreEligible,
+      coreExclusionReason: record.coreExclusionReason ?? '',
+      mapEligible: record.mapEligible,
+      mapExclusionReason: record.mapExclusionReason ?? '',
+      sankeyEligible: record.sankeyEligible,
+      sankeyExclusionReason: record.sankeyExclusionReason ?? '',
+      reason,
     })
-  } catch (error) {
-    setMessage('error', getUserErrorMessage(error, '用户列表加载失败，请稍后重试'))
-  } finally {
-    isLoadingUsers.value = false
-  }
+    const index = reviewRecords.value.findIndex((item) => item.rowId === updated.rowId)
+    if (index >= 0 && reviewPage.value) reviewPage.value.records[index] = updated
+    recordAuditReasons[record.rowId] = ''
+    setFeedback(`第 ${record.excelRowNumber} 行已保存，审核版本 V${updated.reviewVersion}。`)
+  } catch (cause) {
+    setFeedback('', getUserErrorMessage(cause, '审核记录保存失败'))
+  } finally { busy.value = '' }
 }
 
-async function applyUserFilters() {
-  selectedUserIds.value = new Set()
-  await loadUsers(1)
-}
-
-async function changePageSize(event: Event) {
-  const select = event.target as HTMLSelectElement
-  userPage.value = { ...userPage.value, size: Number(select.value) }
-  selectedUserIds.value = new Set()
-  await loadUsers(1)
-}
-
-function toggleUserSelection(userId: number, checked: boolean) {
-  const next = new Set(selectedUserIds.value)
-  if (checked) next.add(userId)
-  else next.delete(userId)
-  selectedUserIds.value = next
-}
-
-function toggleCurrentPageSelection(checked: boolean) {
-  const next = new Set(selectedUserIds.value)
-  for (const user of selectableCurrentPageUsers.value) {
-    if (checked) next.add(user.userId)
-    else next.delete(user.userId)
-  }
-  selectedUserIds.value = next
-}
-
-function clearSelectedUsers() {
-  selectedUserIds.value = new Set()
-  bulkAction.value = ''
-}
-
-function openPermissionDrawer(user: UserResponse) {
-  if (user.role === 'admin') return
-  editingUser.value = user
-  permissionForm.role = user.role
-  permissionForm.canUpload = user.canUpload
-  permissionForm.canReviewUploads = user.canReviewUploads
-  permissionForm.canSyncData = user.canSyncData
-  permissionForm.canDownload = user.canDownload !== false
-}
-
-function closePermissionDrawer() {
-  editingUser.value = null
-}
-
-function applyRoleDefaults(role: UserResponse['role']) {
-  permissionForm.role = role
-  if (role === 'editor') {
-    permissionForm.canUpload = true
-    permissionForm.canReviewUploads = true
-    permissionForm.canSyncData = true
-    permissionForm.canDownload = true
-  } else if (role === 'viewer') {
-    permissionForm.canUpload = false
-    permissionForm.canReviewUploads = false
-    permissionForm.canSyncData = false
-    permissionForm.canDownload = true
-  }
-}
-
-async function savePermissionDrawer() {
-  if (!editingUser.value) return
-  if (!window.confirm(`确定保存「${editingUser.value.username}」的角色和功能权限吗？`)) return
-  try {
-    isSavingUser.value = true
-    const updated = await updateUserPermissions(editingUser.value.userId, { ...permissionForm })
-    userPage.value = {
-      ...userPage.value,
-      items: userPage.value.items.map((user) => (user.userId === updated.userId ? updated : user)),
-    }
-    if (currentUser.value?.userId === updated.userId) {
-      currentUser.value = updated
-      updateStoredUser(updated)
-    }
-    closePermissionDrawer()
-    setMessage('success', '用户权限已更新')
-  } catch (error) {
-    setMessage('error', getUserErrorMessage(error, '权限更新未完成，请稍后重试'))
-  } finally {
-    isSavingUser.value = false
-  }
-}
-
-function buildBulkPatch(action: string): BulkUserPermissionPayload | null {
-  const userIds = [...selectedUserIds.value]
-  if (!userIds.length) return null
-  switch (action) {
-    case 'role-editor':
-      return { userIds, role: 'editor', canUpload: true, canReviewUploads: true, canSyncData: true, canDownload: true }
-    case 'role-viewer':
-      return { userIds, role: 'viewer', canUpload: false, canReviewUploads: false, canSyncData: false, canDownload: true }
-    case 'upload-on':
-      return { userIds, canUpload: true }
-    case 'upload-off':
-      return { userIds, canUpload: false }
-    case 'review-on':
-      return { userIds, canReviewUploads: true }
-    case 'review-off':
-      return { userIds, canReviewUploads: false }
-    case 'sync-on':
-      return { userIds, canSyncData: true }
-    case 'sync-off':
-      return { userIds, canSyncData: false }
-    case 'download-on':
-      return { userIds, canDownload: true }
-    case 'download-off':
-      return { userIds, canDownload: false }
-    default:
-      return null
-  }
-}
-
-async function applyBulkAction() {
-  const action = BULK_ACTIONS.find((item) => item.value === bulkAction.value)
-  const payload = buildBulkPatch(bulkAction.value)
-  if (!action || !payload) {
-    setMessage('error', '请选择批量操作和用户')
+async function completeReview() {
+  if (!selectedUploadId.value) return
+  if (selfReview.value && isAdmin(user.value) && !overrideReason.value.trim()) {
+    setFeedback('', '管理员审核自己的批次必须填写覆盖原因。')
     return
   }
-  if (!window.confirm(`确定对 ${selectedCount.value} 个用户执行「${action.label}」吗？`)) return
+  busy.value = 'complete'
   try {
-    const result = await bulkUpdateUserPermissions(payload)
-    setMessage('success', `已更新 ${result.updatedCount} 个用户`)
-    clearSelectedUsers()
-    await loadUsers(userPage.value.page)
-  } catch (error) {
-    setMessage('error', getUserErrorMessage(error, '批量更新未完成，请稍后重试'))
-  }
+    processing.value = await completeUploadReview(selectedUploadId.value, {
+      adminOverride: selfReview.value && isAdmin(user.value),
+      overrideReason: overrideReason.value,
+      note: reviewNote.value,
+    })
+    activeStage.value = 4
+    await loadBatches()
+    setFeedback('审核版本已冻结，等待具有发布权限的账号确认。')
+  } catch (cause) {
+    setFeedback('', getUserErrorMessage(cause, '完成审核失败'))
+  } finally { busy.value = '' }
 }
 
-async function handleLogout() {
-  const token = getStoredSession()?.token
-  try {
-    if (token) await requestLogout(token)
-  } finally {
-    clearSession()
-    currentUser.value = null
-    void router.push('/')
+async function returnReview() {
+  if (!selectedUploadId.value || !reviewReturnReason.value.trim()) {
+    setFeedback('', '退回修正必须填写原因。')
+    return
   }
+  busy.value = 'return-review'
+  try {
+    processing.value = await returnUploadReview(selectedUploadId.value, reviewReturnReason.value)
+    activeStage.value = 2
+    reviewReturnReason.value = ''
+    await loadBatches()
+    setFeedback('已退回上传者修正，DOI 预约已释放。')
+  } catch (cause) { setFeedback('', getUserErrorMessage(cause, '退回失败')) }
+  finally { busy.value = '' }
 }
+
+async function cancelSubmission() {
+  if (!selectedUploadId.value || !cancellationReason.value.trim()) {
+    setFeedback('', '撤回提交必须填写原因。')
+    return
+  }
+  busy.value = 'cancel-submission'
+  try {
+    processing.value = await cancelUploadSubmission(selectedUploadId.value, cancellationReason.value)
+    activeStage.value = 2
+    cancellationReason.value = ''
+    await loadBatches()
+    setFeedback('已撤回本次提交，DOI 预约已释放，可重新提交。')
+  } catch (cause) { setFeedback('', getUserErrorMessage(cause, '撤回失败')) }
+  finally { busy.value = '' }
+}
+
+async function publish() {
+  if (!selectedUploadId.value) return
+  busy.value = 'publish'
+  try {
+    const result = await publishUpload(selectedUploadId.value)
+    await refreshCurrent()
+    await loadBatches()
+    setFeedback(`核心数据已增量发布 ${result.insertedRows} 条；地图与优先级正在后台刷新。`)
+    schedulePolling()
+  } catch (cause) {
+    setFeedback('', getUserErrorMessage(cause, '发布失败'))
+  } finally { busy.value = '' }
+}
+
+async function retryJob(job: UploadRefreshJob) {
+  if (!selectedUploadId.value) return
+  busy.value = `job-${job.jobId}`
+  try {
+    await retryRefreshJob(selectedUploadId.value, job.jobType)
+    await loadRefreshJobs()
+    schedulePolling()
+  } catch (cause) { setFeedback('', getUserErrorMessage(cause, '重试失败')) }
+  finally { busy.value = '' }
+}
+
+async function loadPermissions() {
+  if (!isAdmin(user.value)) return
+  try {
+    const [users, requests] = await Promise.all([fetchUsers({ page: 1, size: 50 }), fetchDictionaryChanges()])
+    permissions.value = users
+    dictionaryRequests.value = requests
+  }
+  catch (cause) { setFeedback('', getUserErrorMessage(cause, '权限列表加载失败')) }
+}
+
+function prepareDictionaryRequest(record: UploadReviewRecord, field?: string) {
+  dictionaryDraft.rowId = String(record.rowId)
+  dictionaryDraft.dictionaryType = field ? (dictionaryTypeByField[field] ?? 'TARGET_CATEGORY') : 'TARGET_CATEGORY'
+  dictionaryDraft.proposedLabel = field ? (record.standardized[field] ?? '') : ''
+  document.getElementById('dictionary-request')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+async function submitDictionaryRequest() {
+  if (!selectedUploadId.value || !dictionaryDraft.proposedLabel.trim() || !dictionaryDraft.evidence.trim()) return
+  busy.value = 'dictionary-request'
+  try {
+    await requestDictionaryChange(selectedUploadId.value, {
+      rowId: dictionaryDraft.rowId ? Number(dictionaryDraft.rowId) : undefined,
+      dictionaryType: dictionaryDraft.dictionaryType,
+      proposedCode: dictionaryDraft.proposedCode,
+      proposedLabel: dictionaryDraft.proposedLabel,
+      evidence: dictionaryDraft.evidence,
+    })
+    dictionaryDraft.proposedCode = ''; dictionaryDraft.proposedLabel = ''; dictionaryDraft.evidence = ''
+    setFeedback('字典变更申请已提交，管理员批准前不会成为正式值。')
+  } catch (cause) { setFeedback('', getUserErrorMessage(cause, '字典申请提交失败')) }
+  finally { busy.value = '' }
+}
+
+async function decideDictionaryRequest(item: UploadDictionaryChange, approved: boolean) {
+  const reason = dictionaryDecisionReasons[item.requestId]?.trim()
+  if (!reason) {
+    setFeedback('', '审批字典申请必须填写依据或驳回原因。')
+    return
+  }
+  busy.value = `dictionary-${item.requestId}`
+  try {
+    await reviewDictionaryChange(item.requestId, approved, reason)
+    dictionaryRequests.value = dictionaryRequests.value.filter((request) => request.requestId !== item.requestId)
+    delete dictionaryDecisionReasons[item.requestId]
+    Object.keys(canonicalTerms).forEach((key) => delete canonicalTerms[key])
+    setFeedback(`字典申请已${approved ? '批准' : '驳回'}。`)
+  } catch (cause) { setFeedback('', getUserErrorMessage(cause, '字典申请审批失败')) }
+  finally { busy.value = '' }
+}
+
+async function savePermissions(item: UserResponse) {
+  busy.value = `user-${item.userId}`
+  try {
+    const updated = await updateUserPermissions(item.userId, {
+      role: item.role, canUpload: item.canUpload, canReviewUploads: item.canReviewUploads,
+      canSyncData: item.canSyncData, canDownload: item.canDownload,
+    })
+    const index = permissions.value?.items.findIndex((candidate) => candidate.userId === item.userId) ?? -1
+    if (index >= 0 && permissions.value) permissions.value.items[index] = updated
+    setFeedback(`${updated.username} 的权限已更新。`)
+  } catch (cause) { setFeedback('', getUserErrorMessage(cause, '权限更新失败')) }
+  finally { busy.value = '' }
+}
+
+onMounted(async () => {
+  await loadBatches()
+  const first = batches.value[0]
+  if (first) await selectBatch(first.uploadId)
+})
+onBeforeUnmount(stopPolling)
 </script>
 
 <template>
-  <main class="entry-shell">
-    <PlatformHeader
-      active="data"
-      page-title="数据工作台"
-      :page-subtitle="activeHeaderLabel"
-      show-context
-      @logout="handleLogout"
-    />
-
-    <section id="main-content" class="workspace-layout" tabindex="-1">
-      <aside class="workspace-nav" aria-label="数据工作台模块">
-        <button
-          v-for="section in workspaceSections"
-          :key="section.key"
-          type="button"
-          :class="[{ active: activeSection === section.key }, `section-${section.key}`]"
-          @click="setActiveSection(section.key)"
-        >
-          <strong>{{ section.title }}</strong>
-          <span>{{ section.caption }}</span>
-        </button>
-      </aside>
-
-      <div class="workspace-main">
-        <p v-if="message" class="page-message" :class="messageType">{{ message }}</p>
-
-        <section v-if="activeSection === 'upload' && canUploadData" class="workspace-panel" aria-label="上传录入">
-          <header class="section-head">
-            <h2>提交数据</h2>
-            <p>普通用户只填写一张“原始数据”长表。分类、标准单位、点位、ICD11 和派生结果由审核与系统处理。</p>
-          </header>
-
-          <div class="import-grid" aria-label="上传与校验">
-            <div class="upload-panel">
-              <header class="panel-head">
-                <div>
-                  <span>原始提交</span>
-                  <h3>选择原始数据文件</h3>
-                </div>
-                <button type="button" class="secondary-action" @click="handleDownloadTemplate">
-                  下载模板
-                </button>
-              </header>
-              <label
-                class="drop-zone"
-                :class="{ dragging: isDragging }"
-                @dragover.prevent="isDragging = true"
-                @dragleave.prevent="isDragging = false"
-                @drop.prevent="handleDrop"
-              >
-                <input type="file" accept=".xlsx" @change="handleFileChange" />
-                <strong>{{ selectedFileLabel }}</strong>
-                <span>.xlsx，最大 50MB，必须且只能有一张“原始数据”工作表</span>
-              </label>
-              <button type="button" class="primary-action" :disabled="isUploading" @click="handlePreview">
-                {{ isUploading ? '正在解析' : '开始校验' }}
-              </button>
-            </div>
-
-            <div class="summary-panel">
-              <header>
-                <span>校验结果</span>
-                <h3>校验摘要</h3>
-              </header>
-              <div v-if="preview" class="summary-metrics">
-                <article>
-                  <span>总行数</span>
-                  <strong>{{ preview.batch.totalRows }}</strong>
-                </article>
-                <article>
-                  <span>有效行</span>
-                  <strong>{{ preview.batch.validRows }}</strong>
-                </article>
-                <article>
-                  <span>错误</span>
-                  <strong>{{ preview.batch.errorRows }}</strong>
-                </article>
-                <article>
-                  <span>警告</span>
-                  <strong>{{ preview.batch.warningRows }}</strong>
-                </article>
-              </div>
-              <div v-if="preview?.sheetSummaries?.length" class="sheet-summary-list">
-                <button
-                  v-for="sheet in preview.sheetSummaries"
-                  :key="sheet.sheetName"
-                  type="button"
-                  :class="{ active: activePreviewSheet === sheet.sheetName }"
-                  @click="activePreviewSheet = sheet.sheetName"
-                >
-                  <strong>{{ sheet.sheetName }}</strong>
-                  <span>{{ sheet.totalRows }} 行 · 错 {{ sheet.errorRows }} · 警 {{ sheet.warningRows }}</span>
-                </button>
-              </div>
-              <p v-else class="empty-state">上传文件后会显示字段识别、错误和警告摘要。</p>
-              <div v-if="previewBlockingMessage" class="issue-list blocker">
-                <strong>{{ preview && preview.batch.status === 'PENDING_REVIEW' ? '等待审核' : '不能同步' }}</strong>
-                <p>{{ previewBlockingMessage }}</p>
-              </div>
-              <div v-if="visibleHeaderErrors.length" class="issue-list error">
-                <strong>表头错误</strong>
-                <p v-for="item in visibleHeaderErrors" :key="item">{{ item }}</p>
-                <p v-if="hiddenHeaderErrorCount" class="issue-more">还有 {{ hiddenHeaderErrorCount }} 条表头错误未展开。</p>
-              </div>
-              <div v-if="visibleBatchWarnings.length" class="issue-list warning">
-                <strong>批次提示</strong>
-                <p v-for="item in visibleBatchWarnings" :key="item">{{ item }}</p>
-                <p v-if="hiddenBatchWarningCount" class="issue-more">还有 {{ hiddenBatchWarningCount }} 条提示未展开。</p>
-              </div>
-              <p v-if="preview?.batch.status === 'PENDING_REVIEW'" class="review-note">
-                该提交已进入审核队列。审核人员可以下载系统生成的五表草稿，纠正后上传。
-              </p>
-            </div>
-          </div>
-
-          <div class="requirements-band" aria-label="上传要求">
-            <div class="requirements-copy">
-              <span>上传要求</span>
-              <h3>提交文件只保留普通上传者需要负责的内容。</h3>
-              <p>
-                仅支持不超过 50MB 的无宏 .xlsx 文件；必须使用系统单表模板。系统会生成稳定投稿行ID，文件校验通过后进入人工审核，不会直接修改正式库。
-              </p>
-              <div class="template-actions">
-                <button type="button" @click="handleDownloadTemplate">下载 Excel 模板</button>
-                <small>模板只有“原始数据”一张表；黄色必填、白色可选、灰色为系统字段。</small>
-              </div>
-            </div>
-            <div class="requirements-grid">
-              <article v-for="group in FIELD_GROUPS" :key="group.title">
-                <strong>{{ group.title }}</strong>
-                <p>{{ group.fields }}</p>
-              </article>
-            </div>
-          </div>
-
-          <section v-if="preview" class="preview-section" aria-label="上传预览">
-            <header class="section-head compact">
-              <span>数据预览</span>
-              <h3>{{ activePreviewSheet }} · 前 {{ activePreviewRows.length }} 行</h3>
-            </header>
-            <div v-if="preview.sheetSummaries?.length" class="preview-sheet-tabs" role="tablist" aria-label="工作表预览">
-              <button
-                v-for="sheet in preview.sheetSummaries"
-                :key="sheet.sheetName"
-                type="button"
-                role="tab"
-                :aria-selected="activePreviewSheet === sheet.sheetName"
-                :class="{ active: activePreviewSheet === sheet.sheetName }"
-                @click="activePreviewSheet = sheet.sheetName"
-              >
-                {{ sheet.sheetName }}
-              </button>
-            </div>
-            <p v-if="!activePreviewRows.length" class="empty-state">
-              当前批次没有可预览行；通常是工作表缺失、表头不匹配或文件解析失败，请按模板修正后重新上传。
-            </p>
-            <div v-else class="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>行号</th>
-                    <th>状态</th>
-                    <th v-for="column in activePreviewColumns" :key="column">{{ column }}</th>
-                    <th>问题</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="row in activePreviewRows" :key="row.rowId">
-                    <td>{{ row.excelRowNumber }}</td>
-                    <td>
-                      <span class="status-pill" :class="row.status.toLowerCase()">
-                        {{ statusLabel(row.status) }}
-                      </span>
-                    </td>
-                    <td v-for="column in activePreviewColumns" :key="column">{{ row.data[column] || 'NA' }}</td>
-                    <td>
-                      <span v-if="row.errors.length">{{ row.errors.join('；') }}</span>
-                      <span v-else-if="row.warnings.length">{{ row.warnings.join('；') }}</span>
-                      <span v-else>通过</span>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </section>
-
-        <section v-if="activeSection === 'batches' && canSeeBatchModule" class="workspace-panel" aria-label="上传批次">
-          <div class="module-toolbar compact-toolbar">
-            <header class="section-head">
-              <h2>上传记录</h2>
-              <p>按时间倒序查看上传记录。审核者可看全部批次，普通上传者只看自己的批次。</p>
-            </header>
-            <div class="list-toolbar batch-toolbar" aria-label="批次筛选">
-              <label>
-                <span>搜索</span>
-                <input v-model.trim="batchFilters.keyword" type="search" placeholder="文件名 / 上传人 / 状态" />
-              </label>
-              <label>
-                <span>状态</span>
-                <select v-model="batchFilters.status">
-                  <option v-for="item in BATCH_STATUS_FILTERS" :key="item.value" :value="item.value">
-                    {{ item.label }}
-                  </option>
-                </select>
-              </label>
-              <label>
-                <span>范围</span>
-                <select v-model="batchFilters.scope">
-                  <option v-for="item in BATCH_SCOPE_FILTERS" :key="item.value" :value="item.value">
-                    {{ item.label }}
-                  </option>
-                </select>
-              </label>
-              <label>
-                <span>上传人</span>
-                <select v-model="batchFilters.uploaderType">
-                  <option v-for="item in BATCH_UPLOADER_FILTERS" :key="item.value" :value="item.value">
-                    {{ item.label }}
-                  </option>
-                </select>
-              </label>
-              <button type="button" @click="applyBatchFilters">查询</button>
-              <button type="button" class="secondary-action compact" @click="loadBatches">刷新</button>
-            </div>
-          </div>
-
-          <p v-if="isLoadingBatches" class="empty-state">正在加载上传批次。</p>
-          <p v-else-if="!batchPage.items.length" class="empty-state">没有匹配的上传批次。</p>
-          <div v-else class="table-scroll batch-table">
-            <table class="batch-list-table">
-              <thead>
-                <tr>
-                  <th>状态</th>
-                  <th>文件</th>
-                  <th>上传人</th>
-                  <th>行数 / 问题</th>
-                  <th>上传时间</th>
-                  <th>审核 / 入库</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="batch in batchPage.items" :key="batch.uploadId">
-                  <td>
-                    <span class="status-pill" :class="batch.status.toLowerCase()">
-                      {{ statusLabel(batch.status) }}
-                    </span>
-                  </td>
-                  <td class="batch-file-cell">
-                    <strong>{{ batch.fileName }}</strong>
-                    <span v-if="batch.duplicateMessage">{{ batch.duplicateMessage }}</span>
-                  </td>
-                  <td>
-                    <strong>{{ batch.uploadedByName }}</strong>
-                    <span class="muted">{{ uploadSourceLabel(batch) }} / {{ uploadRoleLabel(batch.uploadedByRole) }}</span>
-                  </td>
-                  <td class="batch-counts">
-                    <span>{{ batch.totalRows }} 行</span>
-                    <span>错 {{ batch.errorRows }}</span>
-                    <span>警 {{ batch.warningRows }}</span>
-                    <span>入库 {{ batch.syncedRows }}</span>
-                  </td>
-                  <td>{{ formatDate(batch.createdAt) }}</td>
-                  <td>
-                    <span class="audit-line">审：{{ batch.reviewedByName || '-' }} / {{ formatMaybeDate(batch.reviewedAt) }}</span>
-                    <span class="audit-line">库：{{ batch.syncedByName || '-' }} / {{ formatMaybeDate(batch.syncedAt) }}</span>
-                  </td>
-                  <td>
-                    <div class="row-actions compact-actions">
-                      <button type="button" @click="loadRows(batch)">
-                        {{ batch.status === 'PENDING_REVIEW' ? '查看/审核' : '查看' }}
-                      </button>
-                      <button type="button" :disabled="!currentUserCanDownload" @click="downloadBatch(batch)">下载</button>
-                      <button v-if="canSyncBatch(batch)" type="button" @click="handleBatchSync(batch)">
-                        {{ batch.status === 'PUBLISH_FAILED' ? '重试入库' : '确认入库' }}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <div class="pagination-bar" aria-label="批次分页">
-            <span>共 {{ batchPage.total }} 条</span>
-            <label>
-              每页
-              <select :value="batchPage.size" @change="changeBatchPageSize">
-                <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
-              </select>
-            </label>
-            <button type="button" :disabled="batchPage.page <= 1" @click="loadBatchPage(batchPage.page - 1)">
-              上一页
-            </button>
-            <strong>第 {{ batchPage.page }} / {{ Math.max(batchPage.totalPages, 1) }} 页</strong>
-            <button
-              type="button"
-              :disabled="batchPage.totalPages === 0 || batchPage.page >= batchPage.totalPages"
-              @click="loadBatchPage(batchPage.page + 1)"
-            >
-              下一页
-            </button>
-          </div>
-
-          <Transition name="drawer-fade">
-            <div v-if="selectedBatch" class="batch-drawer-shell" role="dialog" aria-modal="true">
-              <button class="drawer-scrim" type="button" aria-label="关闭批次详情" @click="closeBatchDrawer"></button>
-              <aside class="batch-detail-drawer">
-                <header class="drawer-head">
-                  <div>
-                    <span>{{ statusLabel(selectedBatch.status) }}</span>
-                    <h3>{{ selectedBatch.fileName }}</h3>
-                    <p>{{ selectedBatch.uploadedByName }} / {{ uploadRoleLabel(selectedBatch.uploadedByRole) }}</p>
-                  </div>
-                  <button type="button" class="ghost-button" @click="closeBatchDrawer">关闭</button>
-                </header>
-
-                <div class="drawer-metrics">
-                  <article>
-                    <span>总行</span>
-                    <strong>{{ selectedBatch.totalRows }}</strong>
-                  </article>
-                  <article>
-                    <span>错误</span>
-                    <strong>{{ selectedBatch.errorRows }}</strong>
-                  </article>
-                  <article>
-                    <span>警告</span>
-                    <strong>{{ selectedBatch.warningRows }}</strong>
-                  </article>
-                  <article>
-                    <span>已入库</span>
-                    <strong>{{ selectedBatch.syncedRows }}</strong>
-                  </article>
-                </div>
-
-                <div class="drawer-audit">
-                  <p>上传时间：{{ formatDate(selectedBatch.createdAt) }}</p>
-                  <p>审核人：{{ selectedBatch.reviewedByName || '-' }} / {{ formatMaybeDate(selectedBatch.reviewedAt) }}</p>
-                  <p>入库人：{{ selectedBatch.syncedByName || '-' }} / {{ formatMaybeDate(selectedBatch.syncedAt) }}</p>
-                  <p v-if="selectedBatch.reviewNote">审核备注：{{ selectedBatch.reviewNote }}</p>
-                  <p v-if="selectedBatch.syncErrorMessage" class="sync-error">
-                    增量入库未完成，正式数据未改变；请修复后重试。
-                  </p>
-                </div>
-
-                <section
-                  v-if="canReviewUploads && ['PENDING_REVIEW', 'READY_TO_PUBLISH', 'PUBLISH_FAILED'].includes(selectedBatch.status)"
-                  class="review-package-panel"
-                >
-                  <header>
-                    <div>
-                      <strong>五表审核包</strong>
-                      <p>先下载系统预填草稿，纠正后上传。包含规范数据、文献、点位、采样方法和 ICD11 五张工作表。</p>
-                    </div>
-                    <button type="button" class="secondary-action" @click="handleDownloadReviewDraft(selectedBatch)">
-                      下载预填草稿
-                    </button>
-                  </header>
-                  <label class="package-file-input">
-                    <input type="file" accept=".xlsx" @change="handleReviewPackageFileChange" />
-                    <span>{{ selectedReviewPackageLabel }}</span>
-                  </label>
-                  <button
-                    type="button"
-                    class="primary-action compact"
-                    :disabled="isUploadingReviewPackage"
-                    @click="handleUploadReviewPackage(selectedBatch)"
-                  >
-                    {{ isUploadingReviewPackage ? '正在校验' : '上传五表审核包' }}
-                  </button>
-                </section>
-
-                <section v-if="reviewPackages.length" class="review-package-history">
-                  <header>
-                    <strong>审核包版本</strong>
-                    <span>历史版本只读保留</span>
-                  </header>
-                  <article v-for="item in reviewPackages" :key="item.packageId">
-                    <div>
-                      <strong>V{{ item.versionNo }} · {{ item.fileName }}</strong>
-                      <span>{{ statusLabel(item.status) }} / {{ item.totalRows }} 行 / {{ formatDate(item.createdAt) }}</span>
-                    </div>
-                    <button type="button" :disabled="!currentUserCanDownload" @click="downloadPackage(selectedBatch, item)">
-                      下载
-                    </button>
-                    <p v-if="item.validationErrors.length">{{ item.validationErrors.join('；') }}</p>
-                  </article>
-                </section>
-
-                <section v-if="selectedBatch.status === 'REVISION_REQUIRED' && selectedBatch.uploadedBy === currentUser?.userId" class="review-package-panel">
-                  <header>
-                    <div>
-                      <strong>提交修订版本</strong>
-                      <p>下载批次原始文件，在保留投稿行ID的前提下修正；新增行的投稿行ID留空。</p>
-                    </div>
-                    <button type="button" class="secondary-action" @click="downloadBatch(selectedBatch)">下载当前版本</button>
-                  </header>
-                  <label class="package-file-input">
-                    <input type="file" accept=".xlsx" @change="handleReviewPackageFileChange" />
-                    <span>{{ selectedReviewPackageLabel }}</span>
-                  </label>
-                  <button type="button" class="primary-action compact" :disabled="isUploadingReviewPackage" @click="handleUploadRevision(selectedBatch)">
-                    {{ isUploadingReviewPackage ? '正在校验' : '提交修订版本' }}
-                  </button>
-                </section>
-
-                <section v-if="currentReviewPackage?.diffSummary" class="review-checklist">
-                  <header><strong>增量影响预览</strong><span>不会删除已有记录</span></header>
-                  <div class="production-diff">
-                    <p>投稿行：{{ currentReviewPackage.diffSummary.submissionRows ?? 0 }}</p>
-                    <p>拟发布行：{{ currentReviewPackage.diffSummary.publishRows ?? 0 }}</p>
-                    <p>排除行：{{ currentReviewPackage.diffSummary.excludedRows ?? 0 }}</p>
-                    <p>新增记录组：{{ currentReviewPackage.diffSummary.newRecordGroups ?? 0 }}</p>
-                    <p>删除既有记录：{{ currentReviewPackage.diffSummary.existingRowsDeleted ?? 0 }}</p>
-                  </div>
-                </section>
-
-                <div class="drawer-row-toolbar">
-                  <label>
-                    数据版本
-                    <select v-model="rowViewFilter" @change="changeRowViewFilter">
-                      <option value="submission">原始提交</option>
-                      <option value="reviewPackage" :disabled="!selectedBatch.currentPackageId">
-                        当前审核包
-                      </option>
-                    </select>
-                  </label>
-                  <label>
-                    行状态
-                    <select v-model="rowStatusFilter" @change="changeRowStatusFilter">
-                      <option v-for="item in ROW_STATUS_FILTERS" :key="item.value" :value="item.value">
-                        {{ item.label }}
-                      </option>
-                    </select>
-                  </label>
-                  <span v-if="selectedRowsPage">{{ selectedRowsPage.total }} 行</span>
-                </div>
-
-                <p v-if="isLoadingRows" class="empty-state">正在加载行数据。</p>
-                <div v-else-if="selectedRowsPage" class="drawer-row-table">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>工作表</th>
-                        <th>行</th>
-                        <th>状态</th>
-                        <th>目标物</th>
-                        <th>问题</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="row in selectedRowsPage.rows" :key="row.rowId">
-                        <td>{{ row.sheetName }}</td>
-                        <td>{{ row.excelRowNumber }}</td>
-                        <td>
-                          <span class="status-pill" :class="row.status.toLowerCase()">
-                            {{ statusLabel(row.status) }}
-                          </span>
-                        </td>
-                        <td>{{ row.data['标准药物名称'] || row.data['标准生物标记物名称'] || row.data['生物标记物名称原文'] || 'NA' }}</td>
-                        <td>{{ [...row.errors, ...row.warnings].join('；') || '通过' }}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                  <div class="pagination-bar drawer-pages">
-                    <button
-                      type="button"
-                      :disabled="selectedRowsPage.page <= 1"
-                      @click="selectedBatch && loadRows(selectedBatch, selectedRowsPage.page - 1)"
-                    >
-                      上一页
-                    </button>
-                    <strong>第 {{ selectedRowsPage.page }} 页</strong>
-                    <button
-                      type="button"
-                      :disabled="selectedRowsPage.page * selectedRowsPage.size >= selectedRowsPage.total"
-                      @click="selectedBatch && loadRows(selectedBatch, selectedRowsPage.page + 1)"
-                    >
-                      下一页
-                    </button>
-                  </div>
-                </div>
-
-                <footer class="drawer-actions">
-                  <textarea
-                    v-if="canReviewUploads && ['PENDING_REVIEW', 'READY_TO_PUBLISH', 'PUBLISH_FAILED'].includes(selectedBatch.status)"
-                    v-model.trim="reviewNote"
-                    maxlength="500"
-                    placeholder="退回修改原因（退回时必填，最多500字）"
-                  ></textarea>
-                  <div>
-                    <button
-                      v-if="canReviewUploads && ['PENDING_REVIEW', 'READY_TO_PUBLISH', 'PUBLISH_FAILED'].includes(selectedBatch.status)"
-                      type="button"
-                      class="danger-action"
-                      @click="handleRejectBatch(selectedBatch)"
-                    >
-                      退回修改
-                    </button>
-                    <button
-                      v-if="canSyncBatch(selectedBatch)"
-                      type="button"
-                      class="primary-action compact"
-                      :disabled="isSyncing"
-                      @click="handleBatchSync(selectedBatch)"
-                    >
-                      {{ selectedBatch.status === 'PUBLISH_FAILED' ? '重试入库' : '确认入库' }}
-                    </button>
-                  </div>
-                </footer>
-              </aside>
-            </div>
-          </Transition>
-        </section>
-
-        <section v-if="activeSection === 'users' && currentUserIsAdmin" class="workspace-panel" aria-label="用户权限">
-          <header class="section-head">
-            <h2>账号权限</h2>
-            <p>分页查看并批量调整用户权限。同步权限只能处理已审核通过的批次，不能代替审核权限。</p>
-          </header>
-
-          <div class="permission-filters" aria-label="用户筛选">
-            <label>
-              <span>搜索用户</span>
-              <input v-model.trim="userFilters.keyword" type="search" placeholder="用户名 / 邮箱 / 姓名" />
-            </label>
-            <label>
-              <span>角色</span>
-              <select v-model="userFilters.role">
-                <option v-for="item in ROLE_FILTERS" :key="item.value" :value="item.value">{{ item.label }}</option>
-              </select>
-            </label>
-            <label>
-              <span>上传</span>
-              <select v-model="userFilters.canUpload">
-                <option v-for="item in PERMISSION_FILTERS" :key="item.value" :value="item.value">{{ item.label }}</option>
-              </select>
-            </label>
-            <label>
-              <span>审核</span>
-              <select v-model="userFilters.canReviewUploads">
-                <option v-for="item in PERMISSION_FILTERS" :key="item.value" :value="item.value">{{ item.label }}</option>
-              </select>
-            </label>
-            <label>
-              <span>同步</span>
-              <select v-model="userFilters.canSyncData">
-                <option v-for="item in PERMISSION_FILTERS" :key="item.value" :value="item.value">{{ item.label }}</option>
-              </select>
-            </label>
-            <label>
-              <span>下载</span>
-              <select v-model="userFilters.canDownload">
-                <option v-for="item in PERMISSION_FILTERS" :key="item.value" :value="item.value">{{ item.label }}</option>
-              </select>
-            </label>
-            <button type="button" @click="applyUserFilters">查询</button>
-          </div>
-
-          <Transition name="selection-bar">
-            <div v-if="selectedCount" class="bulk-toolbar selection-toolbar">
-              <strong>已选择 {{ selectedCount }} 个用户</strong>
-              <select v-model="bulkAction">
-                <option value="">选择批量操作</option>
-                <option v-for="item in BULK_ACTIONS" :key="item.value" :value="item.value">{{ item.label }}</option>
-              </select>
-              <button type="button" @click="applyBulkAction">应用</button>
-              <button type="button" class="ghost-action" @click="clearSelectedUsers">清空选择</button>
-            </div>
-          </Transition>
-
-          <p v-if="isLoadingUsers" class="empty-state">正在加载用户列表。</p>
-          <div v-else class="user-table table-scroll">
-            <table class="permission-table" aria-label="用户权限列表">
-              <colgroup>
-                <col class="select-col" />
-                <col class="user-col" />
-                <col class="role-col" />
-                <col class="cap-col" />
-                <col class="state-col" />
-                <col class="login-col" />
-                <col class="action-col" />
-              </colgroup>
-              <thead>
-                <tr>
-                  <th>
-                    <label class="check-cell">
-                      <input
-                        type="checkbox"
-                        :checked="currentPageAllSelected"
-                        @change="toggleCurrentPageSelection(($event.target as HTMLInputElement).checked)"
-                      />
-                      <span>{{ currentPageSomeSelected ? '部分' : '本页' }}</span>
-                    </label>
-                  </th>
-                  <th>用户信息</th>
-                  <th>角色</th>
-                  <th>当前功能</th>
-                  <th>状态</th>
-                  <th>最近登录</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-if="!userPage.items.length">
-                  <td colspan="7" class="table-empty">没有匹配的用户。</td>
-                </tr>
-                <tr v-for="user in userPage.items" :key="user.userId" :class="{ muted: user.role === 'admin' }">
-                  <td>
-                    <label class="check-cell">
-                      <input
-                        type="checkbox"
-                        :disabled="user.role === 'admin'"
-                        :checked="selectedUserIds.has(user.userId)"
-                        @change="toggleUserSelection(user.userId, ($event.target as HTMLInputElement).checked)"
-                      />
-                    </label>
-                  </td>
-                  <td class="user-info-cell">
-                    <strong>{{ user.username }}</strong>
-                    <small :title="user.email">{{ user.email }}</small>
-                  </td>
-                  <td>{{ roleLabel(user.role) }}</td>
-                  <td>
-                    <span class="capability-list">
-                      <i v-for="cap in userCapabilities(user)" :key="cap">{{ cap }}</i>
-                    </span>
-                  </td>
-                  <td>
-                    <span class="account-status" :class="{ active: user.isActive }">
-                      {{ user.isActive ? '启用' : '禁用' }}
-                    </span>
-                  </td>
-                  <td>{{ formatDate(user.lastLogin) }}</td>
-                  <td>
-                    <span v-if="user.role === 'admin'" class="locked-action">系统保留</span>
-                    <button
-                      v-else
-                      type="button"
-                      class="table-action"
-                      @click="openPermissionDrawer(user)"
-                    >
-                      编辑
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <div class="pagination-bar">
-            <span>共 {{ userPage.total }} 人</span>
-            <label>
-              每页
-              <select :value="userPage.size" @change="changePageSize">
-                <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
-              </select>
-            </label>
-            <button type="button" :disabled="userPage.page <= 1" @click="loadUsers(userPage.page - 1)">上一页</button>
-            <strong>第 {{ userPage.page }} / {{ Math.max(userPage.totalPages, 1) }} 页</strong>
-            <button
-              type="button"
-              :disabled="userPage.totalPages === 0 || userPage.page >= userPage.totalPages"
-              @click="loadUsers(userPage.page + 1)"
-            >
-              下一页
-            </button>
-          </div>
-        </section>
-      </div>
-    </section>
-
-    <div v-if="editingUser" class="drawer-backdrop" @click.self="closePermissionDrawer">
-      <aside class="permission-drawer" aria-label="编辑用户权限">
-        <header>
-          <span>PERMISSIONS</span>
-          <h2>编辑权限</h2>
-          <p>{{ editingUser.username }} / {{ editingUser.email }}</p>
-        </header>
-        <label>
-          <span>角色</span>
-          <select :value="permissionForm.role" @change="applyRoleDefaults(($event.target as HTMLSelectElement).value as UserResponse['role'])">
-            <option value="editor">管理人员</option>
-            <option value="viewer">普通用户</option>
-          </select>
-        </label>
-        <div class="switch-list">
-          <label>
-            <input v-model="permissionForm.canUpload" type="checkbox" />
-            <span>允许上传</span>
-          </label>
-          <label>
-            <input v-model="permissionForm.canReviewUploads" type="checkbox" />
-            <span>允许审核上传批次</span>
-          </label>
-          <label>
-            <input v-model="permissionForm.canSyncData" type="checkbox" />
-            <span>允许同步入库</span>
-          </label>
-          <label>
-            <input v-model="permissionForm.canDownload" type="checkbox" />
-            <span>允许下载原文件</span>
-          </label>
+  <div class="workspace-shell">
+    <PlatformHeader active="data" variant="academic" />
+    <main id="main-content" class="workspace-main">
+      <header class="workspace-heading">
+        <div>
+          <p class="eyebrow">DATA GOVERNANCE WORKSPACE</p>
+          <h1>数据上传与规范审核</h1>
+          <p>以 DOI 为审计边界，保留原始证据，分别判断核心库、地图和桑基图准入。</p>
         </div>
-        <footer>
-          <button type="button" class="ghost-action" @click="closePermissionDrawer">取消</button>
-          <button type="button" class="primary-action" :disabled="isSavingUser" @click="savePermissionDrawer">
-            {{ isSavingUser ? '保存中' : '保存权限' }}
+        <button class="button secondary" type="button" @click="guideOpen = !guideOpen">
+          {{ guideOpen ? '收起操作说明' : '查看操作说明' }}
+        </button>
+      </header>
+
+      <nav class="workspace-tabs" aria-label="数据工作台">
+        <button :class="{ active: activeTab === 'workflow' }" @click="activeTab = 'workflow'">上传工作流</button>
+        <button :class="{ active: activeTab === 'batches' }" @click="activeTab = 'batches'">批次记录</button>
+        <button v-if="isAdmin(user)" :class="{ active: activeTab === 'permissions' }" @click="activeTab = 'permissions'; loadPermissions()">角色与权限</button>
+      </nav>
+
+      <p v-if="notice" class="feedback success" role="status">{{ notice }}</p>
+      <p v-if="error" class="feedback failure" role="alert">{{ error }}</p>
+
+      <template v-if="activeTab === 'workflow'">
+        <section class="stage-rail" aria-label="四阶段流程">
+          <button v-for="(stage, index) in stages" :key="stage.number" :class="{ active: activeStage === index + 1, done: activeStage > index + 1 }" @click="activeStage = index + 1">
+            <span>{{ stage.number }}</span><strong>{{ stage.title }}</strong><small>{{ stage.detail }}</small>
           </button>
-        </footer>
-      </aside>
-    </div>
-  </main>
+        </section>
+
+        <aside v-if="guideOpen" class="guide-panel">
+          <strong>快速规则</strong>
+          <p>DOI 必填且会规范化为小写；正式库已有 DOI 整组跳过；一组中任一行阻断错误会暂缓该组，不影响其他合格组。</p>
+          <p>地图只接收已确认点位、正值 PNDL 及可换算单位；桑基图只接收完整 ICD-11 路径与可追溯证据。不合格的映射不会阻止合格核心记录发布。</p>
+        </aside>
+
+        <section v-if="activeStage === 1" class="panel preparation-panel">
+          <div class="panel-heading"><div><p class="section-kicker">STEP 01</p><h2>准备 SUBMISSION_V2</h2></div><button class="button secondary" :disabled="!canUpload" @click="downloadUploadTemplate">下载三表模板</button></div>
+          <div class="instruction-grid">
+            <article><strong>1. 仅填“数据”表</strong><p>“填写说明”和受保护的“词典”表不需修改。</p></article>
+            <article><strong>2. 一行一个指标值</strong><p>同 DOI 可有多行，不要把多种指标合并在一格。</p></article>
+            <article><strong>3. 保留原始表达</strong><p>ND、&lt;LOD、&lt;LOQ 与原单位照实填写，不要自行改成 0。</p></article>
+            <article><strong>4. 证据可定位</strong><p>请给出页码、表号、Sheet 或图号及原文证据。</p></article>
+          </div>
+          <div class="upload-row">
+            <input ref="uploadInput" class="sr-only" type="file" accept=".xlsx" @change="chooseFile($event)" />
+            <button class="file-picker" type="button" :disabled="!canUpload" @click="uploadInput?.click()">
+              <span>{{ selectedFile ? '已选文件' : '选择 .xlsx 文件' }}</span><strong>{{ selectedFile?.name ?? '限 50MB、5,000 数据行、禁止宏与公式' }}</strong>
+            </button>
+            <button class="button primary" :disabled="!selectedFile || busy === 'upload'" @click="startUpload()">{{ busy === 'upload' ? '正在接收…' : '上传并开始校验' }}</button>
+          </div>
+        </section>
+
+        <section v-else-if="activeStage === 2" class="panel">
+          <div class="panel-heading"><div><p class="section-kicker">STEP 02</p><h2>按 DOI 分组校验</h2><p>{{ processing?.message ?? '请先选择或上传批次' }}</p></div><span v-if="processing" class="status-chip">{{ processing.userStatus }}</span></div>
+          <div v-if="processing" class="metric-strip">
+            <article><span>已处理</span><strong>{{ processing.processedRows }} / {{ processing.totalRows }}</strong></article>
+            <article><span>合格 DOI</span><strong>{{ processing.readyDoiGroups }}</strong></article>
+            <article><span>暂缓 DOI</span><strong>{{ processing.heldDoiGroups }}</strong></article>
+            <article><span>重复跳过</span><strong>{{ processing.duplicateDoiGroups }}</strong></article>
+          </div>
+          <div v-if="processing?.internalStatus === 'PROCESSING'" class="progress-track" :aria-label="processing.message ?? '处理进度'"><span :style="{ width: `${processing.totalRows ? Math.max(6, processing.processedRows / processing.totalRows * 100) : 8}%` }"></span></div>
+          <div class="table-wrap" v-if="processing?.groups.length">
+            <table><thead><tr><th>DOI</th><th>结果</th><th>总行数</th><th>可用</th><th>错误</th><th>组内重复</th><th>说明</th></tr></thead>
+              <tbody><tr v-for="group in processing.groups" :key="group.groupId"><td class="mono">{{ group.normalizedDoi }}</td><td><span class="group-state" :data-state="group.status">{{ groupLabel(group.status) }}</span></td><td>{{ group.totalRows }}</td><td>{{ group.validRows }}</td><td>{{ group.errorRows }}</td><td>{{ group.duplicateRows }}</td><td>{{ group.issueSummary || group.duplicateOfLiteratureCode || '—' }}</td></tr></tbody>
+            </table>
+          </div>
+          <div class="action-bar">
+            <button v-if="hasAction('DOWNLOAD_ISSUES') && selectedUploadId" class="button secondary" @click="downloadUploadIssues(selectedUploadId)">下载问题与重复组</button>
+            <button v-if="hasAction('SUBMIT_READY_GROUPS')" class="button primary" :disabled="busy === 'submit'" @click="submitGroups">{{ processing?.groups.some(group => group.status === 'RESERVATION_CONFLICT') ? '重试 DOI 预约' : '提交合格 DOI 组' }}</button>
+          </div>
+          <div v-if="hasAction('DOWNLOAD_ISSUES')" class="correction-box">
+            <div><strong>修正后不覆盖原批次</strong><p>下载问题文件修正后上传，系统会建立关联新批次。</p></div>
+            <input ref="correctionInput" class="sr-only" type="file" accept=".xlsx" @change="chooseFile($event, true)" />
+            <button class="button text" @click="correctionInput?.click()">{{ correctionFile?.name ?? '选择修订文件' }}</button>
+            <button class="button secondary" :disabled="!correctionFile || busy === 'correction'" @click="startUpload(true)">创建修订批次</button>
+          </div>
+        </section>
+
+        <section v-else-if="activeStage === 3" class="panel review-panel">
+          <div class="panel-heading"><div><p class="section-kicker">STEP 03</p><h2>网页规范化审核</h2><p>上传者不能审核自己的批次；管理员覆盖必须留下原因。</p></div><span class="status-chip">{{ processing?.userStatus }}</span></div>
+          <p v-if="!canReviewSelected" class="empty-state">当前账号可查看进度，但没有该批次的规范审核权限；上传者不能审核自己的批次。</p>
+          <article v-for="record in canReviewSelected ? reviewRecords : []" :key="record.rowId" class="review-record">
+            <header><div><span class="mono">{{ record.normalizedDoi }}</span><strong>第 {{ record.excelRowNumber }} 行 · V{{ record.reviewVersion }}</strong></div><div class="record-actions"><input v-model.trim="recordAuditReasons[record.rowId]" aria-label="审核依据" placeholder="审核依据（必填）" /><button class="button text compact" @click="prepareDictionaryRequest(record)">申请新规范值</button><button class="button secondary compact" :disabled="busy === `row-${record.rowId}`" @click="saveRecord(record)">保存本条</button></div></header>
+            <div class="comparison-grid">
+              <section class="raw-column"><h3>原值</h3><dl><template v-for="field in rawDisplayFields" :key="field"><dt>{{ field }}</dt><dd>{{ record.raw[field] || '—' }}</dd></template></dl></section>
+              <section class="standard-column"><h3>标准值</h3><div class="field-grid"><label v-for="field in standardFields" :key="field"><span>{{ field }}</span><input v-model.trim="record.standardized[field]" :list="dataListId(field)" /></label></div><details><summary>采样与分析方法</summary><div class="field-grid"><label v-for="field in methodFields" :key="field"><span>{{ field }}</span><input v-model.trim="record.standardized[field]" /></label></div></details></section>
+            </div>
+            <section class="mapping-section"><h3>点位规范化</h3><div class="field-grid"><label v-for="field in siteFields" :key="field"><span>{{ field }}</span><input v-model.trim="record.standardized[field]" :list="dataListId(field)" /></label></div></section>
+            <section class="mapping-section"><h3>ICD-11 桑基映射</h3><p class="hint">编码是规范键，名称与映射深度由审核后的层级字典派生。</p><div class="field-grid"><label v-for="field in sankeyFields" :key="field"><span>{{ field }}</span><input v-model.trim="record.standardized[field]" :list="dataListId(field)" /></label></div></section>
+            <div class="eligibility-grid">
+              <label><span><input v-model="record.coreEligible" type="checkbox" /> 核心库可进入</span><input v-if="!record.coreEligible" v-model.trim="record.coreExclusionReason" placeholder="排除原因（必填）" /></label>
+              <label><span><input v-model="record.mapEligible" type="checkbox" /> 地图可进入</span><input v-if="!record.mapEligible" v-model.trim="record.mapExclusionReason" placeholder="待映射 / 不适用 / 排除原因" /></label>
+              <label><span><input v-model="record.sankeyEligible" type="checkbox" /> 桑基图可进入</span><input v-if="!record.sankeyEligible" v-model.trim="record.sankeyExclusionReason" placeholder="待映射 / 不适用 / 排除原因" /></label>
+            </div>
+          </article>
+          <form v-if="canReviewSelected" id="dictionary-request" class="dictionary-request" @submit.prevent="submitDictionaryRequest">
+            <div><strong>规范字典变更申请</strong><p>新分类、单位、地点别名或 ICD-11 值必须经管理员批准后才可用于发布。</p></div>
+            <label><span>关联行 ID</span><input v-model.trim="dictionaryDraft.rowId" inputmode="numeric" /></label>
+            <label><span>字典类型</span><select v-model="dictionaryDraft.dictionaryType"><option v-for="type in dictionaryTypes" :key="type" :value="type">{{ type }}</option><option value="LOCATION_ALIAS">LOCATION_ALIAS</option></select></label>
+            <label><span>候选编码</span><input v-model.trim="dictionaryDraft.proposedCode" /></label>
+            <label><span>候选名称</span><input v-model.trim="dictionaryDraft.proposedLabel" required /></label>
+            <label class="evidence-field"><span>证据与申请理由</span><textarea v-model.trim="dictionaryDraft.evidence" rows="2" required></textarea></label>
+            <button class="button secondary" :disabled="busy === 'dictionary-request'">提交字典申请</button>
+          </form>
+          <div v-if="reviewPage && reviewPage.total > reviewPage.size" class="pagination"><button class="button text" :disabled="reviewPage.page <= 1" @click="loadReview(reviewPage.page - 1)">上一页</button><span>{{ reviewPage.page }} / {{ Math.ceil(reviewPage.total / reviewPage.size) }}</span><button class="button text" :disabled="reviewPage.page >= Math.ceil(reviewPage.total / reviewPage.size)" @click="loadReview(reviewPage.page + 1)">下一页</button></div>
+          <div v-if="canReviewSelected" class="review-complete"><label><span>审核备注</span><textarea v-model.trim="reviewNote" rows="2" placeholder="记录整体审核结论"></textarea></label><label v-if="selfReview && isAdmin(user)"><span>管理员覆盖原因</span><textarea v-model.trim="overrideReason" rows="2" placeholder="必填：说明为何无法由其他人审核"></textarea></label><button class="button primary" :disabled="busy === 'complete'" @click="completeReview">完成审核并冻结版本</button></div>
+          <div class="workflow-secondary-actions">
+            <label v-if="canReviewSelected"><span>退回原因</span><input v-model.trim="reviewReturnReason" placeholder="说明需要上传者修正的内容" /></label>
+            <button v-if="canReviewSelected" class="button danger" :disabled="busy === 'return-review'" @click="returnReview">退回修正</button>
+            <label v-if="selectedBatch?.uploadedBy === user?.userId"><span>撤回原因</span><input v-model.trim="cancellationReason" placeholder="撤回后可重新提交合格组" /></label>
+            <button v-if="selectedBatch?.uploadedBy === user?.userId" class="button text" :disabled="busy === 'cancel-submission'" @click="cancelSubmission">撤回本次提交</button>
+          </div>
+        </section>
+
+        <section v-else class="panel publish-panel">
+          <div class="panel-heading"><div><p class="section-kicker">STEP 04</p><h2>增量发布与派生刷新</h2><p>发布只新增已预约 DOI 组，不删除已有事实。</p></div><span v-if="processing" class="status-chip">{{ processing.userStatus }}</span></div>
+          <div class="publish-summary"><article><span>待发布 DOI</span><strong>{{ processing?.reservedDoiGroups ?? 0 }}</strong></article><article><span>核心候选行</span><strong>{{ reviewPage?.total ?? selectedBatch?.validRows ?? 0 }}</strong></article><article><span>问题/重复组</span><strong>{{ (processing?.heldDoiGroups ?? 0) + (processing?.duplicateDoiGroups ?? 0) }}</strong></article></div>
+          <div class="release-note"><strong>发布边界</strong><p>核心事实在一个事务内写入。地图与优先级在事务后构建新版本；如刷新失败，旧版仍可查询，核心数据不回滚。</p></div>
+          <button v-if="processing?.internalStatus === 'READY_TO_PUBLISH'" class="button primary" :disabled="!canPublish || busy === 'publish'" @click="publish">{{ canPublish ? '确认并发布新 DOI 组' : '当前账号没有发布权限' }}</button>
+          <div v-if="processing?.internalStatus === 'READY_TO_PUBLISH' && selectedBatch?.uploadedBy === user?.userId" class="workflow-secondary-actions">
+            <label><span>撤回原因</span><input v-model.trim="cancellationReason" placeholder="发布前仍可撤回并释放 DOI 预约" /></label>
+            <button class="button text" :disabled="busy === 'cancel-submission'" @click="cancelSubmission">撤回本次提交</button>
+          </div>
+          <div v-if="processing?.internalStatus === 'PARTIALLY_PUBLISHED'" class="correction-box">
+            <div><strong>合格组已发布，问题组待修订</strong><p>修正后会创建关联新批次，原批次的审计记录保持不变。</p></div>
+            <button class="button secondary" @click="selectedUploadId && downloadUploadIssues(selectedUploadId)">下载问题组</button>
+            <input ref="correctionInput" class="sr-only" type="file" accept=".xlsx" @change="chooseFile($event, true)" />
+            <button class="button text" @click="correctionInput?.click()">{{ correctionFile?.name ?? '选择修订文件' }}</button>
+            <button class="button secondary" :disabled="!correctionFile || busy === 'correction'" @click="startUpload(true)">创建修订批次</button>
+          </div>
+          <div v-if="refreshJobs.length" class="refresh-list"><article v-for="job in refreshJobs" :key="job.jobId"><div><strong>{{ refreshLabel(job) }}</strong><small>版本 {{ job.versionNo }}<template v-if="job.scoreVersion"> · {{ job.scoreVersion }}</template></small><p v-if="job.errorMessage">{{ job.errorMessage }}</p></div><button v-if="job.status === 'FAILED' && isAdmin(user)" class="button secondary compact" :disabled="busy === `job-${job.jobId}`" @click="retryJob(job)">重试</button></article></div>
+        </section>
+      </template>
+
+      <section v-else-if="activeTab === 'batches'" class="panel">
+        <div class="panel-heading"><div><p class="section-kicker">AUDIT TRAIL</p><h2>批次与审计记录</h2></div><button class="button secondary" @click="loadBatches">刷新</button></div>
+        <div class="batch-list"><button v-for="batch in batches" :key="batch.uploadId" @click="selectBatch(batch.uploadId)"><span class="batch-id">#{{ batch.uploadId }}</span><span><strong>{{ batch.fileName }}</strong><small>{{ batch.uploadedByName }} · {{ batch.createdAt?.replace('T', ' ') }}</small></span><span class="status-chip">{{ statusLabel(batch.status) }}</span><span class="batch-count">{{ batch.totalRows }} 行</span></button></div>
+        <div class="pagination" v-if="batchTotalPages > 1"><button class="button text" :disabled="batchPage <= 1" @click="batchPage--; loadBatches()">上一页</button><span>{{ batchPage }} / {{ batchTotalPages }}</span><button class="button text" :disabled="batchPage >= batchTotalPages" @click="batchPage++; loadBatches()">下一页</button></div>
+      </section>
+
+      <section v-else class="panel">
+        <div class="panel-heading"><div><p class="section-kicker">SEPARATION OF DUTIES</p><h2>角色与权限</h2><p>上传、审核、发布分别授权，canSyncData 是发布的唯一入口。</p></div></div>
+        <div class="table-wrap"><table><thead><tr><th>用户</th><th>角色</th><th>上传</th><th>审核</th><th>发布</th><th>下载</th><th></th></tr></thead><tbody><tr v-for="item in permissions?.items ?? []" :key="item.userId"><td><strong>{{ item.username }}</strong><small>{{ item.email }}</small></td><td><select v-model="item.role"><option value="viewer">普通用户</option><option value="editor">数据维护员</option><option value="admin">管理员</option></select></td><td><input v-model="item.canUpload" type="checkbox" /></td><td><input v-model="item.canReviewUploads" type="checkbox" /></td><td><input v-model="item.canSyncData" type="checkbox" /></td><td><input v-model="item.canDownload" type="checkbox" /></td><td><button class="button secondary compact" :disabled="busy === `user-${item.userId}`" @click="savePermissions(item)">保存</button></td></tr></tbody></table></div>
+        <div class="dictionary-admin"><h3>待审批字典变更</h3><p v-if="!dictionaryRequests.length" class="hint">当前没有待审批申请。</p><article v-for="item in dictionaryRequests" :key="item.requestId"><div><strong>{{ item.dictionaryType }} · {{ item.proposedLabel }}</strong><small>批次 #{{ item.uploadId }}<template v-if="item.rowId"> · 行 {{ item.rowId }}</template></small><p>{{ item.evidence }}</p></div><div class="dictionary-actions"><input v-model.trim="dictionaryDecisionReasons[item.requestId]" placeholder="审批依据 / 驳回原因" /><span><button class="button text" @click="decideDictionaryRequest(item, false)">驳回</button><button class="button secondary compact" @click="decideDictionaryRequest(item, true)">批准</button></span></div></article></div>
+      </section>
+      <datalist v-for="type in dictionaryTypes" :id="`terms-${type}`" :key="type"><option v-for="term in canonicalTerms[type] ?? []" :key="term.termId" :value="termValue(type, term)">{{ term.label }}</option></datalist>
+    </main>
+  </div>
 </template>
 
 <style scoped>
-:global(*) {
-  box-sizing: border-box;
-}
-
-:global(body) {
-  margin: 0;
-  min-width: 320px;
-  background: #f4f7f8;
-  color: #182d35;
-  font-family:
-    Inter, 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-}
-
-.entry-shell {
-  --entry-header-height: 118px;
-  min-height: 100vh;
-}
-
-.entry-header {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  display: grid;
-  min-height: var(--entry-header-height);
-  grid-template-columns: minmax(220px, 1fr) minmax(180px, auto) auto auto auto;
-  gap: 18px;
-  align-items: center;
-  padding: 12px clamp(18px, 3vw, 42px);
-  border-bottom: 1px solid #d8e2e5;
-  background: rgba(250, 252, 252, 0.94);
-  backdrop-filter: blur(16px);
-}
-
-.brand {
-  display: inline-flex;
-  gap: 12px;
-  align-items: center;
-  color: inherit;
-  text-decoration: none;
-}
-
-.brand-logo {
-  position: relative;
-  display: grid;
-  width: 40px;
-  height: 40px;
-  place-items: center;
-  border-radius: 8px;
-  background: #0f4f5c;
-  overflow: hidden;
-}
-
-.brand-drop {
-  width: 16px;
-  height: 22px;
-  border-radius: 14px 14px 14px 4px;
-  background: #b8e4e0;
-  transform: rotate(42deg);
-}
-
-.brand-bars,
-.brand-line {
-  position: absolute;
-  inset: 0;
-}
-
-.brand-bars i {
-  position: absolute;
-  bottom: 8px;
-  width: 3px;
-  background: #ffffff;
-  border-radius: 999px;
-}
-
-.brand-bars i:nth-child(1) {
-  left: 9px;
-  height: 10px;
-}
-
-.brand-bars i:nth-child(2) {
-  left: 15px;
-  height: 15px;
-}
-
-.brand-bars i:nth-child(3) {
-  left: 21px;
-  height: 8px;
-}
-
-.brand-line i {
-  position: absolute;
-  right: 7px;
-  width: 9px;
-  height: 2px;
-  background: #ffffff;
-}
-
-.brand-line i:first-child {
-  top: 12px;
-}
-
-.brand-line i:last-child {
-  top: 18px;
-}
-
-.brand strong,
-.brand small {
-  display: block;
-}
-
-.brand strong {
-  font-size: 15px;
-}
-
-.header-title {
-  display: inline-flex;
-  min-width: 0;
-  align-items: baseline;
-  justify-content: center;
-  gap: 8px;
-  padding: 0 4px;
-  color: #526a72;
-  white-space: nowrap;
-}
-
-.header-title strong,
-.header-title em {
-  color: #173247;
-  font-style: normal;
-  font-weight: 900;
-  line-height: 1.2;
-}
-
-.header-title strong {
-  font-size: 18px;
-}
-
-.header-title em {
-  color: #34525b;
-  font-size: 16px;
-}
-
-.header-title span {
-  color: #8aa0a7;
-  font-size: 15px;
-  font-weight: 800;
-}
-
-.brand small,
-.operator-chip span {
-  color: #61737a;
-  font-size: 11px;
-}
-
-.entry-nav,
-.operator-chip {
-  display: inline-flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.entry-nav a {
-  color: #34525b;
-  font-size: 14px;
-  text-decoration: none;
-}
-
-.operator-chip {
-  padding: 8px 10px;
-  border: 1px solid #cad8dc;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.operator-chip strong {
-  font-size: 12px;
-}
-
-.logout-button,
-.ghost-action {
-  min-height: 38px;
-  padding: 0 14px;
-  border: 1px solid #cad8dc;
-  border-radius: 8px;
-  color: #173247;
-  background: #ffffff;
-  cursor: pointer;
-  font-weight: 800;
-  white-space: nowrap;
-}
-
-.workspace-layout,
-.page-message {
-  width: 100%;
-  margin-left: 0;
-  margin-right: auto;
-}
-
-.section-head span,
-.requirements-copy span,
-.upload-panel header span,
-.summary-panel header span,
-.permission-drawer header span {
-  margin: 0 0 8px;
-  color: #53727a;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0;
-}
-
-.section-head h2,
-.section-head h3,
-.requirements-copy h3,
-.upload-panel h3,
-.summary-panel h3,
-.permission-drawer h2 {
-  margin: 0;
-  letter-spacing: 0;
-}
-
-.section-head h2 {
-  color: #173247;
-  font-size: 26px;
-  line-height: 1.18;
-}
-
-.section-head p,
-.requirements-copy p,
-.review-note,
-.permission-drawer p {
-  margin: 0;
-  color: #5e747b;
-  font-size: 14px;
-  line-height: 1.55;
-}
-
-.page-message {
-  width: min(1280px, calc(100% - 48px));
-  margin: 16px auto 0;
-  padding: 12px 14px;
-  border-radius: 8px;
-  font-size: 14px;
-}
-
-.page-message.success {
-  border: 1px solid #b8d9ca;
-  background: #eef8f2;
-  color: #276142;
-}
-
-.page-message.error {
-  border: 1px solid #efc5c0;
-  background: #fff2f0;
-  color: #9f3428;
-}
-
-.workspace-layout {
-  display: grid;
-  min-height: calc(100vh - var(--entry-header-height));
-  grid-template-columns: 196px minmax(0, 1fr);
-  gap: 0;
-  padding-bottom: 0;
-}
-
-.workspace-main {
-  min-width: 0;
-}
-
-.workspace-nav {
-  position: sticky;
-  top: var(--entry-header-height);
-  display: grid;
-  min-height: calc(100vh - var(--entry-header-height));
-  align-self: start;
-  align-content: start;
-  gap: 8px;
-  padding: 18px 12px;
-  border-right: 1px solid #d5e1e4;
-  background: #f8fbfb;
-}
-
-.workspace-nav button {
-  position: relative;
-  display: grid;
-  gap: 3px;
-  min-height: 52px;
-  width: 100%;
-  padding: 9px 10px 9px 16px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: #48626a;
-  cursor: pointer;
-  text-align: left;
-  transition:
-    background-color 160ms ease,
-    color 160ms ease,
-    transform 160ms ease;
-}
-
-.workspace-nav button.active {
-  background: var(--section-bg, #eaf5f5);
-  color: var(--section-color, #0f4f5c);
-}
-
-.workspace-nav button:hover {
-  transform: translateX(1px);
-  background: var(--section-bg, #f4f8f9);
-}
-
-.workspace-nav button.active::before {
-  position: absolute;
-  top: 9px;
-  bottom: 9px;
-  left: 5px;
-  width: 3px;
-  border-radius: 999px;
-  background: var(--section-color, #0f4f5c);
-  content: '';
-}
-
-.workspace-nav button.section-upload {
-  --section-color: #0f6b7c;
-  --section-bg: #e6f4f6;
-}
-
-.workspace-nav button.section-batches {
-  --section-color: #946118;
-  --section-bg: #fff4dc;
-}
-
-.workspace-nav button.section-users {
-  --section-color: #315f68;
-  --section-bg: #e8f1f3;
-}
-
-.workspace-nav strong {
-  font-size: 14px;
-}
-
-.workspace-nav span {
-  font-size: 11px;
-}
-
-.workspace-panel {
-  display: grid;
-  gap: 14px;
-  width: min(1280px, calc(100% - 48px));
-  margin: 22px auto 36px;
-  animation: panel-enter 180ms ease;
-}
-
-.section-head {
-  display: grid;
-  justify-items: start;
-  gap: 6px;
-  max-width: 820px;
-}
-
-.section-head.compact {
-  margin-top: 8px;
-}
-
-.requirements-band,
-.import-grid {
-  display: grid;
-  grid-template-columns: minmax(240px, 0.9fr) minmax(0, 1.1fr);
-  gap: 12px;
-}
-
-.requirements-band {
-  padding: 14px;
-  border: 1px solid #d8e2e5;
-  border-radius: 8px;
-  background: #f8fbfb;
-}
-
-.requirements-grid,
-.summary-metrics {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.summary-metrics {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin: 10px 0;
-}
-
-.sheet-summary-list,
-.preview-sheet-tabs {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-}
-
-.sheet-summary-list {
-  margin: 0 0 10px;
-}
-
-.sheet-summary-list button {
-  display: grid;
-  min-width: 170px;
-  gap: 3px;
-  padding: 9px 10px;
-  border: 1px solid #d5e1e4;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #203942;
-  text-align: left;
-}
-
-.sheet-summary-list button.active {
-  border-color: #287b87;
-  background: #edf7f7;
-}
-
-.sheet-summary-list span {
-  color: #657980;
-  font-size: 12px;
-}
-
-.preview-sheet-tabs button {
-  padding: 7px 10px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: #657980;
-}
-
-.preview-sheet-tabs button.active {
-  border-bottom-color: #287b87;
-  color: #174d57;
-  font-weight: 700;
-}
-
-.requirements-grid article,
-.upload-panel,
-.summary-panel,
-.history-list article,
-.rows-drawer,
-.user-table {
-  border: 1px solid #d5e1e4;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.requirements-grid article,
-.upload-panel,
-.summary-panel,
-.rows-drawer {
-  padding: 14px;
-}
-
-.requirements-grid p,
-.history-list p,
-.compact-rows p {
-  margin: 0;
-  color: #647981;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.template-actions,
-.panel-head,
-.row-actions,
-.bulk-toolbar,
-.pagination-bar,
-.permission-drawer footer {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-}
-
-.template-actions small {
-  color: #61747b;
-}
-
-.primary-action,
-.secondary-action,
-.template-actions button,
-.list-toolbar button,
-.permission-filters button,
-.bulk-toolbar button,
-.pagination-bar button,
-.row-actions button,
-.table-action {
-  min-height: 32px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 6px;
-  background: #0f4f5c;
-  color: #ffffff;
-  cursor: pointer;
-  font-weight: 800;
-  font-size: 13px;
-  white-space: nowrap;
-  transition:
-    background-color 160ms ease,
-    border-color 160ms ease,
-    color 160ms ease,
-    transform 160ms ease,
-    box-shadow 160ms ease;
-}
-
-.secondary-action,
-.table-action {
-  border: 1px solid #c9d8dc;
-  background: #ffffff;
-  color: #173247;
-}
-
-.danger-action {
-  background: #a83d31 !important;
-}
-
-.primary-action:hover:not(:disabled),
-.secondary-action:hover:not(:disabled),
-.template-actions button:hover:not(:disabled),
-.list-toolbar button:hover:not(:disabled),
-.permission-filters button:hover:not(:disabled),
-.bulk-toolbar button:hover:not(:disabled),
-.pagination-bar button:hover:not(:disabled),
-.row-actions button:hover:not(:disabled),
-.table-action:hover:not(:disabled),
-.logout-button:hover:not(:disabled),
-.ghost-action:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 8px 18px rgba(15, 79, 92, 0.12);
-}
-
-button:disabled {
-  background: #9fb2b8 !important;
-  cursor: not-allowed;
-}
-
-.primary-action {
-  width: 100%;
-}
-
-.primary-action.compact,
-.secondary-action.compact {
-  width: auto;
-}
-
-.panel-head {
-  justify-content: space-between;
-  align-items: flex-start;
-}
-
-.drop-zone {
-  display: grid;
-  min-height: 118px;
-  margin: 12px 0;
-  place-items: center;
-  border: 1px dashed #8eb2bc;
-  border-radius: 8px;
-  background: #f6fbfb;
-  color: #48626a;
-  cursor: pointer;
-  text-align: center;
-}
-
-.drop-zone.dragging {
-  border-color: #0f6b7c;
-  background: #eaf7f7;
-}
-
-.drop-zone input {
-  display: none;
-}
-
-.drop-zone strong {
-  max-width: 90%;
-  overflow-wrap: anywhere;
-}
-
-.drop-zone span,
-.summary-metrics span,
-.history-list article > div:first-child span,
-.compact-rows span,
-.compact-rows em,
-.user-info-cell small {
-  color: #657980;
-  font-size: 12px;
-}
-
-.summary-metrics article {
-  padding: 10px;
-  border-radius: 6px;
-  background: #eef4f5;
-}
-
-.summary-metrics span,
-.summary-metrics strong,
-.history-list article > div:first-child strong,
-.history-list article > div:first-child span,
-.user-info-cell strong,
-.user-info-cell small {
-  display: block;
-}
-
-.summary-metrics strong {
-  margin-top: 4px;
-  font-size: 20px;
-}
-
-.issue-list {
-  margin: 8px 0;
-  padding: 10px;
-  border-radius: 6px;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.issue-list p {
-  margin: 4px 0 0;
-}
-
-.issue-list.blocker {
-  border: 1px solid #efc5c0;
-  background: #fff2f0;
-  color: #8e2f26;
-}
-
-.issue-list.error {
-  background: #fff2f0;
-  color: #9f3428;
-}
-
-.issue-list.warning {
-  background: #fff8e6;
-  color: #855b11;
-}
-
-.issue-more {
-  color: inherit;
-  opacity: 0.72;
-  font-weight: 800;
-}
-
-.empty-state {
-  color: #687d84;
-}
-
-.table-scroll {
-  overflow-x: auto;
-  border: 1px solid #d5e1e4;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-table {
-  width: 100%;
-  min-width: 980px;
-  border-collapse: collapse;
-}
-
-th,
-td {
-  padding: 10px 12px;
-  border-bottom: 1px solid #e3ecef;
-  text-align: left;
-  vertical-align: top;
-  font-size: 13px;
-}
-
-th {
-  color: #49646d;
-  background: #eef4f5;
-  white-space: nowrap;
-}
-
-td {
-  max-width: 260px;
-  overflow-wrap: anywhere;
-}
-
-.status-pill {
-  display: inline-flex;
-  min-width: 64px;
-  justify-content: center;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: #e9f0f2;
-  color: #3f5c65;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.status-pill.previewed,
-.status-pill.valid,
-.status-pill.synced {
-  background: #e5f4ed;
-  color: #286344;
-}
-
-.status-pill.pending_review,
-.status-pill.enrichment_required,
-.status-pill.pending_approval,
-.status-pill.warning,
-.status-pill.skipped {
-  background: #fff4d8;
-  color: #835d10;
-}
-
-.status-pill.validation_failed,
-.status-pill.revision_required,
-.status-pill.error,
-.status-pill.sync_failed,
-.status-pill.rejected {
-  background: #fff0ee;
-  color: #9d3327;
-}
-
-.list-toolbar,
-.permission-filters {
-  display: grid;
-  grid-template-columns: minmax(260px, 1fr) minmax(180px, 220px) auto;
-  gap: 8px;
-  align-items: end;
-}
-
-.permission-filters {
-  grid-template-columns: minmax(210px, 1.2fr) repeat(5, minmax(96px, 0.7fr)) auto;
-  padding: 10px;
-  border: 1px solid #d5e1e4;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.list-toolbar label,
-.permission-filters label,
-.permission-drawer label {
-  display: grid;
-  gap: 6px;
-}
-
-.list-toolbar label span,
-.permission-filters label span,
-.permission-drawer label span {
-  color: #526a72;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.list-toolbar input,
-.list-toolbar select,
-.permission-filters input,
-.permission-filters select,
-.bulk-toolbar select,
-.pagination-bar select,
-.permission-drawer select {
-  min-height: 34px;
-  width: 100%;
-  border: 1px solid #c9d8dc;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #173247;
-  padding: 0 10px;
-}
-
-.module-toolbar {
-  display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(420px, 1.4fr);
-  gap: 12px;
-  align-items: end;
-}
-
-.compact-toolbar {
-  grid-template-columns: minmax(260px, 0.9fr) minmax(560px, 1.6fr);
-}
-
-.batch-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.batch-toolbar label {
-  flex: 1 1 128px;
-  min-width: 120px;
-}
-
-.batch-toolbar label:first-child {
-  flex-basis: 220px;
-}
-
-.batch-toolbar button {
-  flex: 0 0 auto;
-}
-
-tbody tr {
-  transition:
-    background-color 140ms ease,
-    box-shadow 140ms ease;
-}
-
-tbody tr:hover {
-  background: #f7fbfb;
-}
-
-.batch-table table {
-  min-width: 1120px;
-}
-
-.batch-list-table th,
-.batch-list-table td {
-  vertical-align: middle;
-}
-
-.batch-file-cell strong,
-.batch-file-cell span,
-.muted,
-.audit-line {
-  display: block;
-}
-
-.batch-file-cell strong {
-  max-width: 280px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.batch-file-cell span,
-.muted,
-.audit-line {
-  color: #647981;
-  font-size: 12px;
-}
-
-.batch-counts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.batch-counts span {
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: #edf3f4;
-  color: #47656e;
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.compact-actions {
-  flex-wrap: nowrap;
-  gap: 6px;
-}
-
-.compact-actions button {
-  min-height: 28px;
-  padding: 0 9px;
-  font-size: 12px;
-}
-
-.history-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.history-list article {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-}
-
-.rows-drawer header {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-
-.compact-rows {
-  display: grid;
-  gap: 8px;
-}
-
-.compact-rows article {
-  display: grid;
-  grid-template-columns: 90px minmax(100px, 1fr) 70px minmax(180px, 1.5fr);
-  gap: 10px;
-  align-items: start;
-  padding: 10px;
-  border-radius: 8px;
-  background: #f5f8f9;
-}
-
-.bulk-toolbar {
-  justify-content: flex-start;
-  padding: 10px;
-  border: 1px solid #bed4d9;
-  border-radius: 8px;
-  background: #edf7f7;
-}
-
-.selection-toolbar {
-  min-height: 42px;
-  margin-top: -2px;
-  padding: 7px 10px;
-  border-color: #b9d4d8;
-  background: #f0f8f8;
-}
-
-.selection-bar-enter-active,
-.selection-bar-leave-active {
-  overflow: hidden;
-  transition:
-    opacity 160ms ease,
-    transform 160ms ease,
-    max-height 160ms ease,
-    margin 160ms ease,
-    padding 160ms ease;
-}
-
-.selection-bar-enter-from,
-.selection-bar-leave-to {
-  max-height: 0;
-  margin-top: -8px;
-  padding-top: 0;
-  padding-bottom: 0;
-  opacity: 0;
-  transform: translateY(-6px);
-}
-
-.selection-bar-enter-to,
-.selection-bar-leave-from {
-  max-height: 56px;
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.bulk-toolbar select {
-  width: min(240px, 100%);
-}
-
-.user-table {
-  overflow-x: auto;
-}
-
-.permission-table {
-  min-width: 900px;
-  table-layout: fixed;
-}
-
-.permission-table th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-}
-
-.permission-table th,
-.permission-table td {
-  height: 50px;
-  padding: 8px 10px;
-  vertical-align: middle;
-  white-space: nowrap;
-}
-
-.permission-table th:nth-child(1),
-.permission-table td:nth-child(1),
-.permission-table th:nth-child(3),
-.permission-table td:nth-child(3),
-.permission-table th:nth-child(5),
-.permission-table td:nth-child(5),
-.permission-table th:nth-child(6),
-.permission-table td:nth-child(6),
-.permission-table th:nth-child(7),
-.permission-table td:nth-child(7) {
-  text-align: center;
-}
-
-.permission-table .select-col {
-  width: 78px;
-}
-
-.permission-table .user-col {
-  width: 210px;
-}
-
-.permission-table .role-col {
-  width: 96px;
-}
-
-.permission-table .cap-col {
-  width: 240px;
-}
-
-.permission-table .state-col {
-  width: 78px;
-}
-
-.permission-table .login-col {
-  width: 140px;
-}
-
-.permission-table .action-col {
-  width: 96px;
-}
-
-.permission-table tr.muted {
-  background: #fbfcfc;
-}
-
-.check-cell {
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
-  justify-content: center;
-}
-
-.user-info-cell strong,
-.user-info-cell small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.capability-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
-}
-
-.capability-list i {
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: #edf3f4;
-  color: #426069;
-  font-size: 11px;
-  font-style: normal;
-  font-weight: 800;
-}
-
-.account-status {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: #edf3f4;
-  color: #536d75;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.account-status.active {
-  background: #e5f4ed;
-  color: #286344;
-}
-
-.locked-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 28px;
-  padding: 0 8px;
-  border-radius: 6px;
-  background: #edf3f4;
-  color: #5b737b;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.table-empty {
-  padding: 18px !important;
-  color: #687d84;
-  text-align: center;
-}
-
-.pagination-bar {
-  justify-content: flex-end;
-}
-
-.drawer-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  display: flex;
-  justify-content: flex-end;
-  background: rgba(18, 38, 45, 0.28);
-}
-
-.permission-drawer {
-  display: grid;
-  grid-template-rows: auto auto 1fr auto;
-  gap: 16px;
-  width: min(380px, 100%);
-  height: 100%;
-  padding: 22px;
-  background: #ffffff;
-  box-shadow: -20px 0 42px rgba(21, 50, 58, 0.16);
-}
-
-.switch-list {
-  display: grid;
-  align-content: start;
-  gap: 12px;
-}
-
-.switch-list label {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  padding: 10px 12px;
-  border: 1px solid #d5e1e4;
-  border-radius: 6px;
-}
-
-.batch-drawer-shell,
-.drawer-backdrop {
-  animation: fade-in 160ms ease;
-}
-
-.drawer-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 44;
-  border: 0;
-  background: rgba(18, 38, 45, 0.28);
-  cursor: pointer;
-}
-
-.batch-detail-drawer {
-  position: fixed;
-  top: 0;
-  right: 0;
-  z-index: 45;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: min(720px, 100%);
-  height: 100%;
-  overflow-y: auto;
-  padding: 18px;
-  background: #ffffff;
-  box-shadow: -22px 0 42px rgba(21, 50, 58, 0.18);
-  animation: drawer-slide 180ms ease;
-}
-
-.drawer-head,
-.drawer-row-toolbar,
-.drawer-actions {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.drawer-head h3 {
-  max-width: 520px;
-  margin: 3px 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.drawer-head span {
-  color: #53727a;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.ghost-button {
-  min-height: 32px;
-  padding: 0 12px;
-  border: 1px solid #c9d8dc;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #173247;
-  cursor: pointer;
-  font-weight: 800;
-}
-
-.drawer-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.drawer-metrics article,
-.drawer-audit,
-.drawer-row-toolbar,
-.review-package-panel,
-.review-package-history,
-.review-checklist {
-  padding: 10px;
-  border: 1px solid #d8e2e5;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.review-package-panel,
-.review-package-history,
-.review-checklist {
-  display: grid;
-  gap: 10px;
-}
-
-.review-package-panel header,
-.review-package-history header,
-.review-checklist header,
-.review-package-history article {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.review-package-panel header span,
-.review-package-history header span,
-.review-checklist header span,
-.review-package-history article span {
-  color: #607780;
-  font-size: 12px;
-}
-
-.package-file-input {
-  display: block;
-  padding: 9px 10px;
-  overflow: hidden;
-  border: 1px dashed #a8bec4;
-  border-radius: 6px;
-  color: #405e67;
-  cursor: pointer;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.package-file-input input {
-  display: none;
-}
-
-.review-package-history article {
-  padding-top: 9px;
-  border-top: 1px solid #e2eaec;
-}
-
-.review-package-history article > div {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.review-package-history article p {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: #96372e;
-  font-size: 12px;
-}
-
-.review-checklist > label {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  color: #294952;
-  font-size: 13px;
-}
-
-.review-checklist textarea {
-  min-height: 62px;
-  resize: vertical;
-  padding: 8px 10px;
-  border: 1px solid #c9d8dc;
-  border-radius: 6px;
-  font: inherit;
-}
-
-.production-diff {
-  padding: 9px 10px;
-  border-left: 3px solid #73959d;
-  background: #f5f8f9;
-}
-
-.production-diff p {
-  margin: 4px 0 0;
-  color: #4f6870;
-  font-size: 12px;
-}
-
-.production-diff p.risk {
-  color: #96372e;
-  font-weight: 700;
-}
-
-.drawer-metrics span,
-.drawer-metrics strong {
-  display: block;
-}
-
-.drawer-metrics span,
-.drawer-audit p {
-  color: #607780;
-  font-size: 12px;
-}
-
-.drawer-metrics strong {
-  margin-top: 4px;
-  font-size: 20px;
-}
-
-.drawer-audit {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px 12px;
-}
-
-.drawer-audit p {
-  margin: 0;
-}
-
-.drawer-audit .sync-error {
-  grid-column: 1 / -1;
-  color: #96372e;
-  font-weight: 700;
-}
-
-.drawer-row-toolbar label {
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
-  color: #526a72;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.drawer-row-toolbar select,
-.drawer-actions textarea {
-  border: 1px solid #c9d8dc;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #173247;
-}
-
-.drawer-row-toolbar select {
-  min-height: 32px;
-  padding: 0 8px;
-}
-
-.drawer-row-table {
-  min-height: 240px;
-  max-height: 48vh;
-  overflow: auto;
-  border: 1px solid #d8e2e5;
-  border-radius: 8px;
-}
-
-.drawer-row-table table {
-  min-width: 640px;
-}
-
-.drawer-pages {
-  position: sticky;
-  bottom: 0;
-  padding: 8px;
-  border-top: 1px solid #d8e2e5;
-  background: #ffffff;
-}
-
-.drawer-actions {
-  align-items: flex-end;
-  padding-top: 10px;
-  border-top: 1px solid #d8e2e5;
-}
-
-.drawer-actions textarea {
-  min-height: 64px;
-  flex: 1;
-  resize: vertical;
-  padding: 8px 10px;
-}
-
-.drawer-actions > div {
-  display: flex;
-  gap: 8px;
-}
-
-.drawer-fade-enter-active,
-.drawer-fade-leave-active {
-  transition: opacity 160ms ease;
-}
-
-.drawer-fade-enter-from,
-.drawer-fade-leave-to {
-  opacity: 0;
-}
-
-.permission-drawer {
-  animation: drawer-slide 180ms ease;
-}
-
-@keyframes panel-enter {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes drawer-slide {
-  from {
-    transform: translateX(18px);
-  }
-  to {
-    transform: translateX(0);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 1ms !important;
-    scroll-behavior: auto !important;
-    transition-duration: 1ms !important;
-  }
-}
-
-@media (max-width: 980px) {
-  .workspace-layout,
-  .page-message {
-    width: min(100% - 28px, 100%);
-    margin-left: auto;
-    margin-right: auto;
-  }
-
-  .entry-shell {
-    --entry-header-height: auto;
-  }
-
-  .entry-header,
-  .workspace-layout,
-  .requirements-band,
-  .import-grid,
-  .history-list,
-  .list-toolbar,
-  .permission-filters,
-  .module-toolbar,
-  .compact-toolbar,
-  .batch-toolbar {
-    grid-template-columns: 1fr;
-  }
-
-  .entry-header {
-    position: sticky;
-    gap: 12px;
-  }
-
-  .header-title small {
-    white-space: normal;
-  }
-
-  .workspace-layout {
-    min-height: auto;
-    padding: 14px 0 28px;
-  }
-
-  .workspace-nav {
-    position: static;
-    display: flex;
-    overflow-x: auto;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    min-height: auto;
-  }
-
-  .workspace-nav button {
-    min-width: 150px;
-    background: #ffffff;
-  }
-
-  .workspace-panel {
-    width: 100%;
-    margin: 14px 0 0;
-  }
-
-  .summary-metrics,
-  .requirements-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .batch-detail-drawer {
-    width: min(100%, 560px);
-  }
-
-  .drawer-audit {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 560px) {
-  .entry-nav,
-  .operator-chip,
-  .summary-metrics,
-  .requirements-grid {
-    grid-template-columns: 1fr;
-    flex-wrap: wrap;
-  }
-
-  .compact-rows article {
-    grid-template-columns: 1fr;
-  }
-
-  .drawer-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .drawer-actions {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .drawer-actions > div {
-    justify-content: flex-end;
-  }
+.workspace-shell { min-height: 100vh; background: #f4f7f9; color: #10283b; }
+.workspace-main { width: min(1440px, calc(100% - 48px)); margin: 0 auto; padding: 42px 0 80px; }
+.workspace-heading { display: flex; align-items: end; justify-content: space-between; gap: 28px; margin-bottom: 28px; }
+.workspace-heading h1 { margin: 5px 0 9px; color: #092d4a; font-size: clamp(30px, 4vw, 46px); line-height: 1.08; letter-spacing: -.035em; }
+.workspace-heading p:not(.eyebrow), .panel-heading p, .guide-panel p, .instruction-grid p, .correction-box p, .release-note p { margin: 0; color: #607585; line-height: 1.7; }
+.eyebrow, .section-kicker { margin: 0; color: #176e9d; font-size: 11px; font-weight: 800; letter-spacing: .15em; }
+.workspace-tabs { display: flex; gap: 24px; border-bottom: 1px solid #cbd8df; margin-bottom: 22px; }
+.workspace-tabs button { padding: 13px 2px 11px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #627584; font-weight: 700; cursor: pointer; }
+.workspace-tabs button.active { border-color: #0f6591; color: #0b4164; }
+.stage-rail { display: grid; grid-template-columns: repeat(4, 1fr); margin-bottom: 18px; border: 1px solid #d6e0e6; background: #fff; }
+.stage-rail button { display: grid; grid-template-columns: 34px 1fr; gap: 2px 10px; padding: 17px 18px; border: 0; border-right: 1px solid #e0e7eb; background: #fff; color: #687b88; text-align: left; cursor: pointer; }
+.stage-rail button:last-child { border-right: 0; }
+.stage-rail button > span { grid-row: span 2; color: #92a1aa; font-size: 12px; font-weight: 800; }
+.stage-rail strong { color: #29485d; font-size: 14px; }
+.stage-rail small { line-height: 1.45; }
+.stage-rail button.active { box-shadow: inset 0 3px #0f6591; background: #f6fafc; }
+.stage-rail button.done > span, .stage-rail button.active > span { color: #0f6591; }
+.guide-panel { display: grid; grid-template-columns: 130px 1fr 1fr; gap: 22px; margin-bottom: 18px; padding: 16px 20px; border: 1px solid #c8dbe5; border-left: 3px solid #0f6591; background: #eef6fa; }
+.panel { padding: 26px; border: 1px solid #d6e0e6; border-radius: 9px; background: #fff; }
+.panel-heading { display: flex; justify-content: space-between; align-items: start; gap: 24px; margin-bottom: 22px; }
+.panel-heading h2 { margin: 4px 0 6px; color: #0b3654; font-size: 23px; }
+.button { min-height: 40px; padding: 0 17px; border: 1px solid transparent; border-radius: 8px; font: inherit; font-size: 13px; font-weight: 750; cursor: pointer; }
+.button.primary { background: #0f6591; color: #fff; }
+.button.primary:hover { background: #0b5379; }
+.button.secondary { border-color: #8fabb9; background: #fff; color: #174d6d; }
+.button.text { padding-inline: 4px; background: transparent; color: #0f6591; }
+.button.danger { border-color: #a95b4c; background: #a94f40; color: #fff; }
+.button.compact { min-height: 34px; padding-inline: 12px; }
+.button:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid rgba(22, 117, 166, .25); outline-offset: 2px; }
+.button:disabled, button:disabled { opacity: .5; cursor: not-allowed; }
+.instruction-grid { display: grid; grid-template-columns: repeat(4, 1fr); border-block: 1px solid #e1e8ec; }
+.instruction-grid article { min-height: 118px; padding: 18px; border-right: 1px solid #e1e8ec; }
+.instruction-grid article:last-child { border-right: 0; }
+.instruction-grid strong { color: #173d56; }
+.instruction-grid p { margin-top: 8px; font-size: 13px; }
+.upload-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; margin-top: 22px; }
+.file-picker { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 58px; padding: 9px 16px; border: 1px dashed #88a9ba; border-radius: 8px; background: #f8fbfc; color: #31566d; text-align: left; cursor: pointer; }
+.file-picker strong { overflow: hidden; color: #758995; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.metric-strip, .publish-summary { display: grid; grid-template-columns: repeat(4, 1fr); margin-bottom: 20px; border: 1px solid #dce5ea; }
+.metric-strip article, .publish-summary article { padding: 16px 18px; border-right: 1px solid #dce5ea; }
+.metric-strip article:last-child, .publish-summary article:last-child { border-right: 0; }
+.metric-strip span, .publish-summary span { display: block; color: #728590; font-size: 12px; }
+.metric-strip strong, .publish-summary strong { display: block; margin-top: 7px; color: #103d5b; font-size: 24px; }
+.progress-track { height: 5px; margin: -8px 0 18px; background: #e5edf1; }
+.progress-track span { display: block; height: 100%; background: #0f6591; transition: width .25s; }
+.table-wrap { overflow-x: auto; border: 1px solid #dce5ea; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { padding: 11px 13px; background: #f3f7f9; color: #496272; text-align: left; white-space: nowrap; }
+td { padding: 12px 13px; border-top: 1px solid #e2e8ec; color: #344f60; vertical-align: top; }
+td small { display: block; margin-top: 3px; color: #8797a1; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.status-chip, .group-state { display: inline-flex; padding: 5px 9px; border: 1px solid #b9cbd4; border-radius: 999px; background: #f7fafb; color: #365a70; font-size: 11px; font-weight: 750; white-space: nowrap; }
+.group-state[data-state='READY'], .group-state[data-state='PUBLISHED'] { border-color: #92bea9; color: #276647; }
+.group-state[data-state='HELD_ERROR'] { border-color: #d2aa80; color: #89511e; }
+.group-state[data-state='DUPLICATE_DATABASE'] { color: #6e7280; }
+.action-bar { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+.correction-box { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 16px; margin-top: 20px; padding: 16px; border: 1px solid #dbe4e9; background: #f8fafb; }
+.review-record { margin-top: 18px; border: 1px solid #d7e1e6; border-radius: 8px; overflow: hidden; }
+.review-record > header { display: flex; justify-content: space-between; align-items: center; padding: 13px 16px; background: #edf4f7; }
+.review-record > header div { display: flex; gap: 16px; align-items: center; }
+.review-record > header .record-actions { justify-content: flex-end; }
+.record-actions > input { width: min(250px, 28vw); }
+.comparison-grid { display: grid; grid-template-columns: .8fr 1.2fr; }
+.comparison-grid > section { padding: 18px; }
+.raw-column { border-right: 1px solid #dfe7eb; background: #fbfcfd; }
+.review-record h3 { margin: 0 0 14px; color: #174a69; font-size: 14px; }
+dl { display: grid; grid-template-columns: 120px 1fr; gap: 7px 12px; margin: 0; font-size: 12px; }
+dt { color: #7b8e99; } dd { margin: 0; color: #294657; overflow-wrap: anywhere; }
+.field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+label > span { display: block; margin-bottom: 5px; color: #596f7d; font-size: 12px; font-weight: 700; }
+input:not([type='checkbox']), textarea, select { width: 100%; min-height: 38px; padding: 8px 10px; border: 1px solid #bdcdd6; border-radius: 7px; background: #fff; color: #1f3b4d; font: inherit; box-sizing: border-box; }
+textarea { resize: vertical; }
+details { margin-top: 14px; } summary { margin-bottom: 12px; color: #24617f; cursor: pointer; font-size: 13px; font-weight: 700; }
+.mapping-section { padding: 18px; border-top: 1px solid #e0e7eb; }
+.hint { margin: -8px 0 12px; color: #758894; font-size: 12px; }
+.eligibility-grid { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid #dfe7eb; }
+.eligibility-grid > label { padding: 16px; border-right: 1px solid #dfe7eb; }
+.eligibility-grid > label:last-child { border-right: 0; }
+.eligibility-grid input:not([type='checkbox']) { margin-top: 8px; }
+.review-complete { display: grid; grid-template-columns: 1fr 1fr auto; align-items: end; gap: 14px; margin-top: 22px; padding: 18px; border: 1px solid #b9d0dc; background: #f1f7fa; }
+.workflow-secondary-actions { display: flex; align-items: end; justify-content: flex-end; gap: 12px; margin-top: 14px; }
+.workflow-secondary-actions label { width: min(420px, 100%); }
+.dictionary-request { display: grid; grid-template-columns: 1.3fr .55fr 1fr 1fr 1fr auto; align-items: end; gap: 12px; margin-top: 20px; padding: 16px; border: 1px solid #d5e1e7; background: #f8fafb; }
+.dictionary-request p { margin: 5px 0 0; color: #718590; font-size: 12px; line-height: 1.5; }
+.dictionary-request .evidence-field { grid-column: span 2; }
+.dictionary-admin { margin-top: 26px; padding-top: 22px; border-top: 1px solid #dce5ea; }
+.dictionary-admin h3 { color: #174a69; font-size: 16px; }
+.dictionary-admin article { display: flex; justify-content: space-between; gap: 20px; padding: 14px 0; border-top: 1px solid #e1e8ec; }
+.dictionary-actions { display: grid; min-width: min(360px, 40vw); gap: 8px; }
+.dictionary-actions > span { display: flex; justify-content: flex-end; gap: 8px; }
+.dictionary-admin small { display: block; margin-top: 4px; color: #80919b; }
+.dictionary-admin p { margin: 7px 0 0; color: #526b7a; }
+.publish-summary { grid-template-columns: repeat(3, 1fr); }
+.release-note { margin-bottom: 20px; padding: 16px 18px; border-left: 3px solid #0f6591; background: #f2f7f9; }
+.refresh-list { display: grid; gap: 10px; margin-top: 20px; }
+.refresh-list article { display: flex; justify-content: space-between; gap: 20px; padding: 14px 16px; border: 1px solid #d9e3e8; }
+.refresh-list small { display: block; margin-top: 4px; color: #788c98; }
+.refresh-list p { margin: 6px 0 0; color: #9a4e32; }
+.batch-list { border: 1px solid #dce5ea; }
+.batch-list > button { display: grid; grid-template-columns: 70px 1fr auto 80px; align-items: center; gap: 14px; width: 100%; padding: 14px 16px; border: 0; border-bottom: 1px solid #e1e8ec; background: #fff; color: #2b485a; text-align: left; cursor: pointer; }
+.batch-list > button:last-child { border-bottom: 0; }
+.batch-list > button:hover { background: #f5f9fb; }
+.batch-list small { display: block; margin-top: 4px; color: #81929c; }
+.batch-id, .batch-count { color: #6e828f; font-size: 12px; }
+.pagination { display: flex; align-items: center; justify-content: center; gap: 18px; margin-top: 18px; color: #667b88; font-size: 12px; }
+.feedback { margin: 0 0 16px; padding: 11px 14px; border-left: 3px solid; background: #fff; font-size: 13px; }
+.feedback.success { border-color: #3a8b65; color: #256246; } .feedback.failure { border-color: #b75a3b; color: #8e3f27; }
+.empty-state { padding: 28px; border: 1px dashed #b9cbd4; color: #6f818c; text-align: center; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+@media (max-width: 1024px) {
+  .workspace-main { width: min(100% - 32px, 1100px); }
+  .stage-rail { grid-template-columns: repeat(2, 1fr); }
+  .stage-rail button:nth-child(2) { border-right: 0; }
+  .stage-rail button:nth-child(-n+2) { border-bottom: 1px solid #e0e7eb; }
+  .guide-panel { grid-template-columns: 1fr 1fr; } .guide-panel strong { grid-column: 1 / -1; }
+  .instruction-grid { grid-template-columns: repeat(2, 1fr); }
+  .instruction-grid article:nth-child(2) { border-right: 0; }
+  .instruction-grid article:nth-child(-n+2) { border-bottom: 1px solid #e1e8ec; }
+  .comparison-grid { grid-template-columns: 1fr; } .raw-column { border-right: 0; border-bottom: 1px solid #dfe7eb; }
+  .review-complete { grid-template-columns: 1fr 1fr; } .review-complete .button { grid-column: 1 / -1; }
+  .workflow-secondary-actions { flex-wrap: wrap; }
+  .dictionary-request { grid-template-columns: repeat(2, 1fr); } .dictionary-request > div, .dictionary-request .evidence-field { grid-column: 1 / -1; }
+  .review-record > header { align-items: flex-start; } .review-record > header .record-actions { flex-wrap: wrap; }
+}
+
+@media (max-width: 640px) {
+  .workspace-main { width: calc(100% - 24px); padding-top: 24px; }
+  .workspace-heading { display: block; } .workspace-heading .button { margin-top: 16px; }
+  .workspace-tabs { gap: 14px; overflow-x: auto; }
+  .stage-rail { display: flex; overflow-x: auto; } .stage-rail button { min-width: 220px; border-bottom: 0 !important; }
+  .guide-panel, .instruction-grid, .metric-strip, .publish-summary, .eligibility-grid, .review-complete, .dictionary-request { grid-template-columns: 1fr; }
+  .guide-panel strong { grid-column: auto; }
+  .instruction-grid article, .metric-strip article, .publish-summary article, .eligibility-grid > label { border-right: 0; border-bottom: 1px solid #e1e8ec; }
+  .panel { padding: 18px; } .panel-heading { display: block; } .panel-heading > .button, .panel-heading > .status-chip { margin-top: 14px; }
+  .upload-row, .correction-box { grid-template-columns: 1fr; }
+  .file-picker { display: grid; }
+  .field-grid { grid-template-columns: 1fr; }
+  .workflow-secondary-actions { display: grid; justify-content: stretch; } .workflow-secondary-actions label { width: 100%; }
+  .review-record > header { display: grid; gap: 12px; } .review-record > header .record-actions { display: grid; gap: 8px; } .record-actions > input { width: 100%; }
+  .dictionary-admin article { display: grid; } .dictionary-actions { min-width: 0; }
+  .dictionary-request > div, .dictionary-request .evidence-field { grid-column: auto; }
+  dl { grid-template-columns: 90px 1fr; }
+  .review-record > header { align-items: start; } .review-record > header div { display: grid; gap: 4px; }
+  .batch-list > button { grid-template-columns: 52px 1fr; } .batch-list .status-chip, .batch-count { justify-self: start; }
 }
 </style>

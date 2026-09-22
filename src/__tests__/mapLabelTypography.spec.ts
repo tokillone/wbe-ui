@@ -35,8 +35,8 @@ describe('map label typography', () => {
     for (const [level, zoom, area] of [
       ['country', 3.85, 954.9],
       ['admin1', 3.85, 0],
-      ['admin1', 6.6, 0],
-      ['city', 6.45, 0],
+      ['admin1', 6.3, 0],
+      ['city', 6.15, 0],
     ] as const) {
       expect(businessLabelSizeAtZoom(level, zoom, 10_000, area)).toBeCloseTo(
         staticLabelSizeAtZoom(level, zoom, area),

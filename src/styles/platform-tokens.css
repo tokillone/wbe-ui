@@ -1,4 +1,12 @@
 :root {
+  --academic-surface: #ffffff;
+  --academic-ink: #0b1f33;
+  --academic-muted: #56697a;
+  --academic-accent: #1263a8;
+  --academic-line: #d7e0e6;
+  --academic-surface-soft: #f6f9fc;
+  --platform-font-family: 'Microsoft YaHei', '微软雅黑', Arial, sans-serif;
+  --academic-font: var(--platform-font-family);
   --platform-navy-950: #102a3b;
   --platform-navy-900: #173247;
   --platform-navy-700: #385466;
@@ -26,12 +34,14 @@
 
 html {
   color-scheme: light;
+  font-family: var(--platform-font-family);
 }
 
 body {
   margin: 0;
   color: var(--platform-navy-900);
   background: var(--platform-page);
+  font-family: var(--platform-font-family);
 }
 
 #app {

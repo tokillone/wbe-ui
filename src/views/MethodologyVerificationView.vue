@@ -105,7 +105,7 @@ const metrics = computed(() => {
   const docs = filteredDocCount.value
   return [
     { label: '筛选结果', value: `${formatNumber(docs)} / ${formatNumber(totalDocs)}`, unit: '篇文献', note: `占全部文献 ${totalDocs ? ((docs / totalDocs) * 100).toFixed(1) : '0.0'}%` },
-    { label: '文献—方法组合', value: formatNumber(countRows(filteredRows.value, 'docMethods')), note: '去重后的文献与标准方法组合' },
+    { label: '文献与方法组合', value: formatNumber(countRows(filteredRows.value, 'docMethods')), note: '去重后的文献与标准方法组合' },
     { label: '标准采样方法', value: formatNumber(new Set(filteredRows.value.map((row) => row.samplingStandard).filter(Boolean)).size), note: '有效标准化方法', accent: 'teal' as const },
     { label: '采样主类', value: formatNumber(new Set(filteredRows.value.map((row) => row.samplingClass).filter(Boolean)).size), note: '标准方法所属类别', accent: 'teal' as const },
   ]
@@ -254,7 +254,7 @@ onBeforeUnmount(() => compactMediaQuery?.removeEventListener('change', updateCom
               <div class="mode-switch" role="group" aria-label="处方属性统计口径">
                 <button v-for="item in [
                   { value: 'docs', label: '按文献统计', tip: '同一篇文献只计算一次。' },
-                  { value: 'docMethods', label: '按文献—方法统计', tip: '同一篇文献采用多个标准采样方法时分别计算。' },
+                  { value: 'docMethods', label: '按文献与方法统计', tip: '同一篇文献采用多个标准采样方法时分别计算。' },
                   { value: 'rows', label: '按数据记录统计', tip: '按筛选后原始数据记录数量计算。' },
                 ]" :key="item.value" type="button" :class="{ active: filters.mode === item.value }" :title="item.tip" @click="setMode(item.value as MethodologyMode)">{{ item.label }}</button>
               </div>
@@ -271,13 +271,13 @@ onBeforeUnmount(() => compactMediaQuery?.removeEventListener('change', updateCom
         </section>
 
         <section class="evidence-section">
-          <SectionHeader index="01" english="PRESCRIPTION STATUS" title="处方属性覆盖" description="统计具有明确处方属性的文献—属性组合。同一篇文献涉及多种属性时，将分别计入对应类别。" />
+          <SectionHeader index="01" english="PRESCRIPTION STATUS" title="处方属性覆盖" description="统计具有明确处方属性的文献与属性组合。同一篇文献涉及多种属性时，将分别计入对应类别。" />
           <div v-if="prescriptionItems.length" class="prescription-chart">
             <div class="prescription-track" role="img" :aria-label="`处方属性组合共 ${prescriptionTotal} 个`">
               <span v-for="item in prescriptionItems" :key="item.name" :style="{ width: `${prescriptionTotal ? item.value / prescriptionTotal * 100 : 0}%`, background: PRESCRIPTION_COLORS[item.name] || '#91ADD9' }"><b>{{ prescriptionTotal && item.value / prescriptionTotal >= .16 ? `${item.value} · ${(item.value / prescriptionTotal * 100).toFixed(1)}%` : '' }}</b></span>
             </div>
             <div class="prescription-legend"><div v-for="item in prescriptionItems" :key="item.name"><i :style="{ background: PRESCRIPTION_COLORS[item.name] || '#91ADD9' }"></i><span>{{ item.name }}</span><strong>{{ formatNumber(item.value) }}</strong><small>{{ prescriptionTotal ? (item.value / prescriptionTotal * 100).toFixed(1) : '0.0' }}%</small></div></div>
-            <p>共形成 <strong>{{ formatNumber(prescriptionTotal) }}</strong> 个{{ filters.mode === 'docs' ? '文献—处方属性组合' : filters.mode === 'docMethods' ? '文献—方法—处方属性组合' : '数据记录—处方属性组合' }}。</p>
+            <p>共形成 <strong>{{ formatNumber(prescriptionTotal) }}</strong> 个{{ filters.mode === 'docs' ? '文献与处方属性组合' : filters.mode === 'docMethods' ? '文献、方法与处方属性组合' : '数据记录与处方属性组合' }}。</p>
           </div>
           <p v-else class="empty-copy">当前筛选下无明确处方属性数据。</p>
         </section>
@@ -286,7 +286,7 @@ onBeforeUnmount(() => compactMediaQuery?.removeEventListener('change', updateCom
           <SectionHeader index="02" english="SAMPLING METHODS" title="采样方法覆盖与核验" description="按“文献编号＋标准采样方法”去重，比较采样主类和标准采样方法的文献覆盖情况。" />
           <div class="sampling-overview">
             <div class="chart-panel">
-              <header><h3>采样主类覆盖</h3><p>文献—标准方法组合数</p></header>
+              <header><h3>采样主类覆盖</h3><p>文献与标准方法组合数</p></header>
               <div class="horizontal-bars">
                 <div v-for="group in samplingGroups" :key="group.name" class="horizontal-bar"><div class="horizontal-bar__label"><strong>{{ group.name }}</strong><span>{{ formatNumber(group.value) }}</span></div><div class="horizontal-bar__track"><i :style="{ width: `${group.value / samplingClassMax * 100}%`, background: group.color }"></i></div><small>{{ group.methods.length }} 种标准方法 · {{ formatNumber(group.docs) }} 篇文献</small></div>
               </div>

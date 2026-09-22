@@ -28,7 +28,7 @@ describe('MapFilterSelect', () => {
   let wrapper: VueWrapper | undefined
 
   beforeEach(() => {
-    Element.prototype.scrollIntoView = vi.fn()
+    Element.prototype.scrollIntoView = vi.fn<() => void>()
   })
 
   afterEach(() => {
@@ -106,5 +106,17 @@ describe('MapFilterSelect', () => {
     expect(trigger.attributes('disabled')).toBeDefined()
     await trigger.trigger('click')
     expect(wrapper.find('.map-filter-select-menu').exists()).toBe(false)
+  })
+
+  it('keeps keyboard dropdown selection without rendering an internal search field', async () => {
+    wrapper = mountSelect({ searchable: false })
+    const trigger = wrapper.get<HTMLButtonElement>('.map-filter-select-trigger')
+    await trigger.trigger('click')
+    expect(wrapper.find('.map-filter-select-search').exists()).toBe(false)
+    expect(document.activeElement).toBe(wrapper.get('.map-filter-select-menu').element)
+
+    await wrapper.get('.map-filter-select-menu').trigger('keydown', { key: 'ArrowDown' })
+    await wrapper.get('.map-filter-select-menu').trigger('keydown', { key: 'Enter' })
+    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['alpha'])
   })
 })

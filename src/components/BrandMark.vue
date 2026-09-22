@@ -3,10 +3,12 @@ withDefaults(
   defineProps<{
     size?: 32 | 40 | 44
     compact?: boolean
+    variant?: 'default' | 'academic'
   }>(),
   {
     size: 40,
     compact: false,
+    variant: 'default',
   },
 )
 </script>
@@ -14,15 +16,24 @@ withDefaults(
 <template>
   <span
     class="site-emblem"
-    :class="{ compact }"
+    :class="[{ compact }, `is-${variant}`]"
     :style="{ '--emblem-size': `${size}px` }"
     aria-hidden="true"
   >
-    <span class="drop-shape">
-      <i class="wave wave-one"></i>
-      <i class="wave wave-two"></i>
-      <b class="data-point"></b>
-    </span>
+    <svg
+      v-if="variant === 'academic'"
+      class="site-emblem-symbol"
+      viewBox="0 0 35 32"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path class="site-emblem-path" d="M3 6.5 9.5 25 17.5 13.5 25.5 25 32 6.5" />
+      <circle class="site-emblem-node" cx="3" cy="6.5" r="2.25" />
+      <circle class="site-emblem-node" cx="9.5" cy="25" r="2.25" />
+      <circle class="site-emblem-node" cx="25.5" cy="25" r="2.25" />
+      <circle class="site-emblem-node" cx="32" cy="6.5" r="2.25" />
+    </svg>
+    <strong>WBE</strong>
   </span>
 </template>
 
@@ -31,66 +42,67 @@ withDefaults(
   --emblem-size: 40px;
   width: var(--emblem-size);
   height: var(--emblem-size);
-  display: inline-grid;
+  display: grid;
   flex: 0 0 auto;
   place-items: center;
   overflow: hidden;
-  border: 1px solid #064786;
-  border-radius: calc(var(--emblem-size) * 0.14);
+  border: 1px solid #07519c;
+  border-radius: calc(var(--emblem-size) * 0.18);
   color: #ffffff;
   background: #07519c;
   box-shadow: 0 5px 12px rgba(7, 81, 156, 0.16);
+}
+
+.site-emblem strong {
+  font-family: var(--platform-font-family, 'Microsoft YaHei', '微软雅黑', Arial, sans-serif);
+  font-size: calc(var(--emblem-size) * 0.27);
+  font-weight: 760;
+  letter-spacing: -0.035em;
+  line-height: 1;
 }
 
 .site-emblem.compact {
   box-shadow: none;
 }
 
-.drop-shape {
-  position: relative;
-  width: 50%;
-  height: 62%;
-  margin-top: 5%;
-  border: max(1.5px, calc(var(--emblem-size) * 0.05)) solid currentColor;
-  border-radius: 54% 54% 62% 62% / 45% 45% 72% 72%;
+.site-emblem.is-academic {
+  width: auto;
+  min-width: calc(var(--emblem-size) * 1.92);
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: calc(var(--emblem-size) * 0.15);
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  color: #0b1f33;
+  background: transparent;
+  box-shadow: none;
 }
 
-.drop-shape::before {
-  position: absolute;
-  top: -14%;
-  left: 50%;
-  width: 44%;
-  height: 38%;
-  border-top: max(1.5px, calc(var(--emblem-size) * 0.05)) solid currentColor;
-  border-left: max(1.5px, calc(var(--emblem-size) * 0.05)) solid currentColor;
-  content: '';
-  transform: translateX(-50%) rotate(45deg);
+.site-emblem-symbol {
+  width: calc(var(--emblem-size) * 0.86);
+  height: calc(var(--emblem-size) * 0.78);
+  flex: 0 0 auto;
+  overflow: visible;
 }
 
-.wave {
-  position: absolute;
-  left: 16%;
-  width: 68%;
-  height: 12%;
-  border-bottom: max(1px, calc(var(--emblem-size) * 0.034)) solid currentColor;
-  border-radius: 50%;
+.site-emblem-path {
+  stroke: #0b1f33;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-.wave-one {
-  top: 38%;
+.site-emblem-node {
+  fill: #1263a8;
+  stroke: #ffffff;
+  stroke-width: 1.25;
 }
 
-.wave-two {
-  top: 60%;
-}
-
-.data-point {
-  position: absolute;
-  top: 57%;
-  right: 10%;
-  width: max(2px, calc(var(--emblem-size) * 0.075));
-  height: max(2px, calc(var(--emblem-size) * 0.075));
-  border-radius: 50%;
-  background: currentColor;
+.site-emblem.is-academic strong {
+  font-size: calc(var(--emblem-size) * 0.44);
+  font-weight: 780;
+  letter-spacing: -0.055em;
 }
 </style>

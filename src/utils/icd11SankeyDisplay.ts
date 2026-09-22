@@ -1,4 +1,6 @@
 import type {
+  Icd11SankeyGraph,
+  DrugPrescriptionStatus,
   Icd11SankeyNode,
   Icd11SankeyPath,
   Icd11SankeyStats,
@@ -44,11 +46,7 @@ export function smartSankeyLimit(pathCount: number, cap = 50) {
   return pathCount > cap ? cap : null
 }
 
-export function displayModeLimit(
-  mode: Icd11SankeyDisplayMode,
-  pathCount: number,
-  smartLimit = 50,
-) {
+export function displayModeLimit(mode: Icd11SankeyDisplayMode, pathCount: number, smartLimit = 50) {
   if (mode === 'smart') return smartSankeyLimit(pathCount, smartLimit)
   if (mode === 'top20') return 20
   if (mode === 'top50') return 50
@@ -61,10 +59,7 @@ export function summarizeSankeyOverview(paths: Icd11SankeyPath[]): Icd11SankeyOv
   const level3Paths = paths.filter((path) => path.mappingLevel === 'Level3' && path.level3)
   const level2OnlyPaths = paths.filter((path) => path.mappingLevel === 'Level2')
   const level3Weight = level3Paths.reduce((sum, path) => sum + Number(path.weight || 0), 0)
-  const level2OnlyWeight = level2OnlyPaths.reduce(
-    (sum, path) => sum + Number(path.weight || 0),
-    0,
-  )
+  const level2OnlyWeight = level2OnlyPaths.reduce((sum, path) => sum + Number(path.weight || 0), 0)
   const uniqueCount = (selector: (path: Icd11SankeyPath) => string | null | undefined) =>
     new Set(paths.map(selector).filter((value): value is string => Boolean(value))).size
   const topItems = (
@@ -105,8 +100,51 @@ export function summarizeSankeyOverview(paths: Icd11SankeyPath[]): Icd11SankeyOv
 
 export function sortSankeyPaths(paths: Icd11SankeyPath[]) {
   return [...paths].sort(
-    (a, b) => b.weight - a.weight || pathText(a).localeCompare(pathText(b), 'zh-Hans-CN'),
+    (a, b) =>
+      b.weight - a.weight ||
+      pathText(a).localeCompare(pathText(b), 'zh-Hans-CN') ||
+      a.pathId.localeCompare(b.pathId),
   )
+}
+
+/**
+ * Keep ECharts' deterministic node order while moving the selected trajectory to the
+ * beginning of every depth. Sankey uses the data order when layoutIterations is 0,
+ * so this produces a stable, animatable "related nodes first" layout.
+ */
+export function promoteConnectedSankeyNodes(
+  nodes: Icd11SankeyNode[],
+  paths: Icd11SankeyPath[],
+  focusName: string,
+) {
+  if (!focusName) return nodes
+  const focusPaths = paths.filter((path) => path.nodeIds.includes(focusName))
+  const connected = new Set(focusPaths.flatMap((path) => path.nodeIds))
+  if (!connected.size) return nodes
+  const focusWeightByNode = new Map<string, number>()
+  for (const path of focusPaths) {
+    for (const nodeName of path.nodeIds) {
+      focusWeightByNode.set(
+        nodeName,
+        (focusWeightByNode.get(nodeName) ?? 0) + Number(path.weight || 0),
+      )
+    }
+  }
+  const originalIndex = new Map(nodes.map((node, index) => [node.name, index]))
+  return [...nodes].sort((a, b) => {
+    if (a.depth !== b.depth) {
+      return (originalIndex.get(a.name) ?? 0) - (originalIndex.get(b.name) ?? 0)
+    }
+    const aRank = a.name === focusName ? 0 : connected.has(a.name) ? 1 : 2
+    const bRank = b.name === focusName ? 0 : connected.has(b.name) ? 1 : 2
+    return (
+      aRank - bRank ||
+      (aRank === 1
+        ? (focusWeightByNode.get(b.name) ?? 0) - (focusWeightByNode.get(a.name) ?? 0)
+        : 0) ||
+      (originalIndex.get(a.name) ?? 0) - (originalIndex.get(b.name) ?? 0)
+    )
+  })
 }
 
 export function pathsForLevel1Context(paths: Icd11SankeyPath[], selectedLevel1: string) {
@@ -116,7 +154,8 @@ export function pathsForLevel1Context(paths: Icd11SankeyPath[], selectedLevel1: 
   const sharedNodeIds = new Set(primaryPaths.flatMap((path) => path.nodeIds.slice(1)))
   return paths.filter(
     (path) =>
-      path.level1 === selectedLevel1 || path.nodeIds.slice(1).some((nodeId) => sharedNodeIds.has(nodeId)),
+      path.level1 === selectedLevel1 ||
+      path.nodeIds.slice(1).some((nodeId) => sharedNodeIds.has(nodeId)),
   )
 }
 
@@ -127,6 +166,173 @@ export function pathsForLevel1Scope(
 ) {
   if (scope === 'selected') return paths.filter((path) => path.level1 === selectedLevel1)
   return pathsForLevel1Context(paths, selectedLevel1)
+}
+
+/** Apply weight filtering before expanding shared nodes so every related path has a viable seed. */
+export function sankeyScopeCandidates(
+  paths: Icd11SankeyPath[],
+  level1: string,
+  scope: Level1Scope,
+  minWeight = 0,
+) {
+  return sortSankeyPaths(
+    pathsForLevel1Scope(
+      paths.filter((path) => path.weight >= minWeight),
+      level1,
+      scope,
+    ),
+  )
+}
+
+/** Reserve one fifth of a finite view for linked branches and retain their connecting seed paths. */
+export function selectSankeyDisplayPaths(
+  paths: Icd11SankeyPath[],
+  level1: string,
+  scope: Level1Scope,
+  limit: number | null,
+) {
+  const sorted = sortSankeyPaths(paths)
+  const primary = sorted.filter((path) => path.level1 === level1)
+  if (scope !== 'linked') return limit ? primary.slice(0, limit) : primary
+  const related = sorted.filter((path) => path.level1 !== level1)
+  const prioritized = [...primary, ...related]
+  if (!limit || prioritized.length <= limit) return prioritized
+  const selected = new Map<string, Icd11SankeyPath>()
+  const addRelated = (path: Icd11SankeyPath) => {
+    if (selected.has(path.pathId)) return true
+    const nodes = new Set(path.nodeIds.slice(1))
+    const connects = (seed: Icd11SankeyPath) => seed.nodeIds.slice(1).some((id) => nodes.has(id))
+    const seed =
+      primary.find((seed) => selected.has(seed.pathId) && connects(seed)) ?? primary.find(connects)
+    if (!seed) return false
+    const cost = selected.has(seed.pathId) ? 1 : 2
+    if (selected.size + cost > limit) return false
+    selected.set(seed.pathId, seed)
+    selected.set(path.pathId, path)
+    return true
+  }
+  let linkedCount = 0
+  const linkedQuota = Math.max(1, Math.floor(limit * 0.2))
+  for (const path of related) {
+    if (linkedCount >= linkedQuota) break
+    if (addRelated(path)) linkedCount++
+  }
+  for (const path of primary) {
+    if (selected.size >= limit) break
+    selected.set(path.pathId, path)
+  }
+  for (const path of related) {
+    if (selected.size >= limit) break
+    addRelated(path)
+  }
+  return prioritized.filter((path) => selected.has(path.pathId))
+}
+
+export function overviewPieSections(
+  paths: Icd11SankeyPath[],
+  scope: 'current' | 'global',
+): RelationPieSection[] {
+  const first = scope === 'current' ? 'level2' : 'level1'
+  return [
+    relationPieSection(
+      `overview-${first}`,
+      `${first === 'level2' ? 'Level2' : 'Level1'} 构成`,
+      '',
+      first === 'level2' ? 'Level2' : 'Level1',
+      '疾病分类权重占比图',
+      '占统计范围',
+      first,
+      paths,
+      (path) => path[first],
+    ),
+    relationPieSection(
+      'overview-level3',
+      'Level3 构成',
+      '',
+      'Level3',
+      '有效 Level3 权重占比图',
+      '占有效 Level3',
+      'level3',
+      paths.filter((path) => path.mappingLevel === 'Level3' && Boolean(path.level3)),
+      (path) => path.level3,
+    ),
+    relationPieSection(
+      'overview-drug',
+      '药物构成',
+      '',
+      '药物',
+      '药物权重占比图',
+      '占统计范围',
+      'drug',
+      paths,
+      (path) => path.drug,
+    ),
+    relationPieSection(
+      'overview-biomarker',
+      '生物标记物构成',
+      '',
+      '生物标记物',
+      '生物标记物权重占比图',
+      '占统计范围',
+      'biomarker',
+      paths,
+      (path) => path.biomarker,
+    ),
+  ]
+}
+
+export interface PrescriptionSummary {
+  available: boolean
+  total: number
+  counts: Record<DrugPrescriptionStatus, number>
+}
+
+export function summarizeDrugPrescriptions(
+  paths: Icd11SankeyPath[],
+  graph: Icd11SankeyGraph | null,
+): PrescriptionSummary {
+  const counts: Record<DrugPrescriptionStatus, number> = {
+    prescription: 0,
+    nonprescription: 0,
+    conflict: 0,
+    unknown: 0,
+  }
+  const nodes = new Map(
+    graph?.nodes.filter((node) => node.kind === 'drug').map((node) => [node.name, node]) ?? [],
+  )
+  const drugs = new Map<string, string | undefined>()
+  for (const path of paths) {
+    const id = path.nodeIds.find((id) => nodes.has(id))
+    const name = path.drug.trim()
+    if (name && !drugs.has(name)) drugs.set(name, id)
+  }
+  const available = graph?.drugPrescriptions != null
+  for (const id of drugs.values()) {
+    const status = id ? graph?.drugPrescriptions?.[id] : undefined
+    counts[status && status in counts ? status : 'unknown']++
+  }
+  return { available, total: drugs.size, counts }
+}
+
+export function collapseRelationShares(
+  items: RelationShareItem[],
+  top = 7,
+): Array<RelationShareItem & { isOther?: boolean; hiddenItemCount?: number }> {
+  if (items.length <= top) return items
+  const remaining = items.slice(top)
+  const total = items.reduce((sum, item) => sum + item.value, 0)
+  const value = remaining.reduce((sum, item) => sum + item.value, 0)
+  return [
+    ...items.slice(0, top),
+    {
+      name: `其他 ${remaining.length} 项`,
+      value,
+      share: total > 0 ? value / total : 0,
+      pathIds: remaining.flatMap((item) => item.pathIds),
+      isOther: true,
+      hiddenItemCount: remaining.length,
+    },
+  ]
 }
 
 export function relationShareItems(
@@ -154,7 +360,10 @@ export function relationShareItems(
 }
 
 export function level2Level3Shares(paths: Icd11SankeyPath[]): RelationShareItem[] {
-  return relationShareItems(paths.filter((path) => path.mappingLevel === 'Level3'), (path) => path.level3)
+  return relationShareItems(
+    paths.filter((path) => path.mappingLevel === 'Level3' && Boolean(path.level3)),
+    (path) => path.level3,
+  )
 }
 
 export function relationPieSectionsForNode(
@@ -187,7 +396,7 @@ export function relationPieSectionsForNode(
         '占该 Level2',
         'mapping-depth',
         paths,
-        (path) => path.mappingLevel === 'Level3' ? '精确到 Level3' : '止于 Level2',
+        (path) => (path.mappingLevel === 'Level3' ? '精确到 Level3' : '止于 Level2'),
       ),
       relationPieSection(
         'level2-drug',
@@ -208,7 +417,7 @@ export function relationPieSectionsForNode(
         'Level2 到 Level3 占比图',
         '占该 Level2',
         'level3',
-        paths.filter((path) => path.mappingLevel === 'Level3'),
+        paths.filter((path) => path.mappingLevel === 'Level3' && Boolean(path.level3)),
         (path) => path.level3,
       ),
     ]
@@ -239,7 +448,7 @@ export function relationPieSectionsForNode(
         '占该药物',
         'drug-mapping-depth',
         paths,
-        (path) => path.mappingLevel === 'Level3' ? '来自 Level3' : '直接来自 Level2',
+        (path) => (path.mappingLevel === 'Level3' ? '来自 Level3' : '直接来自 Level2'),
       ),
       relationPieSection(
         'drug-disease-node',
@@ -296,6 +505,13 @@ export function sankeyHoverTargetKey(prefix: string, pathIds: Iterable<string>) 
   return `${prefix}:${normalized.join('|')}`
 }
 
+export function mergeSankeyHighlightPathIds(
+  persistentPathIds: Iterable<string>,
+  hoverPathIds: Iterable<string>,
+) {
+  return [...new Set([...persistentPathIds, ...hoverPathIds])]
+}
+
 export function upstreamContext(paths: Icd11SankeyPath[]): UpstreamContext {
   return {
     pathCount: paths.length,
@@ -317,13 +533,15 @@ export function resolveUpstreamPathIds(hoverPathIds: string[], persistentPathIds
 }
 
 function uniqueSorted(values: Array<string | null | undefined>) {
-  return [...new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))].sort((a, b) =>
-    a.localeCompare(b, 'zh-Hans-CN'),
+  return [...new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))].sort(
+    (a, b) => a.localeCompare(b, 'zh-Hans-CN'),
   )
 }
 
 function pathText(path: Icd11SankeyPath) {
-  return [path.level1, path.level2, path.level3, path.drug, path.biomarker].filter(Boolean).join(' → ')
+  return [path.level1, path.level2, path.level3, path.drug, path.biomarker]
+    .filter(Boolean)
+    .join(' → ')
 }
 
 function relationPieSection(

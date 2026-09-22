@@ -1,9 +1,17 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import BrandMark from '../components/BrandMark.vue'
 import PlatformHeader from '../components/PlatformHeader.vue'
+import AcademicAnalysisModules from '../components/academic/AcademicAnalysisModules.vue'
+import AcademicFactorCloud from '../components/academic/AcademicFactorCloud.vue'
+import AcademicHomeGuide from '../components/academic/AcademicHomeGuide.vue'
+import type { FactorCloudState, FactorKeyword } from '../utils/factorCloud'
+import { homeReveal } from '../directives/homeReveal'
+import AcademicFooter from '../components/academic/AcademicFooter.vue'
+import AcademicHeroWorkspace from '../components/academic/AcademicHeroWorkspace.vue'
+import AcademicIntroStage from '../components/academic/AcademicIntroStage.vue'
 import {
   AuthRequestError,
   fetchCaptcha,
@@ -17,6 +25,7 @@ import {
   type UserResponse,
 } from '../services/auth'
 import { HOME_OVERVIEW_API_ENABLED } from '../config/api'
+import { PLATFORM_OVERVIEW_METRICS } from '../data/platformOverview'
 import { fetchHomeOverview, HomeOverviewRequestError } from '../services/home'
 import { getUserErrorMessage } from '../services/errors'
 import { clearSession, getStoredSession, saveSession, updateStoredUser } from '../services/session'
@@ -26,7 +35,15 @@ type PendingAction = 'operator' | null
 type BiomarkerSortMode = 'frequency' | 'frequencyAsc' | 'name'
 type TargetGroupMode = 'all' | 'drug' | 'consumer'
 type ActionNoticeTone = 'success' | 'info' | 'warning'
-type HomeLoadState = 'disabled' | 'idle' | 'loading' | 'success' | 'empty' | 'error' | 'timeout' | 'unauthorized'
+type HomeLoadState =
+  | 'disabled'
+  | 'idle'
+  | 'loading'
+  | 'success'
+  | 'empty'
+  | 'error'
+  | 'timeout'
+  | 'unauthorized'
 
 interface RolePresentation {
   label: string
@@ -134,20 +151,6 @@ interface ActivityItem {
   detail: string
 }
 
-interface WordCloudItem {
-  name: string
-  value: number
-  category: string
-  tone: string
-  rows?: number
-  docs?: number
-  countries?: number
-  regions?: number
-  targetLabel?: string
-  subcategories?: string[]
-  aliases?: string[]
-}
-
 interface HomeData {
   metrics: HeroMetric[]
   trends: TrendItem[]
@@ -155,13 +158,8 @@ interface HomeData {
   categories: CategoryItem[]
   biomarkerFrequencies: BiomarkerFrequencyItem[]
   targetCategoryOptions?: TargetCategoryOption[]
-  keywords: WordCloudItem[]
+  keywords: FactorKeyword[]
   activity: ActivityItem[]
-}
-
-interface WordDetailDefaults {
-  subcategories: string[]
-  aliases: string[]
 }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -170,18 +168,18 @@ const TARGET_CATEGORY_ALL = 'all'
 const DETAIL_COLUMN_WIDTH = 56
 const DETAIL_COLUMN_MIN_WIDTH = 420
 const BIOMARKER_CHART_PALETTE = [
-  '#2f7078',
-  '#0f6591',
-  '#b7672c',
-  '#496b9f',
-  '#2f8f63',
-  '#0e8f77',
-  '#8a5b49',
-  '#657b89',
-  '#996923',
-  '#377f62',
-  '#245c99',
-  '#6f5fa8',
+  '#21669a',
+  '#2c8584',
+  '#52865f',
+  '#7d8e47',
+  '#b08036',
+  '#aa6252',
+  '#915e7c',
+  '#67649a',
+  '#477f9d',
+  '#627f72',
+  '#7f6e91',
+  '#526e82',
 ]
 const BIOMARKER_SORT_OPTIONS: { mode: BiomarkerSortMode; label: string }[] = [
   { mode: 'frequency', label: '高到低' },
@@ -190,31 +188,154 @@ const BIOMARKER_SORT_OPTIONS: { mode: BiomarkerSortMode; label: string }[] = [
 ]
 
 const mockHomeData: HomeData = {
-  metrics: [
-    { key: 'docs', label: '文献样本', value: '198', unit: '篇', detail: '覆盖 2004-2025 年 WBE 研究', trend: '年度持续扩展', tone: 'blue', source: 'DATA.metrics.docs' },
-    { key: 'coverage', label: '国家/地区', value: '45 / 259', unit: '', detail: '沉淀国家、地区与城市层级信息', trend: '跨区域对比可用', tone: 'green', source: 'DATA.metrics.coverage' },
-    { key: 'categories', label: '目标物质类别', value: '32', unit: '类', detail: '药物、消费品与暴露标志物', trend: '分类体系已归并', tone: 'amber', source: 'DATA.metrics.categories' },
-    { key: 'markers', label: '生物标记物', value: '601', unit: '项', detail: '含名称归并、细分类型与记录追踪', trend: '支持后续检索', tone: 'cyan', source: 'DATA.metrics.markers' },
-  ],
+  metrics: PLATFORM_OVERVIEW_METRICS.map((metric) => ({ ...metric })),
   trends: [
-    { label: '抗生素', value: 4488, width: 100, color: '#1f77b4', docs: 55, markers: 133, targetClass: '药物类' },
-    { label: '精神神经类药物', value: 3363, width: 75, color: '#496b9f', docs: 70, markers: 112, targetClass: '药物类' },
-    { label: '降压药/心血管用药', value: 1885, width: 42, color: '#0e8f77', docs: 46, markers: 70, targetClass: '药物类' },
-    { label: '烟草', value: 1799, width: 40, color: '#c67a19', docs: 64, markers: 20, targetClass: '消费品类' },
-    { label: '阿片类药物', value: 1799, width: 40, color: '#6f5fa8', docs: 38, markers: 33, targetClass: '药物类' },
-    { label: '平喘药/呼吸系统用药', value: 1291, width: 29, color: '#1291a8', docs: 19, markers: 13, targetClass: '药物类' },
-    { label: '抗过敏药', value: 1270, width: 28, color: '#7a8792', docs: 18, markers: 9, targetClass: '药物类' },
-    { label: '消炎镇痛药', value: 1263, width: 28, color: '#2f8f63', docs: 57, markers: 36, targetClass: '药物类' },
+    {
+      label: '抗生素',
+      value: 4488,
+      width: 100,
+      color: '#1f77b4',
+      docs: 55,
+      markers: 133,
+      targetClass: '药物类',
+    },
+    {
+      label: '精神神经类药物',
+      value: 3363,
+      width: 75,
+      color: '#496b9f',
+      docs: 70,
+      markers: 112,
+      targetClass: '药物类',
+    },
+    {
+      label: '降压药/心血管用药',
+      value: 1885,
+      width: 42,
+      color: '#0e8f77',
+      docs: 46,
+      markers: 70,
+      targetClass: '药物类',
+    },
+    {
+      label: '烟草',
+      value: 1799,
+      width: 40,
+      color: '#c67a19',
+      docs: 64,
+      markers: 20,
+      targetClass: '消费品类',
+    },
+    {
+      label: '阿片类药物',
+      value: 1799,
+      width: 40,
+      color: '#6f5fa8',
+      docs: 38,
+      markers: 33,
+      targetClass: '药物类',
+    },
+    {
+      label: '平喘药/呼吸系统用药',
+      value: 1291,
+      width: 29,
+      color: '#1291a8',
+      docs: 19,
+      markers: 13,
+      targetClass: '药物类',
+    },
+    {
+      label: '抗过敏药',
+      value: 1270,
+      width: 28,
+      color: '#7a8792',
+      docs: 18,
+      markers: 9,
+      targetClass: '药物类',
+    },
+    {
+      label: '消炎镇痛药',
+      value: 1263,
+      width: 28,
+      color: '#2f8f63',
+      docs: 57,
+      markers: 36,
+      targetClass: '药物类',
+    },
   ],
   factors: [
-    { name: '可替宁', docs: 54, rows: 1296, type: '烟草', countries: 23, regions: 148, tone: '#c67a19' },
-    { name: '磺胺甲噁唑', docs: 44, rows: 311, type: '抗生素', countries: 20, regions: 41, tone: '#1f77b4' },
-    { name: '乙基硫酸酯', docs: 43, rows: 614, type: '酒精', countries: 27, regions: 104, tone: '#c67a19' },
-    { name: '卡马西平', docs: 42, rows: 266, type: '精神神经类药物', countries: 21, regions: 41, tone: '#496b9f' },
-    { name: '对乙酰氨基酚', docs: 41, rows: 290, type: '消炎镇痛药', countries: 19, regions: 35, tone: '#2f8f63' },
-    { name: '甲氧苄啶', docs: 39, rows: 334, type: '抗生素', countries: 19, regions: 37, tone: '#0e8f77' },
-    { name: '环丙沙星', docs: 33, rows: 280, type: '抗生素', countries: 20, regions: 27, tone: '#8a5b49' },
-    { name: '阿替洛尔', docs: 33, rows: 205, type: '降压药/心血管用药', countries: 18, regions: 40, tone: '#7a8792' },
+    {
+      name: '可替宁',
+      docs: 54,
+      rows: 1296,
+      type: '烟草',
+      countries: 23,
+      regions: 148,
+      tone: '#c67a19',
+    },
+    {
+      name: '磺胺甲噁唑',
+      docs: 44,
+      rows: 311,
+      type: '抗生素',
+      countries: 20,
+      regions: 41,
+      tone: '#1f77b4',
+    },
+    {
+      name: '乙基硫酸酯',
+      docs: 43,
+      rows: 614,
+      type: '酒精',
+      countries: 27,
+      regions: 104,
+      tone: '#c67a19',
+    },
+    {
+      name: '卡马西平',
+      docs: 42,
+      rows: 266,
+      type: '精神神经类药物',
+      countries: 21,
+      regions: 41,
+      tone: '#496b9f',
+    },
+    {
+      name: '对乙酰氨基酚',
+      docs: 41,
+      rows: 290,
+      type: '消炎镇痛药',
+      countries: 19,
+      regions: 35,
+      tone: '#2f8f63',
+    },
+    {
+      name: '甲氧苄啶',
+      docs: 39,
+      rows: 334,
+      type: '抗生素',
+      countries: 19,
+      regions: 37,
+      tone: '#0e8f77',
+    },
+    {
+      name: '环丙沙星',
+      docs: 33,
+      rows: 280,
+      type: '抗生素',
+      countries: 20,
+      regions: 27,
+      tone: '#8a5b49',
+    },
+    {
+      name: '阿替洛尔',
+      docs: 33,
+      rows: 205,
+      type: '降压药/心血管用药',
+      countries: 18,
+      regions: 40,
+      tone: '#7a8792',
+    },
   ],
   biomarkerFrequencies: [
     {
@@ -423,81 +544,104 @@ const mockHomeData: HomeData = {
     },
   ],
   categories: [
-    { name: '抗生素', count: 4488, docs: 55, markers: 133, ratio: 100, tone: '#1f77b4', targetClass: '药物类', countries: 25, regions: 49, yearRange: '2004 ~ 2024' },
-    { name: '精神神经类药物', count: 3363, docs: 70, markers: 112, ratio: 75, tone: '#496b9f', targetClass: '药物类', countries: 28, regions: 85, yearRange: '2004 ~ 2024' },
-    { name: '降压药/心血管用药', count: 1885, docs: 46, markers: 70, ratio: 42, tone: '#0e8f77', targetClass: '药物类', countries: 21, regions: 79, yearRange: '2004 ~ 2024' },
-    { name: '烟草', count: 1799, docs: 64, markers: 20, ratio: 40, tone: '#c67a19', targetClass: '消费品类', countries: 30, regions: 176, yearRange: '2009 ~ 2025' },
-    { name: '阿片类药物', count: 1799, docs: 38, markers: 33, ratio: 40, tone: '#6f5fa8', targetClass: '药物类', countries: 19, regions: 72, yearRange: '2006 ~ 2024' },
-    { name: '平喘药/呼吸系统用药', count: 1291, docs: 19, markers: 13, ratio: 29, tone: '#1291a8', targetClass: '药物类', countries: 11, regions: 78, yearRange: '2004 ~ 2024' },
-    { name: '抗过敏药', count: 1270, docs: 18, markers: 9, ratio: 28, tone: '#8a5b49', targetClass: '药物类', countries: 13, regions: 48, yearRange: '2012 ~ 2024' },
-    { name: '消炎镇痛药', count: 1263, docs: 57, markers: 36, ratio: 28, tone: '#2f8f63', targetClass: '药物类', countries: 23, regions: 52, yearRange: '2004 ~ 2024' },
+    {
+      name: '抗生素',
+      count: 4488,
+      docs: 55,
+      markers: 133,
+      ratio: 100,
+      tone: '#1f77b4',
+      targetClass: '药物类',
+      countries: 25,
+      regions: 49,
+      yearRange: '2004 ~ 2024',
+    },
+    {
+      name: '精神神经类药物',
+      count: 3363,
+      docs: 70,
+      markers: 112,
+      ratio: 75,
+      tone: '#496b9f',
+      targetClass: '药物类',
+      countries: 28,
+      regions: 85,
+      yearRange: '2004 ~ 2024',
+    },
+    {
+      name: '降压药/心血管用药',
+      count: 1885,
+      docs: 46,
+      markers: 70,
+      ratio: 42,
+      tone: '#0e8f77',
+      targetClass: '药物类',
+      countries: 21,
+      regions: 79,
+      yearRange: '2004 ~ 2024',
+    },
+    {
+      name: '烟草',
+      count: 1799,
+      docs: 64,
+      markers: 20,
+      ratio: 40,
+      tone: '#c67a19',
+      targetClass: '消费品类',
+      countries: 30,
+      regions: 176,
+      yearRange: '2009 ~ 2025',
+    },
+    {
+      name: '阿片类药物',
+      count: 1799,
+      docs: 38,
+      markers: 33,
+      ratio: 40,
+      tone: '#6f5fa8',
+      targetClass: '药物类',
+      countries: 19,
+      regions: 72,
+      yearRange: '2006 ~ 2024',
+    },
+    {
+      name: '平喘药/呼吸系统用药',
+      count: 1291,
+      docs: 19,
+      markers: 13,
+      ratio: 29,
+      tone: '#1291a8',
+      targetClass: '药物类',
+      countries: 11,
+      regions: 78,
+      yearRange: '2004 ~ 2024',
+    },
+    {
+      name: '抗过敏药',
+      count: 1270,
+      docs: 18,
+      markers: 9,
+      ratio: 28,
+      tone: '#8a5b49',
+      targetClass: '药物类',
+      countries: 13,
+      regions: 48,
+      yearRange: '2012 ~ 2024',
+    },
+    {
+      name: '消炎镇痛药',
+      count: 1263,
+      docs: 57,
+      markers: 36,
+      ratio: 28,
+      tone: '#2f8f63',
+      targetClass: '药物类',
+      countries: 23,
+      regions: 52,
+      yearRange: '2004 ~ 2024',
+    },
   ],
-  keywords: [
-    { name: '可替宁', value: 54, rows: 1296, docs: 54, countries: 23, regions: 148, category: '烟草', tone: '#c67a19', targetLabel: '消费品类' },
-    { name: '磺胺甲噁唑', value: 44, rows: 311, docs: 44, countries: 20, regions: 41, category: '抗生素', tone: '#1f77b4', targetLabel: '药物类' },
-    { name: '乙基硫酸酯', value: 43, rows: 614, docs: 43, countries: 27, regions: 104, category: '酒精', tone: '#c67a19', targetLabel: '消费品类' },
-    { name: '卡马西平', value: 42, rows: 266, docs: 42, countries: 21, regions: 41, category: '精神神经类药物', tone: '#496b9f', targetLabel: '药物类' },
-    { name: '对乙酰氨基酚', value: 41, rows: 290, docs: 41, countries: 19, regions: 35, category: '消炎镇痛药', tone: '#2f8f63', targetLabel: '药物类' },
-    { name: '甲氧苄啶', value: 39, rows: 334, docs: 39, countries: 19, regions: 37, category: '抗生素', tone: '#0e8f77', targetLabel: '药物类' },
-    { name: '环丙沙星', value: 33, rows: 280, docs: 33, countries: 20, regions: 27, category: '抗生素', tone: '#8a5b49', targetLabel: '药物类' },
-    { name: '阿替洛尔', value: 33, rows: 205, docs: 33, countries: 18, regions: 40, category: '降压药/心血管用药', tone: '#7a8792', targetLabel: '药物类' },
-    { name: '咖啡因', value: 33, rows: 277, docs: 33, countries: 18, regions: 54, category: '咖啡因', tone: '#c67a19', targetLabel: '消费品类' },
-    { name: '萘普生', value: 31, rows: 211, docs: 31, countries: 15, regions: 28, category: '消炎镇痛药', tone: '#2f8f63', targetLabel: '药物类' },
-    { name: '克拉霉素', value: 29, rows: 227, docs: 29, countries: 16, regions: 28, category: '抗生素', tone: '#1f77b4', targetLabel: '药物类' },
-    { name: '文拉法辛', value: 29, rows: 243, docs: 29, countries: 17, regions: 46, category: '精神神经类药物', tone: '#496b9f', targetLabel: '药物类' },
-    { name: '双氯芬酸', value: 28, rows: 178, docs: 28, countries: 16, regions: 30, category: '消炎镇痛药', tone: '#2f8f63', targetLabel: '药物类' },
-    { name: '布洛芬', value: 28, rows: 171, docs: 28, countries: 15, regions: 26, category: '消炎镇痛药', tone: '#2f8f63', targetLabel: '药物类' },
-    { name: '西酞普兰', value: 26, rows: 281, docs: 26, countries: 16, regions: 46, category: '精神神经类药物', tone: '#496b9f', targetLabel: '药物类' },
-    { name: '美托洛尔', value: 25, rows: 146, docs: 25, countries: 16, regions: 30, category: '降压药/心血管用药', tone: '#7a8792', targetLabel: '药物类' },
-    { name: '可待因', value: 25, rows: 780, docs: 25, countries: 14, regions: 33, category: '阿片类药物', tone: '#0e8f77', targetLabel: '药物类' },
-    { name: '曲马多', value: 24, rows: 284, docs: 24, countries: 16, regions: 43, category: '阿片类药物', tone: '#0e8f77', targetLabel: '药物类' },
-    { name: '氧氟沙星', value: 22, rows: 218, docs: 22, countries: 14, regions: 18, category: '抗生素', tone: '#8a5b49', targetLabel: '药物类' },
-    { name: '红霉素', value: 21, rows: 185, docs: 21, countries: 12, regions: 26, category: '抗生素', tone: '#1f77b4', targetLabel: '药物类' },
-    { name: '酮洛芬', value: 21, rows: 125, docs: 21, countries: 13, regions: 13, category: '消炎镇痛药', tone: '#2f8f63', targetLabel: '药物类' },
-    { name: '加巴喷丁', value: 20, rows: 106, docs: 20, countries: 11, regions: 15, category: '精神神经类药物', tone: '#496b9f', targetLabel: '药物类' },
-    { name: '诺氟沙星', value: 19, rows: 171, docs: 19, countries: 15, regions: 18, category: '抗生素', tone: '#8a5b49', targetLabel: '药物类' },
-    { name: '奥沙西泮', value: 18, rows: 182, docs: 18, countries: 13, regions: 24, category: '精神神经类药物', tone: '#6f5fa8', targetLabel: '药物类' },
-    { name: '普萘洛尔', value: 17, rows: 109, docs: 17, countries: 10, regions: 23, category: '降压药/心血管用药', tone: '#7a8792', targetLabel: '药物类' },
-    { name: '厄贝沙坦', value: 17, rows: 89, docs: 17, countries: 11, regions: 21, category: '降压药/心血管用药', tone: '#6f5fa8', targetLabel: '药物类' },
-    { name: '阿奇霉素', value: 15, rows: 106, docs: 15, countries: 9, regions: 19, category: '抗生素', tone: '#1f77b4', targetLabel: '药物类' },
-    { name: '磺胺吡啶', value: 15, rows: 135, docs: 15, countries: 9, regions: 17, category: '抗生素', tone: '#1f77b4', targetLabel: '药物类' },
-    { name: '二甲双胍', value: 15, rows: 669, docs: 15, countries: 9, regions: 70, category: '抗糖尿病药', tone: '#6f5fa8', targetLabel: '药物类' },
-    { name: '氟西汀', value: 15, rows: 128, docs: 15, countries: 10, regions: 14, category: '精神神经类药物', tone: '#496b9f', targetLabel: '药物类' },
-    { name: '缬沙坦', value: 15, rows: 69, docs: 15, countries: 10, regions: 19, category: '降压药/心血管用药', tone: '#6f5fa8', targetLabel: '药物类' },
-    { name: '安赛蜜', value: 15, rows: 262, docs: 15, countries: 8, regions: 18, category: '人工甜味剂', tone: '#0e8f77', targetLabel: '暴露/生活方式标志物' },
-    { name: '罗红霉素', value: 14, rows: 81, docs: 14, countries: 6, regions: 17, category: '抗生素', tone: '#1f77b4', targetLabel: '药物类' },
-    { name: '磺胺嘧啶', value: 14, rows: 98, docs: 14, countries: 10, regions: 20, category: '抗生素', tone: '#1f77b4', targetLabel: '药物类' },
-    { name: '氢氯噻嗪', value: 14, rows: 144, docs: 14, countries: 8, regions: 34, category: '降压药/心血管用药', tone: '#7a8792', targetLabel: '药物类' },
-    { name: '苯扎贝特', value: 14, rows: 66, docs: 14, countries: 9, regions: 26, category: '降血脂药', tone: '#8a5b49', targetLabel: '药物类' },
-    { name: '阿米替林', value: 14, rows: 116, docs: 14, countries: 8, regions: 21, category: '精神神经类药物', tone: '#496b9f', targetLabel: '药物类' },
-    { name: '尼古丁', value: 14, rows: 82, docs: 14, countries: 9, regions: 9, category: '烟草', tone: '#c67a19', targetLabel: '消费品类' },
-    { name: '克林霉素', value: 13, rows: 135, docs: 13, countries: 10, regions: 19, category: '抗生素', tone: '#8a5b49', targetLabel: '药物类' },
-    { name: "反式-3'-羟基可替宁", value: 13, rows: 205, docs: 13, countries: 12, regions: 42, category: '烟草', tone: '#c67a19', targetLabel: '消费品类' },
-    { name: '地尔硫卓', value: 12, rows: 75, docs: 12, countries: 8, regions: 17, category: '降压药/心血管用药', tone: '#6f5fa8', targetLabel: '药物类' },
-    { name: '利多卡因', value: 12, rows: 49, docs: 12, countries: 9, regions: 8, category: '麻醉药', tone: '#0e8f77', targetLabel: '药物类' },
-    { name: '非索非那定', value: 12, rows: 490, docs: 12, countries: 11, regions: 43, category: '抗过敏药', tone: '#8a5b49', targetLabel: '药物类' },
-    { name: '沙丁胺醇', value: 11, rows: 570, docs: 11, countries: 7, regions: 65, category: '平喘药/呼吸系统用药', tone: '#6f5fa8', targetLabel: '药物类' },
-    { name: '比索洛尔', value: 11, rows: 63, docs: 11, countries: 8, regions: 15, category: '降压药/心血管用药', tone: '#7a8792', targetLabel: '药物类' },
-    { name: '呋塞米', value: 11, rows: 67, docs: 11, countries: 7, regions: 12, category: '降压药/心血管用药', tone: '#8a5b49', targetLabel: '药物类' },
-    { name: '水杨酸', value: 11, rows: 47, docs: 11, countries: 7, regions: 14, category: '消炎镇痛药', tone: '#2f8f63', targetLabel: '药物类' },
-    { name: '吗啡', value: 11, rows: 57, docs: 11, countries: 9, regions: 15, category: '阿片类药物', tone: '#0e8f77', targetLabel: '药物类' },
-    { name: '四环素', value: 10, rows: 137, docs: 10, countries: 9, regions: 8, category: '抗生素', tone: '#8a5b49', targetLabel: '药物类' },
-    { name: '米氮平', value: 10, rows: 137, docs: 10, countries: 9, regions: 21, category: '精神神经类药物', tone: '#496b9f', targetLabel: '药物类' },
-    { name: '索他洛尔', value: 10, rows: 71, docs: 10, countries: 7, regions: 15, category: '降压药/心血管用药', tone: '#7a8792', targetLabel: '药物类' },
-    { name: '替米沙坦', value: 10, rows: 77, docs: 10, countries: 8, regions: 13, category: '降压药/心血管用药', tone: '#6f5fa8', targetLabel: '药物类' },
-    { name: '西替利嗪', value: 10, rows: 461, docs: 10, countries: 9, regions: 41, category: '抗过敏药', tone: '#8a5b49', targetLabel: '药物类' },
-    { name: '雷尼替丁', value: 10, rows: 71, docs: 10, countries: 7, regions: 6, category: '抗消化性溃疡药', tone: '#7a8792', targetLabel: '药物类' },
-    { name: '美沙酮', value: 10, rows: 99, docs: 10, countries: 7, regions: 31, category: '阿片类药物', tone: '#6f5fa8', targetLabel: '药物类' },
-    { name: '氯霉素', value: 9, rows: 30, docs: 9, countries: 4, regions: 8, category: '抗生素', tone: '#6f5fa8', targetLabel: '药物类' },
-    { name: '劳拉西泮', value: 9, rows: 38, docs: 9, countries: 5, regions: 7, category: '精神神经类药物', tone: '#6f5fa8', targetLabel: '药物类' },
-    { name: '舍曲林', value: 9, rows: 99, docs: 9, countries: 8, regions: 10, category: '精神神经类药物', tone: '#496b9f', targetLabel: '药物类' },
-    { name: 'O-去甲基文拉法辛', value: 9, rows: 57, docs: 9, countries: 6, regions: 9, category: '精神神经类药物', tone: '#496b9f', targetLabel: '药物类' },
-    { name: '吉非贝齐', value: 9, rows: 24, docs: 9, countries: 6, regions: 7, category: '降血脂药', tone: '#8a5b49', targetLabel: '药物类' },
-    { name: '吲哚美辛', value: 9, rows: 28, docs: 9, countries: 7, regions: 6, category: '消炎镇痛药', tone: '#2f8f63', targetLabel: '药物类' },
-    { name: '1,7-二甲基黄嘌呤（副黄嘌呤）', value: 9, rows: 44, docs: 9, countries: 7, regions: 11, category: '咖啡因', tone: '#c67a19', targetLabel: '消费品类' },
-    { name: 'Azithromycin', value: 9, rows: 30, docs: 9, countries: 7, regions: 9, category: '抗生素', tone: '#1f77b4', targetLabel: '药物类' },
-    { name: '阿托伐他汀', value: 9, rows: 82, docs: 9, countries: 7, regions: 15, category: '降血脂药', tone: '#6f5fa8', targetLabel: '药物类' },
-  ],
+  keywords: [],
   activity: [
     {
       date: '2026 Q2',
@@ -513,6 +657,11 @@ const mockHomeData: HomeData = {
 }
 
 const homeData = ref<HomeData>(mockHomeData)
+const homeGuideOpen = ref(false)
+const homeHeader = ref<InstanceType<typeof PlatformHeader> | null>(null)
+const homeGuide = ref<InstanceType<typeof AcademicHomeGuide> | null>(null)
+const authCard = ref<HTMLElement | null>(null)
+const authPrimaryInput = ref<HTMLInputElement | null>(null)
 const isAuthOpen = ref(false)
 const isAuthenticated = ref(false)
 const currentUser = ref('')
@@ -531,14 +680,14 @@ const selectedFileName = ref('')
 const uploadNotice = ref('')
 const currentOverviewIndex = ref(0)
 const isOverviewPaused = ref(false)
-const activeKeyword = ref<string | null>(null)
 const selectedBiomarkerName = ref('')
 const selectedTargetCategory = ref(TARGET_CATEGORY_ALL)
 const selectedSubclassName = ref('')
 const biomarkerSortMode = ref<BiomarkerSortMode>('frequency')
-const selectedWord = ref<WordCloudItem | null>(null)
-const wordPopoverStyle = ref<Record<string, string>>({})
 const homeLoadState = ref<HomeLoadState>(HOME_OVERVIEW_API_ENABLED ? 'idle' : 'disabled')
+const factorCloudState = ref<FactorCloudState>(
+  HOME_OVERVIEW_API_ENABLED ? 'loading' : 'incompatible',
+)
 const homeLoadMessage = ref(
   HOME_OVERVIEW_API_ENABLED ? '' : '开发模式未启用首页接口，当前展示内置基准数据。',
 )
@@ -577,11 +726,16 @@ const uploadForm = reactive({
 })
 const router = useRouter()
 const route = useRoute()
+const vHomeReveal = homeReveal
+
+const isAcademicHome = computed(() => true)
 
 let codeTimer: number | undefined
 let overviewTimer: number | undefined
 let actionNoticeTimer: number | undefined
 let homeRequestSequence = 0
+let pendingRouteHashAlignment = ''
+let authReturnFocus: HTMLElement | null = null
 
 const isLogin = computed(() => mode.value === 'login')
 const isRegister = computed(() => mode.value === 'register')
@@ -607,18 +761,16 @@ const currentUserCapabilities = computed(() => {
   return capabilities.length ? capabilities : ['开放检索']
 })
 const showHomeLoadFeedback = computed(() => homeLoadState.value !== 'success')
-const canRetryHomeData = computed(() =>
-  ['empty', 'error', 'timeout'].includes(homeLoadState.value),
-)
+const canRetryHomeData = computed(() => ['empty', 'error', 'timeout'].includes(homeLoadState.value))
 const needsCode = computed(() => isRegister.value || isReset.value)
 const pageTitle = computed(() => {
   if (isRegister.value) return '注册账号'
   if (isReset.value) return '重置密码'
-  return '登录平台'
+  return '登录 WBE 数据平台'
 })
 const authLead = computed(() => {
-  if (pendingAction.value === 'operator') return '登录后可进入数据上传与批量校验。'
-  return '用于账号权限、字段维护和数据版本发布。'
+  if (pendingAction.value === 'operator') return '登录后可进入数据工作台，继续上传和校验数据。'
+  return '登录后可按账号权限使用数据下载与维护功能。'
 })
 const submitText = computed(() => {
   if (isRegister.value) return '创建账号'
@@ -635,75 +787,6 @@ const defaultMetric: HeroMetric = {
   tone: 'blue',
   source: 'DATA.metrics.docs',
 }
-const WORD_DETAIL_DEFAULTS: Record<string, WordDetailDefaults> = {
-  '可替宁': { subcategories: ['尼古丁及代谢物'], aliases: ['cotinine（可替宁）'] },
-  '磺胺甲噁唑': { subcategories: ['磺胺类'], aliases: ['磺胺甲恶唑'] },
-  '乙基硫酸酯': { subcategories: ['酒精消费标志物'], aliases: [] },
-  '卡马西平': { subcategories: ['抗癫痫/神经痛用药'], aliases: [] },
-  '对乙酰氨基酚': { subcategories: ['非甾体抗炎药'], aliases: [] },
-  '甲氧苄啶': { subcategories: ['二氨基嘧啶类'], aliases: [] },
-  '环丙沙星': { subcategories: ['喹诺酮类'], aliases: [] },
-  '阿替洛尔': { subcategories: ['β受体阻滞剂'], aliases: [] },
-  '咖啡因': { subcategories: ['咖啡因及代谢物'], aliases: [] },
-  '萘普生': { subcategories: ['非甾体抗炎药'], aliases: [] },
-  '克拉霉素': { subcategories: ['大环内酯类'], aliases: [] },
-  '文拉法辛': { subcategories: ['抗抑郁药'], aliases: [] },
-  '双氯芬酸': { subcategories: ['非甾体抗炎药'], aliases: [] },
-  '布洛芬': { subcategories: ['非甾体抗炎药'], aliases: [] },
-  '西酞普兰': { subcategories: ['抗抑郁药'], aliases: [] },
-  '美托洛尔': { subcategories: ['β受体阻滞剂'], aliases: [] },
-  '可待因': { subcategories: ['阿片类镇痛药'], aliases: [] },
-  '曲马多': { subcategories: ['阿片类镇痛药'], aliases: [] },
-  '氧氟沙星': { subcategories: ['喹诺酮类'], aliases: [] },
-  '红霉素': { subcategories: ['大环内酯类'], aliases: [] },
-  '酮洛芬': { subcategories: ['非甾体抗炎药'], aliases: [] },
-  '加巴喷丁': { subcategories: ['抗癫痫/神经痛用药'], aliases: [] },
-  '诺氟沙星': { subcategories: ['喹诺酮类'], aliases: [] },
-  '奥沙西泮': { subcategories: ['镇静催眠/抗焦虑药'], aliases: [] },
-  '普萘洛尔': { subcategories: ['β受体阻滞剂'], aliases: [] },
-  '厄贝沙坦': { subcategories: ['血管紧张素II受体阻滞剂'], aliases: [] },
-  '阿奇霉素': { subcategories: ['大环内酯类'], aliases: [] },
-  '磺胺吡啶': { subcategories: ['磺胺类'], aliases: [] },
-  '二甲双胍': { subcategories: ['双胍类'], aliases: [] },
-  '氟西汀': { subcategories: ['抗抑郁药'], aliases: [] },
-  '缬沙坦': { subcategories: ['血管紧张素II受体阻滞剂'], aliases: [] },
-  '安赛蜜': { subcategories: ['人工甜味剂'], aliases: [] },
-  '罗红霉素': { subcategories: ['大环内酯类'], aliases: [] },
-  '磺胺嘧啶': { subcategories: ['磺胺类'], aliases: [] },
-  '氢氯噻嗪': { subcategories: ['利尿剂'], aliases: [] },
-  '苯扎贝特': { subcategories: ['调脂药'], aliases: [] },
-  '阿米替林': { subcategories: ['抗抑郁药'], aliases: [] },
-  '尼古丁': { subcategories: ['尼古丁及代谢物'], aliases: [] },
-  '克林霉素': { subcategories: ['林可酰胺类'], aliases: [] },
-  "反式-3'-羟基可替宁": {
-    subcategories: ['尼古丁及代谢物'],
-    aliases: ["trans-3'-hydroxycotinine（反式-3'-羟基可替宁）"],
-  },
-  '地尔硫卓': { subcategories: ['钙通道阻滞剂'], aliases: [] },
-  '利多卡因': { subcategories: ['酰胺类局部麻醉药'], aliases: [] },
-  '非索非那定': { subcategories: ['抗组胺药'], aliases: [] },
-  '沙丁胺醇': { subcategories: ['β受体激动剂'], aliases: [] },
-  '比索洛尔': { subcategories: ['β受体阻滞剂'], aliases: [] },
-  '呋塞米': { subcategories: ['利尿剂'], aliases: [] },
-  '水杨酸': { subcategories: ['非甾体抗炎药'], aliases: [] },
-  '吗啡': { subcategories: ['阿片类镇痛药'], aliases: [] },
-  '四环素': { subcategories: ['四环素类'], aliases: [] },
-  '米氮平': { subcategories: ['抗抑郁药'], aliases: [] },
-  '索他洛尔': { subcategories: ['β受体阻滞剂'], aliases: [] },
-  '替米沙坦': { subcategories: ['血管紧张素II受体阻滞剂'], aliases: [] },
-  '西替利嗪': { subcategories: ['抗组胺药'], aliases: [] },
-  '雷尼替丁': { subcategories: ['H2受体拮抗剂'], aliases: [] },
-  '美沙酮': { subcategories: ['阿片维持治疗药物'], aliases: [] },
-  '氯霉素': { subcategories: ['酰胺醇类'], aliases: [] },
-  '劳拉西泮': { subcategories: ['镇静催眠/抗焦虑药'], aliases: [] },
-  '舍曲林': { subcategories: ['抗抑郁药'], aliases: [] },
-  'O-去甲基文拉法辛': { subcategories: ['抗抑郁药'], aliases: [] },
-  '吉非贝齐': { subcategories: ['调脂药'], aliases: [] },
-  '吲哚美辛': { subcategories: ['非甾体抗炎药'], aliases: [] },
-  '1,7-二甲基黄嘌呤（副黄嘌呤）': { subcategories: ['咖啡因及代谢物'], aliases: [] },
-  Azithromycin: { subcategories: ['大环内酯类'], aliases: [] },
-  '阿托伐他汀': { subcategories: ['他汀类调脂药'], aliases: [] },
-}
 const codeScene = computed(() => (isReset.value ? 'reset-password' : 'register'))
 const activeCodeEmail = computed(() => (isReset.value ? resetForm.email : registerForm.email))
 const canSendCode = computed(
@@ -714,30 +797,35 @@ const canSendCode = computed(
     !isSendingCode.value,
 )
 const activeMetric = computed<HeroMetric>(
-  () => homeData.value.metrics[currentOverviewIndex.value] ?? homeData.value.metrics[0] ?? defaultMetric,
+  () =>
+    homeData.value.metrics[currentOverviewIndex.value] ??
+    homeData.value.metrics[0] ??
+    defaultMetric,
 )
 const overviewFocusCopy = computed(() => {
   const metric = activeMetric.value
   const valueText = `${metric.value}${metric.unit}`
 
   if (metric.key === 'docs') {
-    return `${valueText}文献构成证据底座，可继续追踪 DOI、年份和研究来源。`
+    return `${valueText}文献构成证据底座，可继续核对 DOI、研究年份与来源。`
   }
   if (metric.key === 'coverage') {
-    return `${valueText}空间索引用于连接国家、地区与城市层级记录。`
+    return `${valueText}空间索引连接国家、地区与城市层级记录，支持跨尺度比较。`
   }
   if (metric.key === 'categories') {
-    return `${valueText}目标物质分类已归并，可向下钻取类别与 biomarker 明细。`
+    return `${valueText}目标物质已完成分类归并，可继续查看类别、子类与标记物证据。`
   }
   if (metric.key === 'markers') {
-    return `${valueText}标记物条目可连接类别、文献和地区覆盖信息。`
+    return `${valueText}标记物条目连接类别、文献与空间覆盖信息，可回溯至原始证据。`
   }
 
   return `${metric.label}作为当前概览指标，用于定位数据库的主要覆盖面。`
 })
 const categoryFrequencyFallback = computed<BiomarkerFrequencyItem[]>(() => {
-  const categories = homeData.value.categories?.length ? homeData.value.categories : mockHomeData.categories
-  const keywords = homeData.value.keywords?.length ? homeData.value.keywords : mockHomeData.keywords
+  const categories = homeData.value.categories?.length
+    ? homeData.value.categories
+    : mockHomeData.categories
+  const keywords = homeData.value.keywords
 
   return categories.map((category, index) => {
     const categoryDocs = normalizeCount(category.docs)
@@ -789,13 +877,13 @@ const targetCategoryOptions = computed<TargetCategoryOption[]>(() => {
 const selectedTargetCategoryOption = computed(
   () =>
     targetCategoryOptions.value.find((option) => option.value === selectedTargetCategory.value) ??
-    targetCategoryOptions.value[0] ??
-    { value: TARGET_CATEGORY_ALL, name: '全部' },
+    targetCategoryOptions.value[0] ?? { value: TARGET_CATEGORY_ALL, name: '全部' },
 )
 const rawBiomarkerFrequencies = computed<BiomarkerFrequencyItem[]>(() => {
   const fallback = categoryFrequencyFallback.value
   const supplied = homeData.value.biomarkerFrequencies ?? []
-  const source = supplied.length && hasCategoryFrequencySource(supplied, fallback) ? supplied : fallback
+  const source =
+    supplied.length && hasCategoryFrequencySource(supplied, fallback) ? supplied : fallback
 
   const normalizedItems = source
     .map((item, index) => {
@@ -822,7 +910,7 @@ const rawBiomarkerFrequencies = computed<BiomarkerFrequencyItem[]>(() => {
         frequency,
         docs: frequency,
         rows: normalizeCount(item.rows),
-        tone: item.tone ?? BIOMARKER_CHART_PALETTE[index % BIOMARKER_CHART_PALETTE.length],
+        tone: BIOMARKER_CHART_PALETTE[index % BIOMARKER_CHART_PALETTE.length],
         trend,
         subclassOptions,
       }
@@ -858,7 +946,9 @@ const biomarkerFrequencyItems = computed(() =>
     barWidth: `${Math.max((item.frequency / biomarkerFrequencyAxisTop.value) * 100, 3)}%`,
   })),
 )
-const biomarkerFrequencyAxisTicks = computed(() => [...buildAxisTicks(biomarkerFrequencyAxisTop.value)].reverse())
+const biomarkerFrequencyAxisTicks = computed(() =>
+  [...buildAxisTicks(biomarkerFrequencyAxisTop.value)].reverse(),
+)
 const selectedBiomarker = computed(
   () =>
     biomarkerFrequencyItems.value.find((item) => item.name === selectedBiomarkerName.value) ??
@@ -941,7 +1031,7 @@ const visualEntryItems = computed(() => [
   {
     icon: 'map',
     title: '空间分布查询',
-    value: coverageText(),
+    value: '国家 · 地区 · 城市',
     detail: '按空间层级查看 PNDL 分布',
     target: 'map-visualization',
     route: '/map-visualization',
@@ -949,7 +1039,7 @@ const visualEntryItems = computed(() => [
   {
     icon: 'sankey',
     title: '疾病关联分析',
-    value: '10 类',
+    value: 'ICD-11 五层关系',
     detail: '基于 ICD-11 分析疾病、药物与生物标记物的关联路径',
     target: 'icd11-sankey',
     route: '/icd11-sankey',
@@ -957,65 +1047,12 @@ const visualEntryItems = computed(() => [
   {
     icon: 'priority',
     title: '标记物优先级评估',
-    value: '516 项',
+    value: '证据评分 · 证据缺口',
     detail: '依据证据评分识别核心标记物及证据短板',
     target: 'core-marker-priority',
     route: '/core-marker-priority',
   },
-  {
-    icon: 'method',
-    title: '采样与分析方法核验',
-    value: '12 种方法',
-    detail: '核查处方属性、采样路径与分析方法覆盖',
-    target: 'methodology-verification',
-    route: '/methodology-verification',
-  },
 ])
-const wordCloudItems = computed(() => {
-  const keywords = homeData.value.keywords
-    .map((item) => enrichWordItem(item))
-    .sort((a, b) => stableHash(a.name) - stableHash(b.name))
-  const values = keywords.map((item) => item.value)
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const spread = Math.max(max - min, 1)
-
-  return keywords.map((item, index) => ({
-    ...item,
-    size: 14 + ((item.value - min) / spread) * 20,
-    delay: `${(index % 7) * -0.5}s`,
-  }))
-})
-const wordCloudRows = computed(() => {
-  const rows: [typeof wordCloudItems.value, typeof wordCloudItems.value, typeof wordCloudItems.value] = [
-    [],
-    [],
-    [],
-  ]
-  wordCloudItems.value.forEach((item, index) => {
-    const rowIndex = index % rows.length
-    if (rowIndex === 0) rows[0].push(item)
-    else if (rowIndex === 1) rows[1].push(item)
-    else rows[2].push(item)
-  })
-
-  return rows.map((items, index) => ({
-    key: `word-row-${index}`,
-    duration: `${155 + index * 30}s`,
-    reverse: index % 2 === 1,
-    items: [...items, ...items],
-  }))
-})
-const activeWord = computed(() =>
-  activeKeyword.value
-    ? wordCloudItems.value.find((item) => item.name === activeKeyword.value)
-    : null,
-)
-function coverageText() {
-  const coverage = homeData.value.metrics.find((item) => item.key === 'coverage')?.value ?? '45 / 259'
-  return coverage.replace(/\s*\/\s*/g, '·')
-}
-
 function normalizeCount(value?: number) {
   const count = Number(value)
   return Number.isFinite(count) && count > 0 ? Math.round(count) : 0
@@ -1031,8 +1068,9 @@ function hasCategoryFrequencySource(
 ) {
   const categoryNames = new Set(categoryItems.map((item) => item.name))
 
-  return items.some((item) => categoryNames.has(item.name)) || items.some((item) =>
-    item.trend?.some((point) => !isYearBucket(point.period)),
+  return (
+    items.some((item) => categoryNames.has(item.name)) ||
+    items.some((item) => item.trend?.some((point) => !isYearBucket(point.period)))
   )
 }
 
@@ -1073,37 +1111,8 @@ function buildAxisTicks(axisTop: number) {
   return [top, Math.round(top * 0.75), Math.round(top * 0.5), Math.round(top * 0.25), 0]
 }
 
-function stableHash(text: string) {
-  let hash = 0
-  for (const char of text) {
-    hash = (hash * 31 + char.charCodeAt(0)) % 9973
-  }
-  return hash
-}
-
-function enrichWordItem(item: WordCloudItem): WordCloudItem {
-  const defaults = WORD_DETAIL_DEFAULTS[item.name]
-  return {
-    ...item,
-    subcategories: item.subcategories?.length ? item.subcategories : defaults?.subcategories ?? [],
-    aliases: item.aliases?.length ? item.aliases : defaults?.aliases ?? [],
-  }
-}
-
 function formatNumber(value?: number) {
   return new Intl.NumberFormat('zh-CN').format(value ?? 0)
-}
-
-function uniqueTags(values: Array<string | undefined>) {
-  return Array.from(new Set(values.filter(Boolean))) as string[]
-}
-
-function detailTags(values?: string[]) {
-  return values?.length ? values : ['暂无']
-}
-
-function belongingTags(word: WordCloudItem) {
-  return uniqueTags([word.targetLabel ?? '其他', word.category])
 }
 
 async function loadHomeData() {
@@ -1111,6 +1120,7 @@ async function loadHomeData() {
 
   const requestSequence = ++homeRequestSequence
   homeLoadState.value = 'loading'
+  factorCloudState.value = 'loading'
   homeLoadMessage.value = '正在读取最新首页统计…'
 
   try {
@@ -1121,6 +1131,10 @@ async function loadHomeData() {
 
     const hasOverviewData =
       Array.isArray(result.biomarkerFrequencies) && result.biomarkerFrequencies.length > 0
+
+    const hasKeywordsField = Object.prototype.hasOwnProperty.call(result, 'keywords')
+    const hasCompatibleKeywords = hasKeywordsField && Array.isArray(result.keywords)
+    const keywords = hasCompatibleKeywords ? result.keywords! : []
 
     homeData.value = {
       metrics: result.metrics?.length ? result.metrics : mockHomeData.metrics,
@@ -1133,10 +1147,15 @@ async function loadHomeData() {
       targetCategoryOptions: result.targetCategoryOptions?.length
         ? result.targetCategoryOptions
         : (homeData.value.targetCategoryOptions ?? mockHomeData.targetCategoryOptions),
-      keywords: result.keywords?.length ? result.keywords : mockHomeData.keywords,
+      keywords,
       activity: result.activity?.length ? result.activity : mockHomeData.activity,
     }
     homeLoadState.value = hasOverviewData ? 'success' : 'empty'
+    factorCloudState.value = !hasCompatibleKeywords
+      ? 'incompatible'
+      : keywords.length
+        ? 'ready'
+        : 'empty'
     homeLoadMessage.value = hasOverviewData
       ? ''
       : '首页接口暂时没有可展示的统计数据，当前保留内置基准数据。'
@@ -1161,11 +1180,19 @@ async function loadHomeData() {
       const nextState: HomeLoadState =
         error.kind === 'timeout' || error.kind === 'unauthorized' ? error.kind : 'error'
       homeLoadState.value = nextState
+      factorCloudState.value = 'error'
       homeLoadMessage.value = `${error.message} 当前保留内置基准数据。`
       return
     }
     homeLoadState.value = 'error'
+    factorCloudState.value = 'error'
     homeLoadMessage.value = '首页数据加载失败，当前保留内置基准数据。'
+  } finally {
+    if (requestSequence === homeRequestSequence && pendingRouteHashAlignment) {
+      const pendingHash = pendingRouteHashAlignment
+      pendingRouteHashAlignment = ''
+      scrollToRouteHash(pendingHash, false)
+    }
   }
 }
 
@@ -1181,14 +1208,6 @@ function focusOverview(index: number) {
 
 function releaseOverview() {
   isOverviewPaused.value = false
-}
-
-function focusKeyword(name: string) {
-  activeKeyword.value = name
-}
-
-function releaseKeyword() {
-  activeKeyword.value = selectedWord.value?.name ?? null
 }
 
 function selectBiomarker(name: string) {
@@ -1207,30 +1226,6 @@ function selectTargetCategory(event: Event) {
 
 function selectSubclass(event: Event) {
   selectedSubclassName.value = (event.target as HTMLSelectElement).value
-}
-
-function openWordPopover(item: WordCloudItem, event: MouseEvent) {
-  selectedWord.value = enrichWordItem(item)
-  activeKeyword.value = item.name
-
-  const width = Math.min(380, window.innerWidth - 40)
-  const height = 430
-  const margin = 14
-  let left = event.clientX + 16
-  let top = event.clientY + 16
-
-  if (left + width > window.innerWidth - margin) left = event.clientX - width - 16
-  if (top + height > window.innerHeight - margin) top = event.clientY - height - 16
-
-  wordPopoverStyle.value = {
-    left: `${Math.max(margin, left)}px`,
-    top: `${Math.max(margin, top)}px`,
-  }
-}
-
-function closeWordPopover() {
-  selectedWord.value = null
-  activeKeyword.value = null
 }
 
 function setMode(nextMode: AuthMode) {
@@ -1273,6 +1268,41 @@ function isCaptchaRequiredError(error: unknown) {
   )
 }
 
+function focusAuthPrimaryInput() {
+  void nextTick(() => authPrimaryInput.value?.focus({ preventScroll: true }))
+}
+
+function restoreAuthFocus() {
+  if (authReturnFocus?.isConnected) authReturnFocus.focus({ preventScroll: true })
+  authReturnFocus = null
+}
+
+function handleAuthKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeAuth()
+    return
+  }
+  if (event.key !== 'Tab' || !authCard.value) return
+
+  const focusable = [
+    ...authCard.value.querySelectorAll<HTMLElement>('button, input, [tabindex="0"]'),
+  ].filter(
+    (element) =>
+      !element.hasAttribute('disabled') && element.getAttribute('aria-hidden') !== 'true',
+  )
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (!first || !last) return
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
 function openAuth(action: PendingAction = null) {
   pendingAction.value = action
   loginComplete.value = false
@@ -1285,7 +1315,10 @@ function openAuth(action: PendingAction = null) {
     return
   }
 
+  authReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  homeGuide.value?.pause()
   isAuthOpen.value = true
+  focusAuthPrimaryInput()
 }
 
 function closeAuth() {
@@ -1302,11 +1335,7 @@ function dismissActionNotice() {
   }
 }
 
-function showActionNotice(
-  title: string,
-  detail: string,
-  tone: ActionNoticeTone = 'success',
-) {
+function showActionNotice(title: string, detail: string, tone: ActionNoticeTone = 'success') {
   dismissActionNotice()
   actionNoticeTitle.value = title
   actionNotice.value = detail
@@ -1318,9 +1347,9 @@ async function handleLogout() {
   const token = getStoredSession()?.token
   try {
     if (token) await requestLogout(token)
-    showActionNotice('已安全退出', '当前账号的本地登录状态已清除。', 'info')
+    showActionNotice('已退出登录', '已清除当前设备上的登录状态。', 'info')
   } catch {
-    showActionNotice('本地状态已清除', '服务端会话可能已经过期，无需重复退出。', 'warning')
+    showActionNotice('已退出本地登录', '服务端会话已失效或暂不可用。', 'warning')
   } finally {
     clearSession()
     isAuthenticated.value = false
@@ -1341,8 +1370,8 @@ async function handleLogout() {
 function returnToPrevious() {
   isAuthOpen.value = false
   showActionNotice(
-    `欢迎回来，${currentUser.value}`,
-    `已按“${currentRolePresentation.value.label}”身份恢复访问权限。`,
+    '登录成功',
+    `${currentUser.value}，当前身份为${currentRolePresentation.value.label}。`,
   )
   pendingAction.value = null
 }
@@ -1359,7 +1388,20 @@ function runProtectedAction(_action: Exclude<PendingAction, null>) {
 }
 
 function scrollToSection(id: string) {
-  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  const target = document.getElementById(id)
+  if (!target) return
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const top = target.getBoundingClientRect().top + window.scrollY - 120
+  window.scrollTo({ top: Math.max(0, top), behavior: reduceMotion ? 'auto' : 'smooth' })
+}
+
+function scrollToRouteHash(hash: string, trackDataShift = true) {
+  const id = decodeURIComponent(hash.replace(/^#/, ''))
+  if (!id) return
+  if (trackDataShift) pendingRouteHashAlignment = hash
+  void nextTick(() => {
+    window.requestAnimationFrame(() => scrollToSection(id))
+  })
 }
 
 function preloadMapVisualization() {
@@ -1374,15 +1416,10 @@ function preloadCoreMarkerPriority() {
   void import('./CoreMarkerPriorityView.vue')
 }
 
-function preloadMethodologyVerification() {
-  void import('./MethodologyVerificationView.vue')
-}
-
 function preloadVisualRoute(route?: string) {
   if (route === '/map-visualization') preloadMapVisualization()
   if (route === '/icd11-sankey') preloadIcd11Sankey()
   if (route === '/core-marker-priority') preloadCoreMarkerPriority()
-  if (route === '/methodology-verification') preloadMethodologyVerification()
 }
 
 function handleVisualEntry(item: { target: string; route?: string }) {
@@ -1464,7 +1501,9 @@ function validatePassword() {
   }
 
   const password = isRegister.value ? registerForm.password : resetForm.password
-  const confirmPassword = isRegister.value ? registerForm.confirmPassword : resetForm.confirmPassword
+  const confirmPassword = isRegister.value
+    ? registerForm.confirmPassword
+    : resetForm.confirmPassword
 
   if (password.trim().length < 6) {
     setMessage('error', '密码至少需要 6 位')
@@ -1579,8 +1618,8 @@ async function handleSubmit() {
         runProtectedAction(action)
       } else {
         showActionNotice(
-          `欢迎回来，${currentUser.value}`,
-          `${currentRolePresentation.value.label} · ${currentUserCapabilities.value.join('、')}`,
+          '登录成功',
+          `${currentUser.value}，当前身份为${currentRolePresentation.value.label}。可用功能：${currentUserCapabilities.value.join('、')}。`,
         )
       }
     }
@@ -1636,12 +1675,20 @@ onMounted(() => {
     const length = homeData.value.metrics.length || 1
     currentOverviewIndex.value = (currentOverviewIndex.value + 1) % length
   }, 3600)
+  if (route.hash) scrollToRouteHash(route.hash)
 })
 
 watch(
   () => route.query.auth,
   (authMode) => {
     if (authMode === 'login') openAuth()
+  },
+)
+
+watch(
+  () => route.hash,
+  (hash) => {
+    if (hash) scrollToRouteHash(hash)
   },
 )
 
@@ -1654,8 +1701,17 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="site-shell">
-    <PlatformHeader active="home" @request-auth="openAuth()" @logout="handleLogout" />
+  <main class="site-shell" :class="{ 'academic-home': isAcademicHome }">
+    <PlatformHeader
+      ref="homeHeader"
+      active="home"
+      :sticky="false"
+      show-home-guide
+      @request-home-guide="homeGuide?.start()"
+      :variant="isAcademicHome ? 'academic' : 'legacy'"
+      @request-auth="openAuth()"
+      @logout="handleLogout"
+    />
 
     <Transition name="account-notice">
       <aside
@@ -1674,7 +1730,33 @@ onBeforeUnmount(() => {
       </aside>
     </Transition>
 
-    <section id="main-content" class="hero-section" aria-labelledby="heroTitle" tabindex="-1">
+    <AcademicHomeGuide
+      ref="homeGuide"
+      :return-focus-to="homeHeader?.homeGuideTrigger ?? null"
+      :ready="!['idle', 'loading'].includes(homeLoadState)"
+      :blocked="isAuthOpen"
+      @open-change="homeGuideOpen = $event"
+    />
+
+    <AcademicIntroStage v-if="isAcademicHome">
+      <AcademicHeroWorkspace
+        @start="scrollToSection('visual-entry')"
+        @browse="scrollToSection('visual')"
+      />
+      <AcademicAnalysisModules
+        v-home-reveal
+        :modules="visualEntryItems"
+        @preload="preloadVisualRoute"
+      />
+    </AcademicIntroStage>
+
+    <section
+      v-else
+      id="main-content"
+      class="hero-section"
+      aria-labelledby="heroTitle"
+      tabindex="-1"
+    >
       <div class="hero-copy">
         <p class="section-kicker">WBE DATA RESOURCE</p>
         <h1 id="heroTitle">面向污水流行病学的信息因子知识平台</h1>
@@ -1685,11 +1767,7 @@ onBeforeUnmount(() => {
           <button type="button" class="primary-action" @click="scrollToSection('visual-entry')">
             进入可视化中心
           </button>
-          <button
-            type="button"
-            class="secondary-action"
-            @click="scrollToSection('visual')"
-          >
+          <button type="button" class="secondary-action" @click="scrollToSection('visual')">
             浏览数据图谱
           </button>
         </div>
@@ -1727,18 +1805,25 @@ onBeforeUnmount(() => {
         </div>
         <div class="board-foot">
           <span>{{
-            isAuthenticated ? '已登录：可按账号权限使用数据能力。' : '访客模式：公开检索与分析功能可用。'
+            isAuthenticated
+              ? '已登录：可按账号权限使用数据能力。'
+              : '访客模式：公开检索与分析功能可用。'
           }}</span>
           <button type="button" @click="scrollToSection('visual')">查看图谱</button>
         </div>
       </div>
     </section>
 
-    <section id="visual-entry" class="glance-section" aria-labelledby="glanceTitle">
+    <section
+      v-if="!isAcademicHome"
+      id="visual-entry"
+      class="glance-section"
+      aria-labelledby="glanceTitle"
+    >
       <div class="glance-inner">
         <div class="glance-heading">
           <div class="glance-title">
-          <p class="section-kicker">VISUAL EVIDENCE</p>
+            <p class="section-kicker">VISUAL EVIDENCE</p>
             <h2 id="glanceTitle">可视化与证据分析</h2>
           </div>
         </div>
@@ -1764,170 +1849,153 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <section id="visual" class="visual-section" aria-labelledby="visualTitle">
-      <div class="section-heading">
-        <p class="section-kicker">VISUAL EXPLORER</p>
-        <h2 id="visualTitle">因子词云与目标物质类别研究图谱。</h2>
-      </div>
+    <div :class="{ 'academic-factor-band': isAcademicHome }">
+      <AcademicFactorCloud
+        v-home-reveal="100"
+        :items="homeData.keywords"
+        :state="factorCloudState"
+        :paused="homeGuideOpen"
+        @retry="retryHomeData"
+      />
+    </div>
 
-      <div class="visual-grid">
-        <article class="word-cloud-panel">
-          <header>
-            <span>因子词云</span>
-            <strong>真实因子词条</strong>
-          </header>
-          <div class="word-cloud-viewport" :class="{ paused: activeKeyword }" aria-label="高频因子词云">
-            <div
-              v-for="row in wordCloudRows"
-              :key="row.key"
-              class="word-cloud-row"
-              :class="{ reverse: row.reverse }"
-              :style="{ '--marquee-duration': row.duration }"
+    <section
+      v-home-reveal="100"
+      id="evidence-distribution"
+      class="evidence-chart-section"
+      aria-labelledby="evidenceChartTitle"
+    >
+      <header class="academic-evidence-heading">
+        <h2 id="evidenceChartTitle">类别与标记物证据分布</h2>
+      </header>
+
+      <article class="biomarker-chart-panel">
+        <header class="biomarker-panel-head">
+          <div>
+            <strong>累计研究数</strong>
+            <em
+              >{{ formatNumber(biomarkerTotalFrequency) }} 次 DOI 去重研究，覆盖
+              {{ biomarkerFrequencyItems.length }} 类目标物质</em
             >
-              <div class="word-cloud-trackline">
-                <button
-                  v-for="(item, index) in row.items"
-                  :key="`${row.key}-${item.name}-${index}`"
-                  type="button"
-                  class="word-chip"
-                  :class="{
-                    active: item.name === activeKeyword,
-                    dimmed: !!activeKeyword && item.name !== activeKeyword,
-                  }"
-                  :style="{ '--word-color': item.tone, '--word-size': `${item.size}px`, '--float-delay': item.delay }"
-                  :title="`${item.category} · ${item.docs ?? item.value} 篇文献 · ${item.rows ?? 0} 行`"
-                  @pointerenter="focusKeyword(item.name)"
-                  @pointerleave="releaseKeyword"
-                  @mouseenter="focusKeyword(item.name)"
-                  @mouseleave="releaseKeyword"
-                  @click="openWordPopover(item, $event)"
-                  @focus="focusKeyword(item.name)"
-                  @blur="releaseKeyword"
+          </div>
+          <div class="joint-chart-toolbar" aria-label="证据分布图表控制">
+            <label class="biomarker-filter-control" aria-label="目标范围筛选">
+              <span>范围</span>
+              <select
+                :value="selectedTargetCategory"
+                :title="selectedTargetCategoryOption.name"
+                @change="selectTargetCategory"
+              >
+                <option
+                  v-for="option in targetCategoryOptions"
+                  :key="option.value"
+                  :value="option.value"
                 >
-                  <strong>{{ item.name }}</strong>
-                  <small>{{ item.docs ?? item.value }} 篇</small>
-                </button>
+                  {{ formatTargetCategoryOption(option) }}
+                </option>
+              </select>
+            </label>
+            <div class="biomarker-sort-control" role="group" aria-label="排序方式">
+              <span>排序</span>
+              <button
+                v-for="option in BIOMARKER_SORT_OPTIONS"
+                :key="option.mode"
+                type="button"
+                :class="{ active: biomarkerSortMode === option.mode }"
+                :aria-pressed="biomarkerSortMode === option.mode"
+                @click="biomarkerSortMode = option.mode"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+            <label class="subclass-filter">
+              <span>子类</span>
+              <select :value="selectedSubclass?.name ?? ''" @change="selectSubclass">
+                <option
+                  v-for="option in selectedBiomarkerSubclasses"
+                  :key="option.name"
+                  :value="option.name"
+                >
+                  {{ option.name }}（{{ formatNumber(option.frequency) }}）
+                </option>
+              </select>
+            </label>
+          </div>
+        </header>
+
+        <div
+          v-if="showHomeLoadFeedback"
+          class="home-load-feedback"
+          :class="`is-${homeLoadState}`"
+          role="status"
+          aria-live="polite"
+        >
+          <span class="home-load-feedback-icon" aria-hidden="true"></span>
+          <p>{{ homeLoadMessage }}</p>
+          <button v-if="canRetryHomeData" type="button" @click="retryHomeData">重新加载</button>
+          <button v-else-if="homeLoadState === 'unauthorized'" type="button" @click="openAuth()">
+            登录后重试
+          </button>
+        </div>
+
+        <div class="biomarker-chart-layout">
+          <section class="biomarker-bar-section" aria-label="目标物质类别 DOI 去重累计研究数">
+            <header class="chart-column-heading">
+              <strong>目标物质类别</strong>
+              <span>点击类别更新右侧标记物分布</span>
+            </header>
+            <div class="frequency-chart-shell">
+              <div class="frequency-x-axis" aria-hidden="true">
+                <span v-for="tick in biomarkerFrequencyAxisTicks" :key="tick">{{
+                  formatNumber(tick)
+                }}</span>
+              </div>
+              <div class="frequency-plot-scroll">
+                <TransitionGroup name="frequency-reorder" tag="div" class="frequency-plot">
+                  <button
+                    v-for="item in biomarkerFrequencyItems"
+                    :key="item.name"
+                    type="button"
+                    class="frequency-bar"
+                    :class="{ active: item.name === selectedBiomarker?.name }"
+                    :style="{ '--bar-width': item.barWidth, '--bar-color': item.tone }"
+                    :aria-pressed="item.name === selectedBiomarker?.name"
+                    :aria-label="`${item.name}，DOI 去重累计研究数 ${item.frequency}`"
+                    @click="selectBiomarker(item.name)"
+                  >
+                    <strong :title="item.name">{{ item.name }}</strong>
+                    <span><i></i></span>
+                    <em>{{ formatNumber(item.frequency) }}</em>
+                  </button>
+                </TransitionGroup>
               </div>
             </div>
-          </div>
-          <div class="word-inspector">
-            <span>{{ activeWord ? '当前词条' : '词云概览' }}</span>
-            <strong>{{ activeWord?.name ?? '高频生物标记物' }}</strong>
-            <p>
-              {{
-                activeWord
-                  ? `${activeWord.category} · ${activeWord.docs ?? activeWord.value} 篇文献 · ${activeWord.rows ?? 0} 行 · ${activeWord.countries ?? 0} / ${activeWord.regions ?? 0} 国家/地区`
-                  : `${formatNumber(wordCloudItems.length)} 个词条 · DOI 去重文献数、数据行与地区覆盖同步展示`
-              }}
-            </p>
-          </div>
-        </article>
+          </section>
 
-        <article class="biomarker-chart-panel">
-          <header class="biomarker-panel-head">
-            <span>目标物质类别研究数</span>
-            <strong>累计研究数横向柱状图</strong>
-            <em>{{ formatNumber(biomarkerTotalFrequency) }} 次 DOI 去重研究 · {{ biomarkerFrequencyItems.length }} 类目标物质</em>
-          </header>
-          <div
-            v-if="showHomeLoadFeedback"
-            class="home-load-feedback"
-            :class="`is-${homeLoadState}`"
-            role="status"
-            aria-live="polite"
-          >
-            <span class="home-load-feedback-icon" aria-hidden="true"></span>
-            <p>{{ homeLoadMessage }}</p>
-            <button v-if="canRetryHomeData" type="button" @click="retryHomeData">重新加载</button>
-            <button
-              v-else-if="homeLoadState === 'unauthorized'"
-              type="button"
-              @click="openAuth()"
+          <Transition name="evidence-detail" mode="out-in">
+            <section
+              :key="`${selectedBiomarker?.name ?? 'empty'}:${selectedSubclass?.name ?? DEFAULT_SUBCLASS}`"
+              class="biomarker-detail-section"
+              aria-live="polite"
             >
-              登录后重试
-            </button>
-          </div>
-
-          <div class="biomarker-chart-layout">
-            <section class="biomarker-bar-section" aria-label="目标物质类别 DOI 去重累计研究数">
-              <div class="frequency-chart-shell">
-                <div class="frequency-chart-toolbar" aria-label="目标物质类别图表控制">
-                  <label class="biomarker-filter-control" aria-label="目标范围筛选">
-                    <span>范围</span>
-                    <select
-                      :value="selectedTargetCategory"
-                      :title="selectedTargetCategoryOption.name"
-                      @change="selectTargetCategory"
-                    >
-                      <option
-                        v-for="option in targetCategoryOptions"
-                        :key="option.value"
-                        :value="option.value"
-                      >
-                        {{ formatTargetCategoryOption(option) }}
-                      </option>
-                    </select>
-                  </label>
-                  <div class="biomarker-sort-control" role="group" aria-label="排序方式">
-                    <span>排序</span>
-                    <button
-                      v-for="option in BIOMARKER_SORT_OPTIONS"
-                      :key="option.mode"
-                      type="button"
-                      :class="{ active: biomarkerSortMode === option.mode }"
-                      :aria-pressed="biomarkerSortMode === option.mode"
-                      @click="biomarkerSortMode = option.mode"
-                    >
-                      {{ option.label }}
-                    </button>
-                  </div>
-                </div>
-                <div class="frequency-x-axis" aria-hidden="true">
-                  <span v-for="tick in biomarkerFrequencyAxisTicks" :key="tick">
-                    {{ formatNumber(tick) }}
-                  </span>
-                </div>
-                <div class="frequency-plot-scroll">
-                  <div class="frequency-plot">
-                    <button
-                      v-for="item in biomarkerFrequencyItems"
-                      :key="item.name"
-                      type="button"
-                      class="frequency-bar"
-                      :class="{ active: item.name === selectedBiomarker?.name }"
-                      :style="{ '--bar-width': item.barWidth, '--bar-color': item.tone }"
-                      :aria-pressed="item.name === selectedBiomarker?.name"
-                      :aria-label="`${item.name}，DOI 去重累计研究数 ${item.frequency}`"
-                      @click="selectBiomarker(item.name)"
-                    >
-                      <strong>{{ item.name }}</strong>
-                      <span><i></i></span>
-                      <em>{{ formatNumber(item.frequency) }}</em>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section class="biomarker-detail-section" aria-live="polite">
-              <header>
-                <span>当前查看</span>
+              <header class="chart-column-heading">
                 <strong>{{ selectedBiomarker?.name ?? '暂无数据' }}</strong>
-                <em>DOI 去重研究数 {{ formatNumber(selectedBiomarker?.frequency) }} · {{ selectedBiomarker?.category ?? '未分类' }}</em>
+                <span
+                  >{{ selectedBiomarker?.category ?? '未分类' }}，当前子类
+                  {{ selectedSubclass?.name ?? DEFAULT_SUBCLASS }}</span
+                >
               </header>
 
               <div class="line-stat-grid">
                 <article>
-                  <span>累计研究数</span>
-                  <strong>{{ formatNumber(selectedBiomarker?.frequency) }}</strong>
+                  <span>累计研究数</span
+                  ><strong>{{ formatNumber(selectedBiomarker?.frequency) }}</strong>
                 </article>
                 <article>
-                  <span>去重文献</span>
-                  <strong>{{ formatNumber(selectedBiomarker?.docs) }}</strong>
+                  <span>去重文献</span><strong>{{ formatNumber(selectedBiomarker?.docs) }}</strong>
                 </article>
                 <article>
-                  <span>数据行</span>
-                  <strong>{{ formatNumber(selectedBiomarker?.rows) }}</strong>
+                  <span>数据行</span><strong>{{ formatNumber(selectedBiomarker?.rows) }}</strong>
                 </article>
               </div>
 
@@ -1937,36 +2005,30 @@ onBeforeUnmount(() => {
                 class="detail-bar-shell"
               >
                 <div class="detail-chart-head">
-                  <div>
-                    <span>类别下生物标记物研究数</span>
-                    <em>{{ selectedSubclass?.name ?? DEFAULT_SUBCLASS }} · {{ selectedCategoryBiomarkerItems.length }} 项</em>
-                  </div>
-                  <label class="subclass-filter">
-                    <span>目标物质子类</span>
-                    <select :value="selectedSubclass?.name ?? ''" @change="selectSubclass">
-                      <option
-                        v-for="option in selectedBiomarkerSubclasses"
-                        :key="option.name"
-                        :value="option.name"
-                      >
-                        {{ option.name }}（{{ formatNumber(option.frequency) }}）
-                      </option>
-                    </select>
-                  </label>
+                  <span>类别下生物标记物研究数</span>
+                  <em>{{ selectedCategoryBiomarkerItems.length }} 项</em>
                 </div>
-                <div class="detail-column-scroll" role="img" :aria-label="`${selectedBiomarker?.name ?? '目标物质类别'}下${selectedSubclass?.name ?? DEFAULT_SUBCLASS}子类生物标记物 DOI 去重累计研究数`">
-                  <div class="detail-column-plot" :style="{ '--detail-plot-width': detailColumnPlotWidth }">
+                <div
+                  class="detail-column-scroll"
+                  role="img"
+                  :aria-label="`${selectedBiomarker?.name ?? '目标物质类别'}下${selectedSubclass?.name ?? DEFAULT_SUBCLASS}子类生物标记物 DOI 去重累计研究数`"
+                >
+                  <div
+                    class="detail-column-plot"
+                    :style="{ '--detail-plot-width': detailColumnPlotWidth }"
+                  >
                     <article
                       v-for="item in selectedCategoryBiomarkerItems"
                       :key="item.name"
                       class="detail-column-bar"
-                      :style="{ '--detail-bar-height': item.barHeight, '--detail-color': item.tone }"
+                      :style="{
+                        '--detail-bar-height': item.barHeight,
+                        '--detail-color': item.tone,
+                      }"
                       :aria-label="`${item.name}，DOI 去重研究数 ${formatNumber(item.frequency)}`"
                     >
                       <strong>{{ formatNumber(item.frequency) }}</strong>
-                      <div>
-                        <i></i>
-                      </div>
+                      <div><i></i></div>
                       <span :title="item.name">{{ shortBiomarkerName(item.name) }}</span>
                     </article>
                   </div>
@@ -1974,9 +2036,9 @@ onBeforeUnmount(() => {
               </div>
               <p v-else class="line-empty">暂无标记物数据</p>
             </section>
-          </div>
-        </article>
-      </div>
+          </Transition>
+        </div>
+      </article>
     </section>
 
     <section
@@ -2008,7 +2070,11 @@ onBeforeUnmount(() => {
             </label>
             <label>
               <span>批次名称</span>
-              <input v-model.trim="uploadForm.batchName" type="text" placeholder="例如 2026-Q2 修订" />
+              <input
+                v-model.trim="uploadForm.batchName"
+                type="text"
+                placeholder="例如 2026-Q2 修订"
+              />
             </label>
             <label class="file-drop">
               <span>数据文件</span>
@@ -2054,23 +2120,11 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <section id="methods" class="updates-section" aria-labelledby="updatesTitle">
-      <div class="section-heading">
-        <p class="section-kicker">METHODS & QUALITY</p>
-        <h2 id="updatesTitle">方法说明、字段版本和数据更新保持可追溯。</h2>
-      </div>
-      <div class="update-list">
-        <article v-for="item in homeData.activity" :key="item.title">
-          <time>{{ item.date }}</time>
-          <div>
-            <h3>{{ item.title }}</h3>
-            <p>{{ item.detail }}</p>
-          </div>
-        </article>
-      </div>
-    </section>
+    <span id="methods" class="route-anchor-sentinel" aria-hidden="true"></span>
 
-    <footer id="news" class="site-footer">
+    <AcademicFooter v-if="isAcademicHome" id="news" />
+
+    <footer v-else id="news" class="site-footer">
       <div class="footer-brand">
         <BrandMark :size="32" compact />
         <span>
@@ -2086,295 +2140,247 @@ onBeforeUnmount(() => {
       <small>© 2026 Wastewater Biomarker Evidence · 字段版本与数据更新保持可追溯</small>
     </footer>
 
-    <div v-if="selectedWord" class="word-popover-layer" @click.self="closeWordPopover">
-      <div
-        class="word-popover"
-        :style="wordPopoverStyle"
-        role="dialog"
-        aria-modal="false"
-        aria-labelledby="wordPopoverTitle"
-        @keydown.esc="closeWordPopover"
+    <Teleport to="body">
+      <Transition
+        name="auth-modal"
+        appear
+        @after-enter="focusAuthPrimaryInput"
+        @after-leave="restoreAuthFocus"
       >
-        <header class="word-popover-head">
-          <span id="wordPopoverTitle">生物标记物详情</span>
-          <button type="button" aria-label="关闭词条详情" @click="closeWordPopover">×</button>
-        </header>
-        <strong class="word-popover-name" :style="{ color: selectedWord.tone }">
-          {{ selectedWord.name }}
-        </strong>
-        <div class="word-popover-metrics">
-          <article>
-            <span>文献数</span>
-            <strong>{{ formatNumber(selectedWord.docs ?? selectedWord.value) }}</strong>
-          </article>
-          <article>
-            <span>数据行</span>
-            <strong>{{ formatNumber(selectedWord.rows) }}</strong>
-          </article>
-          <article>
-            <span>国家</span>
-            <strong>{{ formatNumber(selectedWord.countries) }}</strong>
-          </article>
-          <article>
-            <span>地区</span>
-            <strong>{{ formatNumber(selectedWord.regions) }}</strong>
-          </article>
-        </div>
-        <section class="word-popover-section">
-          <span>归属</span>
-          <div>
-            <em v-for="tag in belongingTags(selectedWord)" :key="tag">{{ tag }}</em>
-          </div>
-        </section>
-        <section class="word-popover-section">
-          <span>细分类型</span>
-          <div>
-            <em v-for="tag in detailTags(selectedWord.subcategories)" :key="tag">{{ tag }}</em>
-          </div>
-        </section>
-        <section class="word-popover-section">
-          <span>名称归并</span>
-          <div>
-            <em v-for="tag in detailTags(selectedWord.aliases)" :key="tag">{{ tag }}</em>
-          </div>
-        </section>
-      </div>
-    </div>
+        <div v-if="isAuthOpen" class="auth-overlay" role="presentation" @click.self="closeAuth">
+        <section
+          ref="authCard"
+          class="auth-card"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="authTitle"
+          tabindex="-1"
+          @keydown="handleAuthKeydown"
+        >
+          <button class="close-button" type="button" aria-label="关闭登录窗口" @click="closeAuth">
+            ×
+          </button>
+          <header class="auth-header">
+            <BrandMark :size="44" variant="academic" />
+            <h2 id="authTitle">{{ pageTitle }}</h2>
+            <p>{{ authLead }}</p>
+          </header>
 
-    <div
-      v-if="isAuthOpen"
-      class="auth-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="authTitle"
-    >
-      <section class="auth-card">
-        <button class="close-button" type="button" aria-label="关闭登录窗口" @click="closeAuth">
-          ×
-        </button>
-        <header class="auth-header">
-          <BrandMark :size="40" />
-          <h2 id="authTitle">{{ pageTitle }}</h2>
-          <p>{{ authLead }}</p>
-        </header>
-
-        <form class="auth-form" @submit.prevent="handleSubmit">
-          <div v-if="!isReset" class="auth-mode-tabs" role="tablist" aria-label="账号操作">
-            <button
-              type="button"
-              role="tab"
-              :aria-selected="isLogin"
-              :class="{ active: isLogin }"
-              @click="setMode('login')"
-            >
-              登录
-            </button>
-            <button
-              type="button"
-              role="tab"
-              :aria-selected="isRegister"
-              :class="{ active: isRegister }"
-              @click="setMode('register')"
-            >
-              注册
-            </button>
-          </div>
-
-          <Transition name="auth-panel" mode="out-in">
-            <div v-if="isLogin" key="login" class="auth-fields">
-              <label>
-                <span>用户名 / 邮箱</span>
-                <input
-                  v-model.trim="loginForm.account"
-                  type="text"
-                  autocomplete="email"
-                  placeholder="用户名或 name@example.com"
-                />
-              </label>
-
-              <label>
-                <span>密码</span>
-                <div class="password-field">
+          <form class="auth-form" @submit.prevent="handleSubmit">
+            <Transition name="auth-panel" mode="out-in" @after-enter="focusAuthPrimaryInput">
+              <div v-if="isLogin" key="login" class="auth-fields">
+                <label>
+                  <span>用户名 / 邮箱</span>
                   <input
-                    v-model.trim="loginForm.password"
-                    :type="loginPasswordVisible ? 'text' : 'password'"
-                    autocomplete="current-password"
+                    ref="authPrimaryInput"
+                    v-model.trim="loginForm.account"
+                    type="text"
+                    autocomplete="username"
+                    placeholder="请输入用户名或邮箱"
+                  />
+                </label>
+
+                <label>
+                  <span>密码</span>
+                  <div class="password-field">
+                    <input
+                      v-model.trim="loginForm.password"
+                      :type="loginPasswordVisible ? 'text' : 'password'"
+                      autocomplete="current-password"
+                      placeholder="请输入密码"
+                    />
+                    <button
+                      type="button"
+                      :aria-label="loginPasswordVisible ? '隐藏密码' : '显示密码'"
+                      @click="loginPasswordVisible = !loginPasswordVisible"
+                    >
+                      <span
+                        class="eye-icon"
+                        :class="{ visible: loginPasswordVisible }"
+                        aria-hidden="true"
+                      >
+                        <i></i>
+                      </span>
+                    </button>
+                  </div>
+                </label>
+
+                <label v-if="loginCaptcha" class="captcha-field">
+                  <span>图形验证码</span>
+                  <div class="captcha-row">
+                    <input
+                      v-model.trim="loginForm.captchaCode"
+                      type="text"
+                      inputmode="numeric"
+                      maxlength="4"
+                      placeholder="输入验证码"
+                    />
+                    <img
+                      :src="`data:image/png;base64,${loginCaptcha.imageBase64}`"
+                      alt="图形验证码"
+                    />
+                    <button type="button" :disabled="isLoadingCaptcha" @click="refreshLoginCaptcha">
+                      {{ isLoadingCaptcha ? '刷新中' : '刷新' }}
+                    </button>
+                  </div>
+                </label>
+              </div>
+
+              <div v-else-if="isRegister" key="register" class="auth-fields">
+                <label>
+                  <span>邮箱</span>
+                  <input
+                    ref="authPrimaryInput"
+                    v-model.trim="registerForm.email"
+                    type="email"
+                    autocomplete="email"
+                    placeholder="name@example.com"
+                  />
+                </label>
+
+                <label>
+                  <span>用户名</span>
+                  <input
+                    v-model.trim="registerForm.username"
+                    type="text"
+                    autocomplete="username"
+                    placeholder="3-50 位用户名"
+                  />
+                </label>
+
+                <label>
+                  <span>密码</span>
+                  <input
+                    v-model.trim="registerForm.password"
+                    type="password"
+                    autocomplete="new-password"
                     placeholder="至少 6 位"
                   />
-                  <button
-                    type="button"
-                    :aria-label="loginPasswordVisible ? '隐藏密码' : '显示密码'"
-                    @click="loginPasswordVisible = !loginPasswordVisible"
-                  >
-                    <span class="eye-icon" :class="{ visible: loginPasswordVisible }" aria-hidden="true">
-                      <i></i>
-                    </span>
-                  </button>
-                </div>
-              </label>
+                </label>
 
-              <label v-if="loginCaptcha" class="captcha-field">
-                <span>图形验证码</span>
-                <div class="captcha-row">
+                <label>
+                  <span>确认密码</span>
                   <input
-                    v-model.trim="loginForm.captchaCode"
-                    type="text"
-                    inputmode="numeric"
-                    maxlength="4"
-                    placeholder="输入验证码"
+                    v-model.trim="registerForm.confirmPassword"
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder="再次输入密码"
                   />
-                  <img
-                    :src="`data:image/png;base64,${loginCaptcha.imageBase64}`"
-                    alt="图形验证码"
-                  />
-                  <button type="button" :disabled="isLoadingCaptcha" @click="refreshLoginCaptcha">
-                    {{ isLoadingCaptcha ? '刷新中' : '刷新' }}
-                  </button>
-                </div>
-              </label>
-            </div>
+                </label>
 
-            <div v-else-if="isRegister" key="register" class="auth-fields">
-              <label>
-                <span>邮箱</span>
-                <input
-                  v-model.trim="registerForm.email"
-                  type="email"
-                  autocomplete="email"
-                  placeholder="name@example.com"
-                />
-              </label>
+                <label>
+                  <span>邮箱验证码</span>
+                  <div class="split-row code-row">
+                    <input
+                      v-model.trim="registerForm.code"
+                      type="text"
+                      inputmode="numeric"
+                      maxlength="6"
+                      placeholder="6 位验证码"
+                    />
+                    <button type="button" :disabled="!canSendCode" @click="handleSendCode">
+                      {{
+                        countdown > 0 ? `${countdown}s` : isSendingCode ? '发送中' : '发送验证码'
+                      }}
+                    </button>
+                  </div>
+                </label>
+              </div>
 
-              <label>
-                <span>用户名</span>
-                <input
-                  v-model.trim="registerForm.username"
-                  type="text"
-                  autocomplete="username"
-                  placeholder="3-50 位用户名"
-                />
-              </label>
-
-              <label>
-                <span>密码</span>
-                <input
-                  v-model.trim="registerForm.password"
-                  type="password"
-                  autocomplete="new-password"
-                  placeholder="至少 6 位"
-                />
-              </label>
-
-              <label>
-                <span>确认密码</span>
-                <input
-                  v-model.trim="registerForm.confirmPassword"
-                  type="password"
-                  autocomplete="new-password"
-                  placeholder="再次输入密码"
-                />
-              </label>
-
-              <label>
-                <span>邮箱验证码</span>
-                <div class="split-row code-row">
+              <div v-else key="reset" class="auth-fields">
+                <label>
+                  <span>邮箱</span>
                   <input
-                    v-model.trim="registerForm.code"
-                    type="text"
-                    inputmode="numeric"
-                    maxlength="6"
-                    placeholder="6 位验证码"
+                    ref="authPrimaryInput"
+                    v-model.trim="resetForm.email"
+                    type="email"
+                    autocomplete="email"
+                    placeholder="name@example.com"
                   />
-                  <button type="button" :disabled="!canSendCode" @click="handleSendCode">
-                    {{ countdown > 0 ? `${countdown}s` : isSendingCode ? '发送中' : '发送验证码' }}
-                  </button>
-                </div>
-              </label>
-            </div>
+                </label>
 
-            <div v-else key="reset" class="auth-fields">
-              <label>
-                <span>邮箱</span>
-                <input
-                  v-model.trim="resetForm.email"
-                  type="email"
-                  autocomplete="email"
-                  placeholder="name@example.com"
-                />
-              </label>
-
-              <label>
-                <span>新密码</span>
-                <input
-                  v-model.trim="resetForm.password"
-                  type="password"
-                  autocomplete="new-password"
-                  placeholder="至少 6 位"
-                />
-              </label>
-
-              <label>
-                <span>确认密码</span>
-                <input
-                  v-model.trim="resetForm.confirmPassword"
-                  type="password"
-                  autocomplete="new-password"
-                  placeholder="再次输入密码"
-                />
-              </label>
-
-              <label>
-                <span>邮箱验证码</span>
-                <div class="split-row code-row">
+                <label>
+                  <span>新密码</span>
                   <input
-                    v-model.trim="resetForm.code"
-                    type="text"
-                    inputmode="numeric"
-                    maxlength="6"
-                    placeholder="6 位验证码"
+                    v-model.trim="resetForm.password"
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder="至少 6 位"
                   />
-                  <button type="button" :disabled="!canSendCode" @click="handleSendCode">
-                    {{ countdown > 0 ? `${countdown}s` : isSendingCode ? '发送中' : '发送验证码' }}
-                  </button>
-                </div>
-              </label>
-            </div>
-          </Transition>
+                </label>
 
-          <p v-if="message" class="form-message" :class="messageType">{{ message }}</p>
+                <label>
+                  <span>确认密码</span>
+                  <input
+                    v-model.trim="resetForm.confirmPassword"
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder="再次输入密码"
+                  />
+                </label>
 
-          <button
-            v-if="!loginComplete"
-            type="submit"
-            class="auth-submit"
-            :disabled="isSubmitting"
-            :aria-busy="isSubmitting"
-          >
-            <span>{{ submitText }}</span>
-            <span v-if="isSubmitting" class="submit-loader" aria-hidden="true">
-              <i></i><i></i><i></i>
-            </span>
-          </button>
+                <label>
+                  <span>邮箱验证码</span>
+                  <div class="split-row code-row">
+                    <input
+                      v-model.trim="resetForm.code"
+                      type="text"
+                      inputmode="numeric"
+                      maxlength="6"
+                      placeholder="6 位验证码"
+                    />
+                    <button type="button" :disabled="!canSendCode" @click="handleSendCode">
+                      {{
+                        countdown > 0 ? `${countdown}s` : isSendingCode ? '发送中' : '发送验证码'
+                      }}
+                    </button>
+                  </div>
+                </label>
+              </div>
+            </Transition>
 
-          <div v-else class="post-login-actions">
-            <button type="button" class="auth-submit" @click="returnToPrevious">返回首页</button>
+            <p v-if="message" class="form-message" :class="messageType">{{ message }}</p>
+
             <button
-              v-if="pendingAction"
-              type="button"
-              class="ghost-action"
-              @click="continueProtectedAction"
+              v-if="!loginComplete"
+              type="submit"
+              class="auth-submit"
+              :disabled="isSubmitting"
+              :aria-busy="isSubmitting"
             >
-              进入数据上传
+              <span>{{ submitText }}</span>
+              <span v-if="isSubmitting" class="submit-loader" aria-hidden="true">
+                <i></i><i></i><i></i>
+              </span>
             </button>
-          </div>
 
-          <div v-if="!loginComplete" class="action-links">
-            <button v-if="!isReset" type="button" @click="setMode('reset')">忘记密码</button>
-            <button v-else type="button" @click="setMode('login')">返回登录</button>
-          </div>
-        </form>
-      </section>
-    </div>
+            <div v-else class="post-login-actions">
+              <button type="button" class="auth-submit" @click="returnToPrevious">返回首页</button>
+              <button
+                v-if="pendingAction"
+                type="button"
+                class="ghost-action"
+                @click="continueProtectedAction"
+              >
+                进入数据上传
+              </button>
+            </div>
+
+            <div v-if="!loginComplete" class="action-links">
+              <template v-if="isLogin">
+                <button type="button" @click="setMode('reset')">忘记密码</button>
+                <button type="button" @click="setMode('register')">没有账号？创建账号</button>
+              </template>
+              <button v-else-if="isRegister" type="button" @click="setMode('login')">
+                已有账号？返回登录
+              </button>
+              <button v-else type="button" @click="setMode('login')">返回登录</button>
+            </div>
+          </form>
+          </section>
+        </div>
+      </Transition>
+    </Teleport>
   </main>
 </template>
 
@@ -2392,7 +2398,7 @@ onBeforeUnmount(() => {
   margin: 0;
   color: #172b3a;
   background: #f4f8fb;
-  font-family: Inter, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--platform-font-family, 'Microsoft YaHei', '微软雅黑', Arial, sans-serif);
 }
 
 button,
@@ -2921,7 +2927,12 @@ a {
   inset: 0;
   z-index: -1;
   background:
-    linear-gradient(90deg, rgba(246, 250, 252, 0.9) 0%, rgba(246, 250, 252, 0.68) 48%, rgba(246, 250, 252, 0.5) 100%),
+    linear-gradient(
+      90deg,
+      rgba(246, 250, 252, 0.9) 0%,
+      rgba(246, 250, 252, 0.68) 48%,
+      rgba(246, 250, 252, 0.5) 100%
+    ),
     url('/hero-research-bg-v2.webp') center bottom / cover no-repeat;
   content: '';
   opacity: 0.96;
@@ -3034,7 +3045,7 @@ a {
   height: auto;
   border: 0;
   content: 'i';
-  font-family: Georgia, serif;
+  font-family: var(--platform-font-family, 'Microsoft YaHei', '微软雅黑', Arial, sans-serif);
   font-size: 19px;
   font-weight: 900;
   transform: none;
@@ -3114,8 +3125,7 @@ a {
   border: 1px solid rgba(109, 139, 158, 0.22);
   border-radius: 8px;
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.86), rgba(244, 250, 251, 0.78)),
-    #ffffff;
+    linear-gradient(135deg, rgba(255, 255, 255, 0.86), rgba(244, 250, 251, 0.78)), #ffffff;
   backdrop-filter: blur(2px);
   box-shadow: 0 18px 48px rgba(37, 73, 96, 0.12);
 }
@@ -3239,29 +3249,24 @@ a {
   padding: 12px 14px;
   border: 1px solid rgba(14, 143, 119, 0.18);
   border-radius: 8px;
-  background:
-    linear-gradient(90deg, rgba(14, 143, 119, 0.12), rgba(15, 101, 145, 0.08)),
-    #f7fbfc;
+  background: linear-gradient(90deg, rgba(14, 143, 119, 0.12), rgba(15, 101, 145, 0.08)), #f7fbfc;
   backdrop-filter: blur(2px);
 }
 
-.overview-focus span,
-.word-inspector span {
+.overview-focus span {
   color: #0b6f5f;
   font-size: 12px;
   font-weight: 900;
 }
 
-.overview-focus strong,
-.word-inspector strong {
+.overview-focus strong {
   display: block;
   color: #173247;
   font-size: 20px;
   white-space: nowrap;
 }
 
-.overview-focus p,
-.word-inspector p {
+.overview-focus p {
   margin: 5px 0 0;
   color: #5d7382;
   line-height: 1.6;
@@ -3301,9 +3306,7 @@ a {
   padding: 28px clamp(20px, 5vw, 70px) 34px;
   border-top: 1px solid rgba(104, 135, 154, 0.18);
   border-bottom: 1px solid rgba(104, 135, 154, 0.24);
-  background:
-    linear-gradient(180deg, #ffffff 0%, #f7fbfc 100%),
-    #ffffff;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbfc 100%), #ffffff;
 }
 
 .glance-inner {
@@ -3374,8 +3377,7 @@ a {
 .glance-item:focus-visible {
   border-color: rgba(14, 143, 119, 0.56);
   background:
-    linear-gradient(135deg, rgba(239, 250, 247, 0.96), rgba(255, 255, 255, 0.98)),
-    #ffffff;
+    linear-gradient(135deg, rgba(239, 250, 247, 0.96), rgba(255, 255, 255, 0.98)), #ffffff;
   box-shadow: 0 18px 38px rgba(20, 73, 96, 0.16);
   outline: none;
   transform: translateY(-4px);
@@ -3510,9 +3512,7 @@ a {
   padding-block: 54px;
   border-top: 1px solid rgba(104, 135, 154, 0.2);
   border-bottom: 1px solid rgba(104, 135, 154, 0.24);
-  background:
-    linear-gradient(180deg, #eef6f8 0%, #f7fbfc 100%),
-    #f6fafb;
+  background: linear-gradient(180deg, #eef6f8 0%, #f7fbfc 100%), #f6fafb;
 }
 
 .about-band h2,
@@ -3548,8 +3548,7 @@ a {
   border: 1px solid rgba(93, 126, 147, 0.22);
   border-radius: 8px;
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(246, 251, 252, 0.96)),
-    #ffffff;
+    linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(246, 251, 252, 0.96)), #ffffff;
   box-shadow: 0 22px 58px rgba(37, 73, 96, 0.1);
 }
 
@@ -3578,8 +3577,7 @@ a {
   border: 1px solid rgba(109, 139, 158, 0.16);
   border-radius: 8px;
   background:
-    linear-gradient(135deg, rgba(237, 249, 246, 0.76), rgba(255, 255, 255, 0.96)),
-    #ffffff;
+    linear-gradient(135deg, rgba(237, 249, 246, 0.76), rgba(255, 255, 255, 0.96)), #ffffff;
 }
 
 .dossier-guide span {
@@ -3675,7 +3673,6 @@ a {
 }
 
 .metadata-panel,
-.word-cloud-panel,
 .factor-panel,
 .category-panel,
 .biomarker-chart-panel,
@@ -3689,7 +3686,6 @@ a {
 }
 
 .metadata-panel,
-.word-cloud-panel,
 .factor-panel,
 .category-panel,
 .biomarker-chart-panel,
@@ -3715,7 +3711,6 @@ a {
 }
 
 .metadata-panel header,
-.word-cloud-panel header,
 .factor-panel header,
 .category-panel header,
 .biomarker-panel-head,
@@ -3731,13 +3726,10 @@ a {
   min-height: 88px;
   padding: 18px 20px 16px;
   border-bottom: 1px solid rgba(109, 139, 158, 0.16);
-  background:
-    linear-gradient(90deg, rgba(14, 143, 119, 0.08), rgba(15, 101, 145, 0.04)),
-    #ffffff;
+  background: linear-gradient(90deg, rgba(14, 143, 119, 0.08), rgba(15, 101, 145, 0.04)), #ffffff;
 }
 
 .metadata-panel header span,
-.word-cloud-panel header span,
 .factor-panel header span,
 .category-panel header span,
 .biomarker-panel-head span,
@@ -3749,7 +3741,6 @@ a {
 }
 
 .metadata-panel header strong,
-.word-cloud-panel header strong,
 .factor-panel header strong,
 .category-panel header strong,
 .biomarker-panel-head strong,
@@ -3933,163 +3924,6 @@ a {
 .upload-workspace,
 .updates-section {
   background: #ffffff;
-}
-
-.word-cloud-panel {
-  min-height: 500px;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto 330px auto;
-  overflow: hidden;
-}
-
-.word-cloud-panel > * {
-  min-width: 0;
-}
-
-.word-cloud-viewport {
-  position: relative;
-  height: 330px;
-  min-height: 330px;
-  max-width: 100%;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-content: center;
-  gap: 14px;
-  overflow: hidden;
-  overflow: clip;
-  contain: paint;
-  border: 1px solid rgba(109, 139, 158, 0.12);
-  border-radius: 8px;
-  background:
-    radial-gradient(circle at 18% 20%, rgba(14, 143, 119, 0.1), transparent 28%),
-    linear-gradient(135deg, rgba(240, 248, 250, 0.92), rgba(255, 255, 255, 0.98)),
-    #f8fbfc;
-}
-
-.word-cloud-viewport > * {
-  min-width: 0;
-}
-
-.word-cloud-viewport::before,
-.word-cloud-viewport::after {
-  position: absolute;
-  right: 0;
-  left: 0;
-  z-index: 2;
-  height: 42px;
-  content: '';
-  pointer-events: none;
-}
-
-.word-cloud-viewport::before {
-  top: 0;
-  background: linear-gradient(180deg, #f8fbfc, rgba(248, 251, 252, 0));
-}
-
-.word-cloud-viewport::after {
-  bottom: 0;
-  background: linear-gradient(0deg, #f8fbfc, rgba(248, 251, 252, 0));
-}
-
-.word-cloud-row {
-  position: relative;
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-  min-height: 62px;
-  overflow: hidden;
-  overflow: clip;
-  contain: paint;
-}
-
-.word-cloud-trackline {
-  position: absolute;
-  top: 50%;
-  left: 0;
-  width: max-content;
-  display: flex;
-  gap: 12px;
-  padding-inline: 16px;
-  translate: 0 -50%;
-  animation: word-marquee var(--marquee-duration) linear infinite;
-}
-
-.word-cloud-row.reverse .word-cloud-trackline {
-  animation-direction: reverse;
-}
-
-.word-cloud-viewport.paused .word-cloud-trackline,
-.word-cloud-viewport.paused .word-chip {
-  animation-play-state: paused;
-}
-
-.word-chip {
-  position: relative;
-  z-index: 1;
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  padding: 7px 10px;
-  border: 1px solid rgba(109, 139, 158, 0.12);
-  border-radius: 999px;
-  color: var(--word-color);
-  background: rgba(255, 255, 255, 0.76);
-  cursor: pointer;
-  font-weight: 900;
-  line-height: 1;
-  box-shadow: 0 8px 18px rgba(32, 62, 82, 0.06);
-  transition:
-    opacity 0.18s ease,
-    transform 0.18s ease,
-    background 0.18s ease,
-    box-shadow 0.18s ease;
-  animation: word-float 7.5s ease-in-out infinite;
-  animation-delay: var(--float-delay);
-}
-
-.word-chip strong {
-  display: inline-flex;
-  align-items: center;
-  line-height: 1;
-  overflow-wrap: anywhere;
-  white-space: nowrap;
-  font-size: var(--word-size);
-}
-
-.word-chip small {
-  display: inline-flex;
-  align-items: center;
-  color: #6b7f8d;
-  font-size: 11px;
-  line-height: 1;
-}
-
-.word-chip:hover,
-.word-chip:focus-visible,
-.word-chip.active {
-  z-index: 3;
-  color: var(--word-color);
-  background: #ffffff;
-  box-shadow: 0 16px 34px rgba(32, 62, 82, 0.16);
-  outline: none;
-  transform: translateY(-3px) scale(1.04);
-}
-
-.word-chip.dimmed {
-  opacity: 0.28;
-  filter: saturate(0.6);
-}
-
-.word-inspector {
-  margin-top: 14px;
-  padding: 14px 16px;
-  border: 1px solid rgba(14, 143, 119, 0.16);
-  border-radius: 8px;
-  background: #f7fbfc;
 }
 
 .biomarker-chart-panel {
@@ -4662,127 +4496,6 @@ a {
   font-weight: 800;
 }
 
-.word-popover-layer {
-  position: fixed;
-  inset: 0;
-  z-index: 59;
-  background: transparent;
-}
-
-.word-popover {
-  position: fixed;
-  z-index: 60;
-  width: min(380px, calc(100vw - 40px));
-  padding: 14px 16px 16px;
-  border: 1px solid #cfe0f1;
-  border-radius: 8px;
-  background: #ffffff;
-  box-shadow: 0 18px 48px rgba(18, 42, 67, 0.24);
-}
-
-.word-popover-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 9px;
-}
-
-.word-popover-head span {
-  color: #607287;
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.word-popover-head button {
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: 50%;
-  color: #375067;
-  background: #eef4fb;
-  cursor: pointer;
-  font-size: 20px;
-  line-height: 1;
-}
-
-.word-popover-name {
-  display: block;
-  margin-bottom: 12px;
-  font-size: 24px;
-  line-height: 1.25;
-  word-break: break-word;
-}
-
-.word-popover-metrics {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.word-popover-metrics article {
-  padding: 8px 10px;
-  border: 1px solid #dce8f4;
-  border-radius: 8px;
-  background: #f6faff;
-}
-
-.word-popover-metrics span,
-.word-popover-section > span {
-  color: #607287;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.word-popover-metrics strong {
-  display: block;
-  margin-top: 2px;
-  color: #075cac;
-  font-size: 18px;
-}
-
-.word-popover-section {
-  display: grid;
-  gap: 6px;
-  margin-top: 12px;
-}
-
-.word-popover-section div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.word-popover-section em {
-  padding: 3px 9px;
-  border-radius: 999px;
-  color: #36546d;
-  background: #eef5fd;
-  font-size: 12px;
-  font-style: normal;
-}
-
-@keyframes word-marquee {
-  0% {
-    transform: translateX(0);
-  }
-
-  100% {
-    transform: translateX(-50%);
-  }
-}
-
-@keyframes word-float {
-  0%,
-  100% {
-    translate: 0 0;
-  }
-
-  50% {
-    translate: 0 -3px;
-  }
-}
-
 @keyframes bar-selected-pulse {
   0% {
     opacity: 0.25;
@@ -5010,8 +4723,7 @@ a {
   border: 1px solid rgba(204, 219, 226, 0.84);
   border-radius: 8px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 252, 253, 0.98)),
-    #ffffff;
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 252, 253, 0.98)), #ffffff;
   box-shadow: 0 24px 62px rgba(10, 29, 42, 0.24);
 }
 
@@ -5616,16 +5328,6 @@ a {
     height: 46px;
   }
 
-  .word-cloud-panel {
-    min-height: 420px;
-    grid-template-rows: auto 260px auto;
-  }
-
-  .word-cloud-viewport {
-    height: 260px;
-    min-height: 260px;
-  }
-
   .biomarker-chart-panel {
     padding: 18px;
   }
@@ -5757,28 +5459,8 @@ a {
     overflow-x: auto;
   }
 
-  .word-cloud-viewport {
-    gap: 10px;
-  }
-
-  .word-cloud-trackline {
-    gap: 10px;
-    padding-inline: 12px;
-  }
-
-  .word-chip strong {
-    font-size: min(var(--word-size), 28px);
-  }
-
   .site-footer nav {
     justify-content: flex-start;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .word-cloud-trackline,
-  .word-chip {
-    animation: none;
   }
 }
 
@@ -5803,6 +5485,2000 @@ a {
 
   .captcha-row img {
     width: 100%;
+  }
+}
+
+.academic-home {
+  min-height: 100dvh;
+  color: #0b1f33;
+  background: #ffffff;
+  font-family: var(--platform-font-family, 'Microsoft YaHei', '微软雅黑', Arial, sans-serif);
+}
+
+:global(html:has(.academic-home)) {
+  scroll-behavior: auto;
+}
+
+.academic-home .academic-evidence-section {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: clamp(82px, 9vw, 124px) clamp(22px, 4.5vw, 72px) 96px;
+  border-bottom: 0;
+  background: transparent;
+  scroll-margin-top: 92px;
+}
+
+.academic-home .academic-evidence-heading {
+  max-width: none;
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(340px, 1.1fr);
+  align-items: end;
+  gap: clamp(28px, 5vw, 72px);
+  margin-bottom: 42px;
+  padding-top: 18px;
+  border-top: 1px solid #bdc9d2;
+}
+
+.academic-home .academic-evidence-heading h2 {
+  color: #0b1f33;
+  font-size: clamp(32px, 3.5vw, 48px);
+  font-weight: 710;
+  letter-spacing: -0.043em;
+  line-height: 1.12;
+}
+
+.academic-home .academic-evidence-heading > p {
+  max-width: 46em;
+  margin: 0;
+  color: #56697a;
+  font-size: 15px;
+  line-height: 1.75;
+  text-wrap: pretty;
+}
+
+.academic-home .visual-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 0 36px;
+  align-items: start;
+}
+
+.academic-home .biomarker-panel-head {
+  margin-bottom: 22px;
+}
+
+.academic-home .biomarker-panel-head span {
+  color: #0b5f9d;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.academic-home .biomarker-panel-head strong {
+  color: #0b1f33;
+  font-size: 20px;
+  font-weight: 720;
+}
+
+.academic-home .biomarker-chart-panel,
+.academic-home .biomarker-chart-layout {
+  display: contents;
+}
+
+.academic-home .biomarker-panel-head {
+  grid-column: 6 / -1;
+  grid-row: 1;
+  align-self: start;
+  padding: 26px 0 18px;
+  border-top: 1px solid #bdc9d2;
+}
+
+.academic-home .biomarker-panel-head em {
+  color: #637584;
+  background: transparent;
+}
+
+.academic-home .home-load-feedback {
+  grid-column: 6 / -1;
+  grid-row: 2;
+  margin-bottom: 14px;
+  border-radius: 12px;
+}
+
+.academic-home .biomarker-bar-section {
+  grid-column: 6 / -1;
+  grid-row: 3;
+  min-height: 490px;
+  padding-bottom: 30px;
+  border-bottom: 1px solid #d7e0e6;
+}
+
+.academic-home .frequency-plot {
+  background: #ffffff;
+}
+
+.academic-home .frequency-bar {
+  border-radius: 5px;
+}
+
+.academic-home .frequency-bar span {
+  height: 14px;
+  border-radius: 3px;
+  background: #e8eef3;
+}
+
+.academic-home .frequency-bar i {
+  border-radius: 3px;
+  background: #3c82b5;
+  box-shadow: none;
+}
+
+.academic-home .frequency-bar:hover i,
+.academic-home .frequency-bar:focus-visible i,
+.academic-home .frequency-bar.active i {
+  background: #0b5f9d;
+  box-shadow: none;
+  filter: none;
+}
+
+.academic-home .frequency-bar:hover,
+.academic-home .frequency-bar:focus-visible,
+.academic-home .frequency-bar.active {
+  background: #f5f8fa;
+}
+
+.academic-home .biomarker-filter-control select,
+.academic-home .biomarker-sort-control button,
+.academic-home .subclass-filter select {
+  border-radius: 6px;
+}
+
+.academic-home .biomarker-sort-control button.active {
+  background: #0b5f9d;
+  box-shadow: none;
+}
+
+.academic-home .biomarker-detail-section {
+  position: static;
+  grid-column: 1 / -1;
+  grid-row: 4;
+  max-height: none;
+  grid-template-columns: minmax(250px, 0.7fr) minmax(310px, 0.6fr) minmax(0, 1.7fr);
+  grid-template-rows: auto;
+  gap: clamp(28px, 4vw, 60px);
+  align-items: start;
+  margin-top: 52px;
+  padding: 42px 0 0;
+  border-top: 1px solid #bdc9d2;
+  overflow: visible;
+}
+
+.academic-home .biomarker-detail-section > header {
+  padding: 0;
+  border: 0;
+}
+
+.academic-home .biomarker-detail-section > header strong {
+  font-size: clamp(26px, 2.6vw, 38px);
+  letter-spacing: -0.04em;
+}
+
+.academic-home .line-stat-grid {
+  grid-template-columns: 1fr;
+  gap: 0;
+  border-top: 1px solid #c5d2d7;
+}
+
+.academic-home .line-stat-grid article {
+  min-height: 70px;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  padding: 10px 0;
+  border: 0;
+  border-bottom: 1px solid #c5d2d7;
+  background: transparent;
+}
+
+.academic-home .line-stat-grid article strong {
+  font-variant-numeric: tabular-nums;
+  font-size: 22px;
+}
+
+.academic-home .detail-bar-shell {
+  min-width: 0;
+}
+
+.academic-home .detail-column-bar > strong {
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.academic-home .detail-column-bar > div {
+  border-radius: 4px 4px 0 0;
+  background: #eef3f6;
+  box-shadow: none;
+}
+
+.academic-home .detail-column-bar i {
+  border-radius: 4px 4px 0 0;
+  background: #3c82b5;
+  box-shadow: none;
+}
+
+.academic-home .upload-workspace,
+.academic-home .updates-section {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 92px clamp(22px, 4.5vw, 72px);
+  background: transparent;
+}
+
+.academic-home .upload-panel,
+.academic-home .review-panel {
+  border-color: #c5d2d7;
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.academic-home .updates-section {
+  border-top: 1px solid #bdc9d2;
+}
+
+.academic-home .updates-section .section-kicker {
+  display: none;
+}
+
+.academic-home .updates-section .section-heading {
+  max-width: 820px;
+  margin-bottom: 46px;
+}
+
+.academic-home .updates-section .section-heading h2 {
+  color: #0b1f33;
+  font-size: clamp(30px, 3.4vw, 48px);
+  font-weight: 710;
+  letter-spacing: -0.043em;
+}
+
+.academic-home .update-list {
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+
+.academic-home .update-list article {
+  grid-template-columns: minmax(120px, 0.24fr) minmax(0, 1.76fr);
+  gap: 34px;
+  padding: 28px 0;
+  border: 0;
+  border-top: 1px solid #c5d2d7;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.academic-home .academic-site-footer {
+  max-width: 1440px;
+  display: block;
+  margin: 0 auto;
+  padding: 0 clamp(22px, 4.5vw, 72px);
+  border-top: 1px solid #bdc9d2;
+  color: #0b1f33;
+  background: #ffffff;
+}
+
+.academic-footer-main {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.5fr) minmax(170px, 0.72fr) minmax(150px, 0.62fr) minmax(
+      230px,
+      0.9fr
+    );
+  gap: clamp(30px, 5vw, 76px);
+  padding: 52px 0 46px;
+}
+
+.academic-footer-brand {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-content: start;
+  align-items: center;
+  gap: 3px 12px;
+}
+
+.academic-footer-brand strong,
+.academic-footer-main nav > strong,
+.academic-footer-scope > strong {
+  color: #0b1f33;
+  font-size: 14px;
+  font-weight: 740;
+}
+
+.academic-footer-brand small {
+  display: block;
+  margin-top: 3px;
+  color: #71818f;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.academic-footer-brand p {
+  grid-column: 1 / -1;
+  max-width: 37em;
+  margin: 20px 0 0;
+  color: #607280;
+  font-size: 12px;
+  line-height: 1.72;
+}
+
+.academic-footer-main nav,
+.academic-footer-scope {
+  display: grid;
+  align-content: start;
+  justify-content: stretch;
+  gap: 11px;
+}
+
+.academic-footer-main nav > strong,
+.academic-footer-scope > strong {
+  margin-bottom: 5px;
+}
+
+.academic-home .academic-footer-main a {
+  color: #5b6d7c;
+  font-size: 12px;
+  font-weight: 580;
+  line-height: 1.5;
+  text-decoration: none;
+}
+
+.academic-home .academic-footer-main a:hover,
+.academic-home .academic-footer-main a:focus-visible {
+  color: #0b5f9d;
+  outline: none;
+}
+
+.academic-footer-scope p {
+  margin: 0;
+  color: #607280;
+  font-size: 12px;
+  line-height: 1.72;
+}
+
+.academic-footer-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 0 24px;
+  border-top: 1px solid #e0e7ec;
+}
+
+.academic-home .academic-footer-bottom small {
+  color: #7a8996;
+  font-size: 10px;
+}
+
+@media (max-width: 980px) {
+  .academic-home .academic-evidence-heading {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .academic-home .visual-grid {
+    grid-template-columns: 1fr;
+    gap: 42px;
+  }
+
+  .academic-home .biomarker-panel-head,
+  .academic-home .home-load-feedback,
+  .academic-home .biomarker-bar-section,
+  .academic-home .biomarker-detail-section {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .academic-home .biomarker-detail-section {
+    grid-template-columns: 1fr;
+    gap: 30px;
+    margin-top: 4px;
+  }
+
+  .academic-home .line-stat-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .academic-home .line-stat-grid article {
+    min-height: 84px;
+    display: grid;
+    grid-template-columns: 1fr;
+    padding: 12px;
+    border: 1px solid #c5d2d7;
+  }
+
+  .academic-footer-main {
+    grid-template-columns: minmax(280px, 1.4fr) repeat(2, minmax(150px, 0.7fr));
+  }
+
+  .academic-footer-scope {
+    grid-column: 1 / -1;
+    padding-top: 24px;
+    border-top: 1px solid #e0e7ec;
+  }
+}
+
+@media (max-width: 620px) {
+  .academic-home .academic-evidence-section {
+    padding-inline: 20px;
+  }
+
+  .academic-home .biomarker-panel-head {
+    grid-template-columns: 1fr;
+  }
+
+  .academic-home .line-stat-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .academic-home .update-list article {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .academic-footer-main {
+    grid-template-columns: 1fr 1fr;
+    gap: 34px 24px;
+    padding-block: 42px 36px;
+  }
+
+  .academic-footer-brand,
+  .academic-footer-scope {
+    grid-column: 1 / -1;
+  }
+
+  .academic-footer-scope {
+    padding-top: 22px;
+  }
+
+  .academic-footer-bottom {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .academic-home .frequency-bar,
+  .academic-home .frequency-bar i {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* Academic home v2: pure white Swiss evidence layout. */
+.academic-home {
+  --academic-ink: #0b1f33;
+  --academic-muted: #56697a;
+  --academic-accent: #0b5f9d;
+  --academic-line: #d7e0e6;
+  --academic-soft: #f6f9fc;
+  color: var(--academic-ink);
+  background: #fff;
+  font-family: var(--academic-font, 'Microsoft YaHei', '微软雅黑', Arial, sans-serif);
+}
+
+.academic-home .evidence-chart-section {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding-inline: clamp(22px, 4.5vw, 72px);
+  background: #fff;
+}
+
+.academic-home .academic-evidence-heading h2 {
+  margin: 0;
+  color: var(--academic-ink);
+  font-weight: 680;
+  letter-spacing: -0.04em;
+  line-height: 1.12;
+}
+
+.academic-home .academic-evidence-heading p {
+  margin: 0;
+  color: var(--academic-muted);
+  line-height: 1.65;
+}
+
+.academic-home .evidence-chart-section {
+  padding-top: 66px;
+  padding-bottom: 80px;
+}
+
+.academic-home .academic-evidence-heading {
+  max-width: 760px;
+  display: block;
+  margin-bottom: 30px;
+  padding-top: 16px;
+  border-top: 1px solid #bdc9d2;
+}
+
+.academic-home .academic-evidence-heading h2 {
+  font-size: clamp(31px, 3.5vw, 48px);
+}
+
+.academic-home .academic-evidence-heading p {
+  max-width: 44em;
+  margin-top: 14px;
+  font-size: 15px;
+}
+
+.academic-home .biomarker-chart-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  border: 1px solid var(--academic-line);
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.academic-home .biomarker-panel-head {
+  grid-column: auto;
+  grid-row: auto;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 28px;
+  margin: 0;
+  padding: 20px 22px;
+  border: 0;
+  border-bottom: 1px solid var(--academic-line);
+  background: #fff;
+}
+
+.academic-home .biomarker-panel-head > div:first-child {
+  min-width: 170px;
+  display: grid;
+  gap: 5px;
+}
+
+.academic-home .biomarker-panel-head strong {
+  color: var(--academic-ink);
+  font-size: 18px;
+  font-weight: 680;
+}
+
+.academic-home .biomarker-panel-head em {
+  color: #677988;
+  background: transparent;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 560;
+}
+
+.academic-home .joint-chart-toolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+.academic-home .biomarker-filter-control,
+.academic-home .biomarker-sort-control,
+.academic-home .subclass-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #687b8b;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.academic-home .biomarker-filter-control > span,
+.academic-home .biomarker-sort-control > span,
+.academic-home .subclass-filter > span {
+  color: #687b8b;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.academic-home .biomarker-filter-control select,
+.academic-home .subclass-filter select {
+  width: auto;
+  max-width: 210px;
+  height: 34px;
+  padding: 0 30px 0 10px;
+  border: 1px solid #cbd7df;
+  border-radius: 7px;
+  color: var(--academic-ink);
+  background: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.academic-home .biomarker-sort-control button {
+  min-width: 46px;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid #d4dee5;
+  border-radius: 7px;
+  color: #4e6475;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 650;
+  box-shadow: none;
+}
+
+.academic-home .biomarker-sort-control button:hover,
+.academic-home .biomarker-sort-control button:focus-visible {
+  color: var(--academic-accent);
+  border-color: #8eabc1;
+  background: #f6f9fc;
+  outline: none;
+}
+
+.academic-home .biomarker-sort-control button.active {
+  color: #fff;
+  border-color: var(--academic-accent);
+  background: var(--academic-accent);
+  box-shadow: none;
+}
+
+.academic-home .home-load-feedback {
+  grid-column: auto;
+  grid-row: auto;
+  margin: 16px 22px 0;
+  border-color: #cbd7df;
+  border-radius: 8px;
+  color: #40586b;
+  background: #f6f9fc;
+}
+
+.academic-home .biomarker-chart-layout {
+  grid-column: auto;
+  grid-row: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 0;
+  align-items: stretch;
+}
+
+.academic-home .biomarker-bar-section,
+.academic-home .biomarker-detail-section {
+  grid-column: auto;
+  grid-row: auto;
+  min-width: 0;
+  min-height: 600px;
+  padding: 22px;
+  background: #fff;
+}
+
+.academic-home .biomarker-detail-section {
+  position: static;
+  top: auto;
+  max-height: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  align-self: stretch;
+  gap: 16px;
+  margin-top: 0;
+  overflow: hidden;
+  border-top: 0;
+  border-left: 1px solid var(--academic-line);
+}
+
+.academic-home .chart-column-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  padding: 0 0 13px;
+  border: 0;
+  border-bottom: 1px solid #e3e9ed;
+}
+
+.academic-home .chart-column-heading strong {
+  min-width: 0;
+  color: var(--academic-ink);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.academic-home .chart-column-heading span {
+  color: #71818f;
+  font-size: 10px;
+  font-weight: 560;
+  text-align: right;
+}
+
+.academic-home .frequency-chart-shell {
+  gap: 8px;
+}
+
+.academic-home .frequency-x-axis {
+  padding-right: 42px;
+  padding-left: clamp(120px, 36%, 178px);
+  color: #7a8996;
+  font-size: 10px;
+  font-weight: 580;
+}
+
+.academic-home .frequency-plot {
+  gap: 7px;
+  background: #fff;
+}
+
+.academic-home .frequency-bar {
+  min-height: 34px;
+  grid-template-columns: minmax(110px, 0.38fr) minmax(0, 1fr) 38px;
+  gap: 9px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  transform: none;
+}
+
+.academic-home .frequency-bar strong {
+  overflow: hidden;
+  color: #53697a;
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.academic-home .frequency-bar span {
+  height: 12px;
+  border-radius: 3px;
+  background: #e8eef3;
+}
+
+.academic-home .frequency-bar i {
+  border-radius: 3px;
+  background: #3c82b5;
+  box-shadow: none;
+}
+
+.academic-home .frequency-bar i::after {
+  display: none;
+}
+
+.academic-home .frequency-bar:hover,
+.academic-home .frequency-bar:focus-visible,
+.academic-home .frequency-bar.active {
+  background: #f5f8fa;
+  transform: none;
+}
+
+.academic-home .frequency-bar:hover i,
+.academic-home .frequency-bar:focus-visible i,
+.academic-home .frequency-bar.active i {
+  background: var(--academic-accent);
+  filter: none;
+  box-shadow: none;
+}
+
+.academic-home .frequency-bar em {
+  color: #314b60;
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.academic-home .line-stat-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  border-top: 1px solid var(--academic-line);
+  border-bottom: 1px solid var(--academic-line);
+}
+
+.academic-home .line-stat-grid article {
+  min-height: 72px;
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border: 0;
+  border-right: 1px solid var(--academic-line);
+  border-radius: 0;
+  background: #fff;
+}
+
+.academic-home .line-stat-grid article:last-child {
+  border-right: 0;
+}
+
+.academic-home .line-stat-grid span {
+  color: #71818f;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.academic-home .line-stat-grid strong {
+  color: var(--academic-ink);
+  font-size: 21px;
+  font-weight: 660;
+  font-variant-numeric: tabular-nums;
+}
+
+.academic-home .detail-bar-shell {
+  min-height: 0;
+  gap: 10px;
+  animation: trend-chart-enter 0.36s ease both;
+}
+
+.academic-home .detail-chart-head {
+  align-items: baseline;
+}
+
+.academic-home .detail-chart-head span,
+.academic-home .detail-chart-head em {
+  color: #687b8b;
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.academic-home .detail-column-plot {
+  height: 350px;
+  border-bottom-color: var(--academic-line);
+}
+
+.academic-home .detail-column-bar > strong {
+  border-color: #d7e0e6;
+  border-radius: 5px;
+  color: #29445a;
+  box-shadow: none;
+}
+
+.academic-home .detail-column-bar > div {
+  border-radius: 4px 4px 0 0;
+  background: #eef3f6;
+  box-shadow: none;
+}
+
+.academic-home .detail-column-bar i {
+  border-radius: 4px 4px 0 0;
+  background: #3c82b5;
+  box-shadow: none;
+}
+
+.academic-home .auth-card {
+  border-color: #cbd7df;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 24px 62px rgba(11, 31, 51, 0.18);
+}
+
+.academic-home .auth-header h2 {
+  color: var(--academic-ink);
+  font-weight: 680;
+}
+
+.academic-home .auth-submit {
+  background: var(--academic-accent);
+  box-shadow: none;
+}
+
+.academic-home .action-links {
+  justify-content: space-between;
+}
+
+.academic-home .action-links button {
+  color: var(--academic-accent);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+@media (max-width: 980px) {
+  .academic-home .biomarker-panel-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .academic-home .joint-chart-toolbar {
+    justify-content: flex-start;
+  }
+
+  .academic-home .biomarker-chart-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .academic-home .biomarker-bar-section,
+  .academic-home .biomarker-detail-section {
+    min-height: 0;
+  }
+
+  .academic-home .biomarker-detail-section {
+    border-top: 1px solid var(--academic-line);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .academic-home .evidence-chart-section {
+    padding-inline: 20px;
+  }
+
+  .academic-home .biomarker-panel-head,
+  .academic-home .biomarker-bar-section,
+  .academic-home .biomarker-detail-section {
+    padding: 18px;
+  }
+
+  .academic-home .joint-chart-toolbar {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .academic-home .biomarker-filter-control,
+  .academic-home .subclass-filter {
+    display: grid;
+    grid-template-columns: 46px minmax(0, 1fr);
+  }
+
+  .academic-home .biomarker-filter-control select,
+  .academic-home .subclass-filter select {
+    width: 100%;
+    max-width: none;
+  }
+
+  .academic-home .biomarker-sort-control {
+    flex-wrap: wrap;
+  }
+
+  .academic-home .chart-column-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .academic-home .chart-column-heading span {
+    text-align: left;
+  }
+
+  .academic-home .frequency-plot {
+    min-width: 520px;
+  }
+
+  .academic-home .frequency-x-axis {
+    min-width: 520px;
+  }
+
+  .academic-home .line-stat-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .academic-home .line-stat-grid article {
+    min-height: 70px;
+    padding-inline: 9px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .academic-home .detail-bar-shell,
+  .academic-home .frequency-bar,
+  .academic-home .frequency-bar i {
+    animation: none;
+    transition: none;
+  }
+}
+</style>
+
+<style scoped>
+/* Authentication surface: calm institutional hierarchy with a clear modal layer. */
+.auth-overlay {
+  z-index: 2400;
+  padding: 28px;
+  background: rgba(8, 25, 38, 0.58);
+  backdrop-filter: blur(10px) saturate(0.86);
+  -webkit-backdrop-filter: blur(10px) saturate(0.86);
+}
+
+.auth-card {
+  position: relative;
+  width: min(560px, 100%);
+  max-height: min(760px, calc(100dvh - 56px));
+  padding: 38px 42px 34px;
+  overflow: auto;
+  border: 1px solid rgba(207, 221, 230, 0.96);
+  border-radius: 10px;
+  outline: none;
+  background: rgba(255, 255, 255, 0.985);
+  box-shadow: 0 24px 70px rgba(5, 25, 39, 0.28);
+}
+
+.auth-card::before {
+  position: absolute;
+  top: 0;
+  right: 42px;
+  left: 42px;
+  height: 3px;
+  content: '';
+  background: #0b5f9d;
+}
+
+.close-button {
+  top: 18px;
+  right: 18px;
+  width: 36px;
+  height: 36px;
+  border-color: #d4e0e7;
+  border-radius: 10px;
+  color: #718391;
+  background: #f7fafc;
+  font-size: 20px;
+}
+
+.close-button:hover,
+.close-button:focus-visible {
+  border-color: #a9c1d2;
+  color: #173247;
+  outline: none;
+  background: #edf4f8;
+  box-shadow: 0 0 0 3px rgba(11, 95, 157, 0.1);
+}
+
+.auth-header {
+  gap: 9px;
+  margin-bottom: 28px;
+  padding-right: 52px;
+}
+
+.auth-header :deep(.site-emblem) {
+  margin-bottom: 7px;
+}
+
+.auth-header h2,
+.academic-home .auth-header h2 {
+  color: #102c42;
+  font-size: clamp(26px, 3vw, 30px);
+  font-weight: 690;
+  letter-spacing: -0.035em;
+  line-height: 1.18;
+}
+
+.auth-header p {
+  max-width: 42ch;
+  color: #667c8b;
+  font-size: 14px;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+.auth-form {
+  gap: 18px;
+}
+
+.auth-fields {
+  gap: 18px;
+}
+
+.auth-form label {
+  gap: 8px;
+  color: #29475b;
+  font-size: 13px;
+  font-weight: 680;
+}
+
+.auth-form input {
+  height: 50px;
+  padding: 0 15px;
+  border-color: #c9d7e0;
+  border-radius: 10px;
+  color: #173247;
+  background: #ffffff;
+  font-size: 15px;
+}
+
+.auth-form input::placeholder {
+  color: #8b9ca8;
+  opacity: 1;
+  transition: opacity 140ms ease;
+}
+
+.auth-form input:focus::placeholder {
+  opacity: 0;
+}
+
+.auth-form input:focus,
+.password-field:focus-within {
+  border-color: #317bad;
+  box-shadow: 0 0 0 4px rgba(11, 95, 157, 0.11);
+}
+
+.password-field {
+  grid-template-columns: minmax(0, 1fr) 48px;
+  border-color: #c9d7e0;
+  border-radius: 10px;
+}
+
+.password-field input {
+  border-radius: 10px 0 0 10px;
+}
+
+.password-field button {
+  min-height: 48px;
+  border-left: 0;
+  border-radius: 8px;
+  color: #708594;
+  transition:
+    color 160ms ease,
+    background 160ms ease;
+}
+
+.password-field button:hover,
+.password-field button:focus-visible {
+  color: #245f8e;
+  outline: none;
+  background: #edf4f8;
+}
+
+.eye-icon {
+  width: 18px;
+  height: 11px;
+  border-width: 1.4px;
+  border-radius: 55% / 70%;
+}
+
+.eye-icon i {
+  top: 2.6px;
+  left: 6.1px;
+  width: 3.5px;
+  height: 3.5px;
+}
+
+.eye-icon::after {
+  right: -2px;
+  left: -2px;
+  top: 4px;
+  height: 1.4px;
+  box-shadow: 0 0 0 1.5px #ffffff;
+  transform: rotate(-34deg);
+  transition: opacity 140ms ease;
+}
+
+.auth-submit,
+.academic-home .auth-submit {
+  min-height: 52px;
+  border-radius: 10px;
+  background: #0b5f9d;
+  box-shadow: none;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.auth-submit:hover,
+.auth-submit:focus-visible {
+  outline: none;
+  background: #0d568f;
+  box-shadow: 0 0 0 4px rgba(11, 95, 157, 0.1);
+}
+
+.auth-submit:active {
+  transform: translateY(1px) scale(0.995);
+}
+
+.action-links {
+  justify-content: space-between;
+  gap: 12px 20px;
+  padding-top: 2px;
+}
+
+.action-links button,
+.academic-home .action-links button {
+  min-height: 32px;
+  padding: 0;
+  border-radius: 0;
+  color: #24638f;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.action-links button:hover,
+.action-links button:focus-visible {
+  color: #0b3f68;
+  outline: none;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.auth-modal-enter-active,
+.auth-modal-leave-active {
+  transition: opacity 280ms ease;
+}
+
+.auth-modal-enter-active .auth-card,
+.auth-modal-leave-active .auth-card {
+  transition:
+    opacity 260ms ease,
+    transform 380ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.auth-modal-enter-from,
+.auth-modal-leave-to,
+.auth-modal-enter-from .auth-card,
+.auth-modal-leave-to .auth-card {
+  opacity: 0;
+}
+
+.auth-modal-enter-from .auth-card {
+  transform: translateY(22px) scale(0.965);
+}
+
+.auth-modal-leave-to .auth-card {
+  transform: translateY(12px) scale(0.985);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .auth-overlay {
+    background: rgba(8, 25, 38, 0.78);
+  }
+}
+
+@media (max-width: 600px) {
+  .auth-overlay {
+    align-items: end;
+    padding: 14px;
+  }
+
+  .auth-card {
+    width: 100%;
+    max-height: calc(100dvh - 28px);
+    padding: 30px 22px 24px;
+    border-radius: 10px;
+  }
+
+  .auth-card::before {
+    right: 22px;
+    left: 22px;
+  }
+
+  .auth-header {
+    margin-bottom: 22px;
+    padding-right: 42px;
+  }
+
+  .auth-header h2,
+  .academic-home .auth-header h2 {
+    font-size: 25px;
+  }
+
+  .auth-form input {
+    height: 48px;
+  }
+
+  .auth-submit,
+  .academic-home .auth-submit {
+    min-height: 50px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-modal-enter-active,
+  .auth-modal-leave-active,
+  .auth-modal-enter-active .auth-card,
+  .auth-modal-leave-active .auth-card,
+  .auth-form input::placeholder,
+  .password-field button,
+  .eye-icon::after {
+    transition: none;
+  }
+}
+</style>
+
+<style scoped>
+/* Keep the sharp homepage radius contract authoritative after legacy layers. */
+.academic-home .biomarker-chart-panel,
+.academic-home .biomarker-filter-control select,
+.academic-home .subclass-filter select,
+.academic-home .biomarker-sort-control button,
+.academic-home .home-load-feedback,
+.academic-home .frequency-bar,
+.academic-home .frequency-bar span,
+.academic-home .frequency-bar i,
+.academic-home .detail-column-bar > strong,
+.academic-home .detail-column-bar > div,
+.academic-home .detail-column-bar i {
+  border-radius: 0;
+}
+</style>
+
+<style scoped>
+/* Light scientific homepage: sharp structure, restrained viewport motion. */
+:global(.home-reveal) {
+  opacity: 0;
+  transform: translateY(20px);
+  transition:
+    opacity 600ms cubic-bezier(0.22, 1, 0.36, 1) var(--home-reveal-delay, 0ms),
+    transform 600ms cubic-bezier(0.22, 1, 0.36, 1) var(--home-reveal-delay, 0ms);
+}
+
+:global(.home-reveal.is-revealed) {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+:global(.academic-modules.home-reveal .academic-module) {
+  opacity: 0;
+  transform: translateY(14px);
+  transition:
+    opacity 520ms ease,
+    transform 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 200ms ease,
+    box-shadow 200ms ease;
+}
+
+:global(.academic-modules.home-reveal.is-revealed .academic-module) {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+:global(.academic-modules.home-reveal.is-revealed .academic-module:nth-child(2)) {
+  transition-delay: 100ms;
+}
+
+:global(.academic-modules.home-reveal.is-revealed .academic-module:nth-child(3)) {
+  transition-delay: 200ms;
+}
+
+.academic-home .evidence-chart-section {
+  position: relative;
+  max-width: 1200px;
+  isolation: isolate;
+  background: linear-gradient(180deg, #edf3f6 0%, #f2f6f8 55%, #eef4f6 100%);
+  box-shadow: 0 0 0 100vmax #edf3f6;
+  clip-path: inset(0 -100vmax);
+}
+
+.academic-home .evidence-chart-section::before {
+  position: absolute;
+  top: -42px;
+  right: -100vw;
+  left: -100vw;
+  z-index: -1;
+  height: 72px;
+  content: '';
+  background: linear-gradient(180deg, rgba(237, 243, 246, 0) 0, #edf3f6 100%);
+  pointer-events: none;
+}
+
+.academic-home .evidence-chart-section::after {
+  display: none;
+}
+
+.academic-home .academic-evidence-heading {
+  padding-top: 22px;
+}
+
+.academic-home .biomarker-chart-panel {
+  border-radius: 0;
+  box-shadow: 0 10px 30px rgba(29, 65, 87, 0.055);
+}
+
+.academic-home .biomarker-filter-control select,
+.academic-home .subclass-filter select,
+.academic-home .biomarker-sort-control button,
+.academic-home .home-load-feedback,
+.academic-home .frequency-bar,
+.academic-home .frequency-bar span,
+.academic-home .frequency-bar i,
+.academic-home .detail-column-bar > strong,
+.academic-home .detail-column-bar > div,
+.academic-home .detail-column-bar i {
+  border-radius: 0;
+}
+
+.academic-home :deep(.academic-analysis-submenu),
+.academic-home :deep(.academic-analysis-submenu a),
+.academic-home :deep(.platform-menu-button),
+.academic-home :deep(.platform-navigation),
+.academic-home :deep(.platform-navigation a),
+.academic-home :deep(.platform-home-guide-button) {
+  border-radius: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :global(.home-reveal),
+  :global(.academic-modules.home-reveal .academic-module) {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+</style>
+
+<style scoped>
+/* Final v3 ordering overrides. Kept separate so the latest academic layer remains authoritative. */
+.route-anchor-sentinel {
+  display: block;
+  width: 1px;
+  height: 0;
+  overflow: hidden;
+  scroll-margin-top: 92px;
+}
+
+.academic-home .evidence-chart-section {
+  padding-top: 42px;
+  padding-bottom: 72px;
+  scroll-margin-top: 92px;
+}
+
+.academic-home .academic-evidence-heading {
+  max-width: 700px;
+  margin-bottom: 24px;
+  border-top: 0;
+}
+
+.academic-home .academic-evidence-heading h2 {
+  font-size: clamp(29px, 3vw, 41px);
+}
+
+.academic-home .biomarker-chart-panel {
+  border-radius: 0;
+}
+
+.academic-home .frequency-bar i {
+  background: var(--bar-color, #21669a);
+  opacity: 1;
+}
+
+.academic-home .frequency-bar:hover i,
+.academic-home .frequency-bar:focus-visible i,
+.academic-home .frequency-bar.active i {
+  background: var(--bar-color, #21669a);
+  opacity: 1;
+  filter: saturate(1.12) brightness(0.88);
+}
+
+.academic-home .detail-column-bar i {
+  background: var(--detail-color, #21669a);
+  opacity: 1;
+}
+
+.academic-home .detail-column-bar:hover i,
+.academic-home .detail-column-bar:focus-within i {
+  opacity: 1;
+  filter: saturate(1.1) brightness(0.9);
+}
+
+@media (max-width: 620px) {
+  .academic-home .evidence-chart-section {
+    padding-top: 34px;
+    padding-bottom: 58px;
+  }
+}
+</style>
+
+<style scoped>
+/* Continuous scientific canvas and final homepage motion layer. */
+.academic-home {
+  position: relative;
+  isolation: isolate;
+  overflow: clip;
+  background: linear-gradient(180deg, #ffffff 0, #f8fbfc 37%, #f4f9fa 72%, #ffffff 100%);
+}
+
+.academic-home :deep(.academic-intro-stage) {
+  background: #fff;
+}
+
+.academic-home :deep(.academic-intro-stage::after) {
+  display: none;
+}
+
+.academic-home .evidence-chart-section {
+  position: relative;
+  max-width: 1200px;
+  padding-right: clamp(20px, 3vw, 40px);
+  padding-left: clamp(20px, 3vw, 40px);
+  padding-top: 88px;
+  padding-bottom: 96px;
+  background: transparent;
+  box-shadow: none;
+  clip-path: none;
+}
+
+.academic-home .evidence-chart-section::before {
+  top: 0;
+  right: clamp(20px, 3vw, 40px);
+  left: clamp(20px, 3vw, 40px);
+  z-index: 0;
+  width: auto;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(94, 128, 147, 0.34) 14%,
+    rgba(94, 128, 147, 0.34) 86%,
+    transparent
+  );
+}
+
+.academic-home .academic-evidence-heading {
+  position: relative;
+  z-index: 1;
+  max-width: 820px;
+  margin-bottom: 34px;
+  padding-top: 0;
+}
+
+.academic-home .academic-evidence-heading h2 {
+  font-size: clamp(40px, 4.25vw, 52px);
+  line-height: 1.08;
+  letter-spacing: -0.052em;
+}
+
+.academic-home .biomarker-chart-panel {
+  position: relative;
+  z-index: 1;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 24px 72px rgba(19, 57, 78, 0.08);
+}
+
+:global(.home-reveal) {
+  opacity: 0;
+  transform: translateY(24px);
+  transition:
+    opacity 650ms cubic-bezier(0.22, 1, 0.36, 1) var(--home-reveal-delay, 0ms),
+    transform 650ms cubic-bezier(0.22, 1, 0.36, 1) var(--home-reveal-delay, 0ms);
+}
+
+:global(.academic-modules.home-reveal .academic-modules-heading),
+:global(.academic-modules.home-reveal .academic-module-copy),
+:global(.academic-modules.home-reveal .academic-module-visual) {
+  opacity: 0;
+  transform: translateY(18px);
+  clip-path: inset(0 4% 0 4%);
+}
+
+:global(.academic-modules.home-reveal.is-revealed .academic-modules-heading),
+:global(.academic-modules.home-reveal.is-revealed .academic-module-copy),
+:global(.academic-modules.home-reveal.is-revealed .academic-module-visual) {
+  opacity: 1;
+  transform: translateY(0);
+  clip-path: inset(0);
+  transition:
+    opacity 650ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 650ms cubic-bezier(0.22, 1, 0.36, 1),
+    clip-path 720ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:global(.academic-modules.home-reveal.is-revealed .academic-module::before) {
+  transform: scaleX(1);
+}
+
+:global(.academic-modules.home-reveal.is-revealed .academic-module-copy) {
+  transition-delay: 80ms;
+}
+
+:global(.academic-modules.home-reveal.is-revealed .academic-module-visual) {
+  transition-delay: 160ms;
+}
+
+@media (max-width: 720px) {
+  .academic-home .evidence-chart-section {
+    padding-top: 62px;
+    padding-bottom: 68px;
+  }
+
+  .academic-home .academic-evidence-heading h2 {
+    font-size: clamp(30px, 9vw, 34px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :global(.home-reveal),
+  :global(.academic-modules.home-reveal .academic-modules-heading),
+  :global(.academic-modules.home-reveal .academic-module-copy),
+  :global(.academic-modules.home-reveal .academic-module-visual) {
+    opacity: 1;
+    transform: none;
+    clip-path: none;
+    transition: none;
+  }
+}
+</style>
+
+<style scoped>
+/* Evidence workspace refinement: open layout, balanced type and animated reordering. */
+.academic-home .biomarker-chart-panel {
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.academic-home .biomarker-panel-head {
+  position: relative;
+  align-items: center;
+  gap: 28px;
+  padding: 0 0 25px 18px;
+  border-bottom: 1px solid rgba(113, 143, 160, 0.32);
+  background: transparent;
+}
+
+.academic-home .biomarker-panel-head::before {
+  position: absolute;
+  top: 2px;
+  bottom: 25px;
+  left: 0;
+  width: 3px;
+  content: '';
+  background: linear-gradient(180deg, #2378a8, #2f9a80);
+}
+
+.academic-home .biomarker-panel-head > div:first-child {
+  min-width: 210px;
+  gap: 7px;
+}
+
+.academic-home .biomarker-panel-head strong {
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.academic-home .biomarker-panel-head em {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.academic-home .joint-chart-toolbar {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) auto minmax(210px, 1fr);
+  align-items: center;
+  justify-content: end;
+  gap: 12px;
+}
+
+.academic-home .biomarker-filter-control,
+.academic-home .biomarker-sort-control,
+.academic-home .subclass-filter {
+  min-width: 0;
+  gap: 7px;
+}
+
+.academic-home .biomarker-filter-control > span,
+.academic-home .biomarker-sort-control > span,
+.academic-home .subclass-filter > span {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.academic-home .biomarker-filter-control select,
+.academic-home .subclass-filter select {
+  width: 100%;
+  max-width: none;
+  height: 38px;
+  background-color: rgba(255, 255, 255, 0.72);
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease;
+}
+
+.academic-home .biomarker-sort-control {
+  display: grid;
+  grid-template-columns: auto repeat(3, minmax(48px, auto));
+  gap: 4px;
+}
+
+.academic-home .biomarker-sort-control button {
+  min-width: 50px;
+  height: 38px;
+  transition:
+    color 180ms ease,
+    border-color 180ms ease,
+    background-color 180ms ease,
+    transform 180ms ease;
+}
+
+.academic-home .biomarker-sort-control button:active {
+  transform: translateY(1px);
+}
+
+.academic-home .biomarker-sort-control button.active {
+  border-color: #2b816f;
+  background: #2b816f;
+  animation: evidence-sort-select 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.academic-home .biomarker-chart-layout {
+  position: relative;
+  gap: 28px;
+  padding-top: 28px;
+  background: transparent;
+}
+
+.academic-home .biomarker-chart-layout::after {
+  position: absolute;
+  top: 50%;
+  left: calc(41.666% + 1px);
+  width: 25px;
+  height: 1px;
+  content: '';
+  background: linear-gradient(90deg, rgba(48, 124, 111, 0.16), rgba(48, 124, 111, 0.6));
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.academic-home .biomarker-bar-section,
+.academic-home .biomarker-detail-section {
+  min-height: 580px;
+  padding: 26px;
+  border: 0;
+  border-top: 1px solid rgba(113, 143, 160, 0.28);
+  background:
+    linear-gradient(180deg, rgba(246, 250, 251, 0.78), rgba(255, 255, 255, 0.48)),
+    rgba(255, 255, 255, 0.34);
+  box-shadow: 0 18px 52px rgba(23, 62, 83, 0.035);
+}
+
+.academic-home .biomarker-detail-section {
+  position: relative;
+  border-left: 0;
+}
+
+.academic-home .biomarker-detail-section::before {
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 86px;
+  height: 2px;
+  content: '';
+  background: linear-gradient(90deg, #2f8f79, rgba(47, 143, 121, 0));
+}
+
+.academic-home .chart-column-heading {
+  min-height: 52px;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+}
+
+.academic-home .chart-column-heading strong {
+  max-width: 68%;
+  overflow-wrap: anywhere;
+  font-size: clamp(18px, 1.6vw, 24px);
+  line-height: 1.28;
+  letter-spacing: -0.025em;
+}
+
+.academic-home .biomarker-detail-section > .chart-column-heading strong {
+  font-size: clamp(21px, 1.85vw, 28px);
+  letter-spacing: -0.03em;
+}
+
+.academic-home .chart-column-heading span {
+  max-width: 44%;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.academic-home .frequency-plot {
+  position: relative;
+}
+
+.academic-home .frequency-bar {
+  transition:
+    transform 480ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 180ms ease;
+}
+
+:global(.frequency-reorder-move) {
+  transition: transform 480ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:global(.frequency-reorder-enter-active),
+:global(.frequency-reorder-leave-active) {
+  transition:
+    opacity 260ms ease,
+    transform 360ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:global(.frequency-reorder-enter-from),
+:global(.frequency-reorder-leave-to) {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+:global(.evidence-detail-enter-active),
+:global(.evidence-detail-leave-active) {
+  transition:
+    opacity 230ms ease,
+    transform 360ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:global(.evidence-detail-enter-from) {
+  opacity: 0;
+  transform: translateX(16px);
+}
+
+:global(.evidence-detail-leave-to) {
+  opacity: 0;
+  transform: translateX(-8px);
+}
+
+@keyframes evidence-sort-select {
+  0% {
+    transform: scale(0.96);
+  }
+  64% {
+    transform: scale(1.035);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (max-width: 1120px) {
+  .academic-home .biomarker-panel-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .academic-home .joint-chart-toolbar {
+    width: 100%;
+    grid-template-columns: minmax(190px, 1fr) auto minmax(210px, 1fr);
+    justify-content: stretch;
+  }
+}
+
+@media (max-width: 980px) {
+  .academic-home .biomarker-chart-layout {
+    gap: 22px;
+  }
+
+  .academic-home .biomarker-chart-layout::after {
+    display: none;
+  }
+
+  .academic-home .biomarker-detail-section {
+    border-top: 1px solid rgba(113, 143, 160, 0.28);
+  }
+}
+
+@media (max-width: 700px) {
+  .academic-home .biomarker-panel-head {
+    padding-left: 14px;
+  }
+
+  .academic-home .joint-chart-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .academic-home .biomarker-sort-control {
+    grid-template-columns: 46px repeat(3, 1fr);
+  }
+
+  .academic-home .biomarker-bar-section,
+  .academic-home .biomarker-detail-section {
+    min-height: 0;
+    padding: 20px 16px;
+  }
+
+  .academic-home .chart-column-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    min-height: 0;
+    gap: 6px;
+  }
+
+  .academic-home .chart-column-heading strong,
+  .academic-home .chart-column-heading span {
+    max-width: 100%;
+    text-align: left;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .academic-home .frequency-bar,
+  .academic-home .biomarker-sort-control button.active,
+  :global(.frequency-reorder-move),
+  :global(.frequency-reorder-enter-active),
+  :global(.frequency-reorder-leave-active),
+  :global(.evidence-detail-enter-active),
+  :global(.evidence-detail-leave-active) {
+    transition: none;
+    animation: none;
+  }
+}
+</style>
+
+<style scoped>
+/* Authoritative full-width blue/white section separation. */
+.academic-home {
+  background: #fff;
+}
+
+.academic-home .academic-factor-band {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  border: 0;
+  background: #ffffff;
+}
+
+.academic-home .academic-factor-band :deep(.factor-cloud-section) {
+  padding-top: 44px;
+  padding-bottom: 48px;
+}
+
+.academic-home .academic-factor-band :deep(.factor-cloud-section::before) {
+  display: none;
+}
+
+.academic-home .evidence-chart-section {
+  position: relative;
+  max-width: 1200px;
+  padding-top: 82px;
+  padding-bottom: 92px;
+  background: #176ca7;
+  box-shadow: 0 0 0 100vmax #176ca7;
+  clip-path: inset(0 -100vmax);
+}
+
+.academic-home .evidence-chart-section::before,
+.academic-home .evidence-chart-section::after {
+  display: none;
+}
+
+.academic-home .academic-evidence-heading {
+  max-width: none;
+  display: block;
+  margin-bottom: 38px;
+}
+
+.academic-home .academic-evidence-heading h2 {
+  color: #ffffff;
+  font-size: clamp(36px, 3.2vw, 46px);
+  letter-spacing: -0.045em;
+  line-height: 1.16;
+}
+
+.academic-home .academic-evidence-heading p {
+  max-width: none;
+  margin: 0;
+  color: #e5f2f8;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.academic-home .evidence-chart-section .biomarker-chart-panel {
+  display: grid;
+  gap: 0;
+  padding: clamp(24px, 3vw, 36px);
+  background: #ffffff;
+  box-shadow: 0 22px 56px rgba(4, 37, 62, 0.24);
+}
+
+.academic-home .evidence-chart-section .biomarker-chart-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(320px, 0.88fr);
+}
+
+@media (max-width: 980px) {
+  .academic-home .evidence-chart-section .biomarker-chart-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 620px) {
+  .academic-home .academic-factor-band :deep(.factor-cloud-section) {
+    padding-top: 36px;
+    padding-bottom: 40px;
+  }
+
+  .academic-home .evidence-chart-section {
+    padding-top: 58px;
+    padding-bottom: 66px;
+  }
+
+  .academic-home .evidence-chart-section .biomarker-chart-panel {
+    padding: 20px 16px 24px;
+  }
+
+  .academic-home .academic-evidence-heading h2 {
+    font-size: 32px;
   }
 }
 </style>

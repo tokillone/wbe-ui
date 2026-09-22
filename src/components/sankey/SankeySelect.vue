@@ -305,8 +305,8 @@ onBeforeUnmount(() => {
   font-weight: 600;
   cursor: pointer;
 }
-.sankey-select-trigger:hover:not(:disabled) { border-color: #8fa8c0; }
-.sankey-select-trigger:focus-visible { outline: 3px solid rgba(37, 102, 212, .16); border-color: #2566d4; }
+.sankey-select-trigger:hover:not(:disabled) { border-color: #999; }
+.sankey-select-trigger:focus-visible { outline: 2px solid #555; outline-offset: 2px; border-color: #777; }
 .sankey-select-trigger:disabled { color: #91a0ad; background: #f4f6f8; cursor: not-allowed; }
 .sankey-select-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sankey-select-trigger svg { width: 16px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.8; }
@@ -319,9 +319,9 @@ onBeforeUnmount(() => {
   overflow: auto;
   padding: 6px;
   border: 1px solid #cfd8e2;
-  border-radius: 8px;
+  border-radius: 5px;
   background: #fff;
-  box-shadow: 0 14px 32px rgba(28, 47, 64, .16);
+  box-shadow: 0 6px 18px rgba(28, 35, 40, .12);
   color: #263b4a;
 }
 .sankey-select-menu:focus { outline: none; }
@@ -335,7 +335,7 @@ onBeforeUnmount(() => {
   gap: 12px;
   padding: 9px 10px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 3px;
   background: transparent;
   color: #2b4050;
   text-align: left;
@@ -344,9 +344,9 @@ onBeforeUnmount(() => {
 .sankey-select-option > span:first-child { min-width: 0; display: grid; gap: 2px; }
 .sankey-select-option b { overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .sankey-select-option small { color: #748492; font-size: 11px; line-height: 1.35; }
-.sankey-select-option.is-active { background: #f0f5fa; }
-.sankey-select-option.is-selected { background: #e8f0fb; color: #1f5fae; }
-.sankey-select-check { opacity: 0; color: #2566d4; font-weight: 800; }
+.sankey-select-option.is-active { background: #f3f4f4; }
+.sankey-select-option.is-selected { background: #f0f1f1; color: #222; }
+.sankey-select-check { opacity: 0; color: #222; font-size: 14px; font-weight: 600; }
 .sankey-select-option.is-selected .sankey-select-check { opacity: 1; }
 .sankey-select-option.is-advanced { margin-left: 6px; width: calc(100% - 6px); }
 .sankey-select-advanced { margin: 5px 4px 2px; padding-top: 5px; border-top: 1px solid #e3e8ed; }

@@ -70,7 +70,10 @@ export interface Icd11SankeyStats {
   topBiomarker: Icd11SankeyTopItem[]
 }
 
+export type DrugPrescriptionStatus = 'prescription' | 'nonprescription' | 'conflict' | 'unknown'
+
 export interface Icd11SankeyGraph {
+  drugPrescriptions?: Record<string, DrugPrescriptionStatus>
   category: string
   nodes: Icd11SankeyNode[]
   links: Icd11SankeyLink[]

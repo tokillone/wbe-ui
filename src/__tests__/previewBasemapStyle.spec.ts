@@ -47,8 +47,8 @@ describe('preview composite basemap style', () => {
     expect(PREVIEW_MAP_MIN_ZOOM).toBe(1.1)
     expect(PREVIEW_MAP_MAX_ZOOM).toBe(8)
     expect(PREVIEW_COUNTRY_LEVEL_END).toBe(3.85)
-    expect(PREVIEW_ADMIN1_LEVEL_END).toBe(6.6)
-    expect(PREVIEW_CITY_BOUNDARY_FADE_START).toBe(6.35)
+    expect(PREVIEW_ADMIN1_LEVEL_END).toBe(6.3)
+    expect(PREVIEW_CITY_BOUNDARY_FADE_START).toBe(6.05)
   })
 
   it('removes built-in labels and boundaries and uses one vector source', () => {
@@ -142,7 +142,7 @@ describe('preview composite basemap style', () => {
     expect(chinaProvince?.layout?.['line-cap']).toBe('round')
     expect(chinaProvince?.paint?.['line-color']).toBe('#8d9498')
     expect(chinaProvince?.paint?.['line-opacity']).toBe(0.6)
-    expect(chinaCity?.minzoom).toBe(6.35)
+    expect(chinaCity?.minzoom).toBe(6.05)
     expect(chinaProvince?.paint?.['line-width']).toEqual([
       'interpolate',
       ['linear'],
@@ -156,7 +156,7 @@ describe('preview composite basemap style', () => {
       8,
       1.3,
     ])
-    expect(layers.find((layer) => layer.id === 'presentation-admin2-borders')?.minzoom).toBe(6.35)
+    expect(layers.find((layer) => layer.id === 'presentation-admin2-borders')?.minzoom).toBe(6.05)
     expect(
       layers.find((layer) => layer.id === 'presentation-admin2-borders')?.paint?.['line-opacity'],
     ).toBe(0.56)
@@ -213,11 +213,11 @@ describe('preview composite basemap style', () => {
       ['presentation-admin1-labels-adm1_81_160', 4.95],
       ['presentation-admin1-labels-adm1_gt160', 5.45],
       ['presentation-admin1-labels-china', 4.05],
-      ['presentation-admin2-labels-sparse', 6.55],
-      ['presentation-admin2-labels-standard', 7.05],
-      ['presentation-admin2-labels-dense', 7.5],
-      ['presentation-admin2-labels-veryDense', 7.9],
-      ['presentation-admin2-labels-china', 6.55],
+      ['presentation-admin2-labels-sparse', 6.25],
+      ['presentation-admin2-labels-standard', 6.75],
+      ['presentation-admin2-labels-dense', 7.2],
+      ['presentation-admin2-labels-veryDense', 7.6],
+      ['presentation-admin2-labels-china', 6.25],
     ])
     for (const [id, minzoom] of expectedMinzooms) {
       const layer = layers.find((candidate) => candidate.id === id)

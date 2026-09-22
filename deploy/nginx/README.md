@@ -63,20 +63,30 @@ curl -i http://localhost:8088/api/map/filters
 curl -i http://localhost:8088/api/icd11-sankey/categories
 curl -i 'http://localhost:8088/api/icd11-sankey/graph-v2?category=ALL'
 
-# PMTiles byte-range requests: each must return 206, Content-Range and 127 bytes.
+# Resolve the current immutable map version.
+MANIFEST="$(curl -fsS http://localhost:8088/map-assets/current/manifest.json)"
+MAP_VERSION="$(printf '%s' "${MANIFEST}" \
+  | sed -n 's/.*"mapVersion":"\([^"]*\)".*/\1/p')"
+
+# The versioned PMTiles request must return 206, Content-Range and 127 bytes.
 curl -fsS -D - -o /dev/null \
   -H 'Range: bytes=0-126' \
   -w 'downloaded_bytes=%{size_download}\n' \
-  http://localhost:8088/tiles/wbe-basemap.pmtiles
-curl -fsS -D - -o /dev/null \
-  -H 'Range: bytes=0-126' \
-  -w 'downloaded_bytes=%{size_download}\n' \
-  http://localhost:8088/tiles/wbe-regions.pmtiles
+  "http://localhost:8088/map-assets/${MAP_VERSION}/tiles/wbe-preview-composite.pmtiles"
+
+# Runtime JSON must be gzip-compressed and immutable.
+curl -fsS --compressed -D - -o /dev/null \
+  -H 'Accept-Encoding: gzip' \
+  "http://localhost:8088/map-assets/${MAP_VERSION}/geo/render/region-index-country.runtime.json"
 
 # An out-of-bounds range must return 416 instead of the complete archive.
 curl -sS -D - -o /dev/null \
   -H 'Range: bytes=999999999-1000000000' \
-  http://localhost:8088/tiles/wbe-regions.pmtiles
+  "http://localhost:8088/map-assets/${MAP_VERSION}/tiles/wbe-preview-composite.pmtiles"
+
+# Legacy path remains range-compatible for one rollback cycle.
+curl -fsS -D - -o /dev/null -H 'Range: bytes=0-126' \
+  http://localhost:8088/tiles/wbe-preview-composite.pmtiles
 
 # Cache policy checks
 curl -fsS -D - -o /dev/null http://localhost:8088/index.html

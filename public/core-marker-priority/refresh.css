@@ -1,0 +1,119 @@
+html.research-ui-refresh {
+  --bg: #f3f6f8;
+  --panel: #ffffff;
+  --line: #d5e0e6;
+  --line-strong: #bccbd3;
+  --text: #152d3f;
+  --muted: #687d8a;
+  --blue: #185f91;
+  --blue-soft: #eaf2f8;
+  --literature: #185f91;
+  --space: #3f7ca6;
+  --year: #78a2bd;
+  --cf: #587f98;
+  --gs: #8aa8ba;
+  --tier-high: #185f91;
+  --tier-medium: #b47a20;
+  --tier-low: #687d8a;
+  --tier-none: #e1e8ec;
+}
+
+html.research-ui-refresh body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Microsoft YaHei', '微软雅黑', Arial, sans-serif;
+}
+
+html.research-ui-refresh .shell {
+  padding-top: 18px;
+}
+
+html.research-ui-refresh .panel {
+  border-color: var(--line);
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+html.research-ui-refresh .filter-guide-toolbar {
+  min-height: 64px;
+  border-bottom-color: var(--line);
+}
+
+html.research-ui-refresh .field input,
+html.research-ui-refresh .filter-trigger,
+html.research-ui-refresh .reset-filter-button,
+html.research-ui-refresh .ranking-select-trigger,
+html.research-ui-refresh .ranking-view-switch {
+  border-color: var(--line-strong);
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+html.research-ui-refresh .field input:focus,
+html.research-ui-refresh .filter-picker.open .filter-trigger,
+html.research-ui-refresh .ranking-select-trigger:focus-visible,
+html.research-ui-refresh .ranking-picker.open .ranking-select-trigger {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px rgba(24, 95, 145, 0.14);
+}
+
+html.research-ui-refresh .filter-guide-panel .guide-step {
+  border-color: var(--line);
+  border-radius: 6px;
+}
+
+html.research-ui-refresh .filter-guide-panel .guide-step.current {
+  border-color: rgba(24, 95, 145, 0.35);
+  background: var(--blue-soft);
+}
+
+html.research-ui-refresh .filter-guide-panel .guide-step.current .guide-step-number {
+  background: var(--blue);
+}
+
+html.research-ui-refresh .filter-guide-panel .guide-step.completed {
+  border-color: #acc5d6;
+  color: #224d69;
+  background: #f5f9fb;
+  box-shadow: inset 2px 0 var(--blue);
+}
+
+html.research-ui-refresh .guide-stage {
+  border-color: var(--line-strong);
+  border-radius: 6px;
+}
+
+html.research-ui-refresh .guide-stage .guide-prompt {
+  background: #f7fafb;
+}
+
+html.research-ui-refresh .ranking-view-switch button.active,
+html.research-ui-refresh .ranking-select-option:hover,
+html.research-ui-refresh .ranking-select-option:focus-visible {
+  color: #124d78;
+  background: var(--blue-soft);
+}
+
+html.research-ui-refresh .ranking-toolbar,
+html.research-ui-refresh .ranking-chart-legend,
+html.research-ui-refresh .ranking-axis-head {
+  border-color: var(--line);
+  background: #fafcfd;
+}
+
+html.research-ui-refresh .reset-filter-button:hover,
+html.research-ui-refresh .reset-filter-button:focus-visible {
+  border-color: var(--blue);
+  color: #124d78;
+  background: var(--blue-soft);
+}
+
+html.research-ui-refresh button:active {
+  transform: translateY(1px);
+}
+
+@media (max-width: 680px) {
+  html.research-ui-refresh .shell {
+    padding-top: 10px;
+  }
+}

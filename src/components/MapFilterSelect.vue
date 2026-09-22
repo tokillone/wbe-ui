@@ -6,6 +6,8 @@ export type MapFilterSelectOption = {
   label: string
   description?: string
   searchText?: string
+  meta?: string
+  levelLabel?: string
 }
 
 const props = withDefaults(
@@ -15,11 +17,13 @@ const props = withDefaults(
     modelValue: string
     options: MapFilterSelectOption[]
     disabled?: boolean
+    searchable?: boolean
     searchPlaceholder?: string
     emptyText?: string
   }>(),
   {
     disabled: false,
+    searchable: true,
     searchPlaceholder: '搜索选项',
     emptyText: '没有匹配选项',
   },
@@ -32,6 +36,7 @@ const emit = defineEmits<{
 const root = ref<HTMLElement | null>(null)
 const trigger = ref<HTMLButtonElement | null>(null)
 const searchInput = ref<HTMLInputElement | null>(null)
+const menu = ref<HTMLElement | null>(null)
 const isOpen = ref(false)
 const opensUp = ref(false)
 const query = ref('')
@@ -42,6 +47,7 @@ const selectedOption = computed(
 )
 const normalizedQuery = computed(() => normalizeSearch(query.value))
 const filteredOptions = computed(() => {
+  if (!props.searchable) return props.options
   const search = normalizedQuery.value
   if (!search) return props.options
   return props.options.filter((option) =>
@@ -110,7 +116,8 @@ function openMenu(initialDirection: 1 | -1 = 1) {
     selectedIndex >= 0 ? selectedIndex : initialDirection > 0 ? 0 : props.options.length - 1
   updateOpeningDirection()
   void nextTick(() => {
-    searchInput.value?.focus()
+    if (props.searchable) searchInput.value?.focus()
+    else menu.value?.focus()
     scrollHighlightedIntoView()
   })
 }
@@ -132,7 +139,8 @@ function updateOpeningDirection() {
   const rect = trigger.value?.getBoundingClientRect()
   if (!rect) return
   const optionHeight = props.options.some((option) => option.description) ? 52 : 36
-  const preferredHeight = Math.min(282, 68 + props.options.length * optionHeight)
+  const menuChromeHeight = props.searchable ? 68 : 10
+  const preferredHeight = Math.min(282, menuChromeHeight + props.options.length * optionHeight)
   const spaceBelow = window.innerHeight - rect.bottom - 12
   const spaceAbove = rect.top - 12
   opensUp.value = spaceBelow < preferredHeight && spaceAbove > spaceBelow
@@ -223,12 +231,18 @@ function selectOption(option: MapFilterSelectOption) {
       @click="toggleMenu"
       @keydown="handleTriggerKeydown"
     >
-      <span>{{ selectedOption?.label || '—' }}</span>
+      <span>{{ selectedOption?.label || '未选择' }}</span>
       <i aria-hidden="true"></i>
     </button>
 
-    <div v-if="isOpen" class="map-filter-select-menu" @keydown="handleMenuKeydown">
-      <div class="map-filter-select-search">
+    <div
+      v-if="isOpen"
+      ref="menu"
+      class="map-filter-select-menu"
+      tabindex="-1"
+      @keydown="handleMenuKeydown"
+    >
+      <div v-if="searchable" class="map-filter-select-search">
         <span aria-hidden="true"></span>
         <input
           ref="searchInput"

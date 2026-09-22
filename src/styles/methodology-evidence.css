@@ -15,7 +15,7 @@
 
 * { box-sizing: border-box; }
 html, body, #app { margin: 0; min-width: 320px; min-height: 100%; }
-body { color: var(--color-text-primary); background: var(--color-page-bg); font-family: Inter, 'Noto Sans SC', 'Source Han Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+body { color: var(--color-text-primary); background: var(--color-page-bg); font-family: var(--platform-font-family, 'Microsoft YaHei', '微软雅黑', Arial, sans-serif); }
 button, input, select { font: inherit; }
 button, a, input, select { -webkit-tap-highlight-color: transparent; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--color-blue-600); outline-offset: 2px; }

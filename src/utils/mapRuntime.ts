@@ -4,8 +4,8 @@ export type MapDisplayLevel = MapRegionStat['level']
 export type MapRenderPhase = 'settled' | 'preparing-next' | 'transitioning'
 
 export const COUNTRY_LEVEL_END_ZOOM = 3.85
-export const CITY_LEVEL_ENTER_ZOOM = 6.6
-export const CITY_LEVEL_EXIT_ZOOM = 6.45
+export const CITY_LEVEL_ENTER_ZOOM = 6.3
+export const CITY_LEVEL_EXIT_ZOOM = 6.15
 
 /**
  * Chooses the visible hierarchy with a small city/admin-1 hysteresis band.

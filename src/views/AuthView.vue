@@ -368,7 +368,7 @@ onBeforeUnmount(() => {
   margin: 0;
   min-width: 320px;
   color: #173247;
-  font-family: Inter, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--platform-font-family, 'Microsoft YaHei', '微软雅黑', Arial, sans-serif);
   background: #f0f7ff;
 }
 

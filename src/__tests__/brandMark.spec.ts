@@ -14,13 +14,22 @@ const platformViews = [
 ]
 
 describe('shared blue brand mark', () => {
-  it('renders the restrained drop and data-wave symbol', () => {
+  it('renders the institutional WBE wordmark', () => {
     const wrapper = mount(BrandMark, { props: { size: 44 } })
 
     expect(wrapper.get('.site-emblem').attributes('style')).toContain('--emblem-size: 44px')
-    expect(wrapper.findAll('.wave')).toHaveLength(2)
-    expect(wrapper.find('.data-point').exists()).toBe(true)
+    expect(wrapper.get('.site-emblem strong').text()).toBe('WBE')
+    expect(wrapper.find('.wave').exists()).toBe(false)
     expect(wrapper.get('.site-emblem').attributes('aria-hidden')).toBe('true')
+  })
+
+  it('renders the academic evidence-path symbol with four tool nodes', () => {
+    const wrapper = mount(BrandMark, { props: { size: 40, variant: 'academic' } })
+
+    expect(wrapper.get('.site-emblem').classes()).toContain('is-academic')
+    expect(wrapper.get('.site-emblem-symbol').attributes('viewBox')).toBe('0 0 35 32')
+    expect(wrapper.findAll('.site-emblem-node')).toHaveLength(4)
+    expect(wrapper.get('.site-emblem strong').text()).toBe('WBE')
   })
 
   it('the platform header owns the shared brand mark', () => {

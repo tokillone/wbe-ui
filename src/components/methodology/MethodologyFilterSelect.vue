@@ -169,7 +169,7 @@ function selectOption(option: MethodologyFilterOption) {
       @click="toggleMenu"
       @keydown="handleTriggerKeydown"
     >
-      <span :title="selectedOption?.label">{{ selectedOption?.label || '—' }}</span><i aria-hidden="true"></i>
+      <span :title="selectedOption?.label">{{ selectedOption?.label || '未选择' }}</span><i aria-hidden="true"></i>
     </button>
 
     <div v-if="isOpen" class="methodology-filter-select__menu" @keydown="handleMenuKeydown">

@@ -10,7 +10,7 @@ export const COUNTRY_LABEL_SCALE = 1.12
 export const COUNTRY_LABEL_ZOOM_GROWTH = 1.1
 export const ADMIN1_LABEL_MIN_SIZE = 10.4
 export const ADMIN1_LABEL_MAX_SIZE = 13.4
-export const CITY_LABEL_MIN_ZOOM = 6.3
+export const CITY_LABEL_MIN_ZOOM = 6.0
 export const CITY_LABEL_MIN_SIZE = 9.2
 export const CITY_LABEL_MAX_SIZE = 12.6
 
@@ -79,13 +79,13 @@ export function labelDataEmphasisAtZoom(level: MapLabelLevel, zoom: number) {
     return interpolateClamped(zoom, 3.6, 3.85, 1, 0)
   }
   if (level === 'admin1') {
-    if (zoom <= 3.85 || zoom >= 6.6) return 0
+    if (zoom <= 3.85 || zoom >= CITY_LEVEL_ENTER_ZOOM) return 0
     if (zoom < 4.1) return interpolateClamped(zoom, 3.85, 4.1, 0, 1)
-    if (zoom <= 6.35) return 1
-    return interpolateClamped(zoom, 6.35, 6.6, 1, 0)
+    if (zoom <= 6.05) return 1
+    return interpolateClamped(zoom, 6.05, CITY_LEVEL_ENTER_ZOOM, 1, 0)
   }
-  if (zoom <= 6.45) return 0
-  return zoom < 6.7 ? interpolateClamped(zoom, 6.45, 6.7, 0, 1) : 1
+  if (zoom <= CITY_LEVEL_EXIT_ZOOM) return 0
+  return zoom < 6.4 ? interpolateClamped(zoom, CITY_LEVEL_EXIT_ZOOM, 6.4, 0, 1) : 1
 }
 
 export function businessLabelSizeAtZoom(
@@ -109,8 +109,8 @@ export function businessLabelTextSizeExpression(level: MapLabelLevel) {
     level === 'country'
       ? [1.1, 1.35, 3.6, COUNTRY_LEVEL_END_ZOOM]
       : level === 'admin1'
-        ? [COUNTRY_LEVEL_END_ZOOM, 4.1, 6.35, CITY_LEVEL_ENTER_ZOOM, 8]
-        : [CITY_LABEL_MIN_ZOOM, CITY_LEVEL_EXIT_ZOOM, 6.7, 8]
+        ? [COUNTRY_LEVEL_END_ZOOM, 4.1, 6.05, CITY_LEVEL_ENTER_ZOOM, 8]
+        : [CITY_LABEL_MIN_ZOOM, CITY_LEVEL_EXIT_ZOOM, 6.4, 8]
   return [
     'interpolate',
     ['linear'],

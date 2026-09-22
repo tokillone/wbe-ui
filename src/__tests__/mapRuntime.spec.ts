@@ -8,10 +8,10 @@ import {
 
 describe('map runtime hierarchy and wrapping', () => {
   it('keeps the city level inside the down-zoom hysteresis band', () => {
-    expect(nextMapDisplayLevel('admin1', 6.59)).toBe('admin1')
-    expect(nextMapDisplayLevel('admin1', 6.6)).toBe('city')
-    expect(nextMapDisplayLevel('city', 6.5)).toBe('city')
-    expect(nextMapDisplayLevel('city', 6.45)).toBe('admin1')
+    expect(nextMapDisplayLevel('admin1', 6.29)).toBe('admin1')
+    expect(nextMapDisplayLevel('admin1', 6.3)).toBe('city')
+    expect(nextMapDisplayLevel('city', 6.2)).toBe('city')
+    expect(nextMapDisplayLevel('city', 6.15)).toBe('admin1')
   })
 
   it('guards a 2048px viewport against simultaneous world copies', () => {

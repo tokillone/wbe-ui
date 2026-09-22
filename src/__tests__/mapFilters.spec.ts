@@ -7,6 +7,7 @@ import {
   ALL_BIOMARKER_PATH_KEY,
   biomarkerFilterOptions,
   biomarkerPathKey,
+  mapFilterSearchOptions,
   selectionForAllBiomarkers,
   selectionForBiomarkerPath,
   selectionForCategory,
@@ -166,6 +167,7 @@ describe('map biomarker reverse filtering', () => {
         value: 'COTININE',
         label: '可替宁',
         searchText: 'COTININE 486-56-6',
+        meta: '486-56-6',
       },
     ])
     expect(biomarkerFilterOptions([], legacy, '全部生物标记物')).toEqual([
@@ -189,5 +191,62 @@ describe('map biomarker reverse filtering', () => {
       biomarkerKey: 'ALL',
       year: '全部年份',
     })
+  })
+
+  it('builds layered search options and removes aggregate-path biomarker duplicates', () => {
+    const paths: MapBiomarkerPath[] = [
+      {
+        targetClass: '消费/生活方式类',
+        category: '烟草使用标志物',
+        subcategory: '全部小类',
+        biomarkerKey: 'COTININE',
+        biomarkerLabel: '可替宁',
+        biomarkerCas: '486-56-6',
+      },
+      {
+        targetClass: '消费/生活方式类',
+        category: '烟草使用标志物',
+        subcategory: '尼古丁及代谢物',
+        biomarkerKey: 'COTININE',
+        biomarkerLabel: '可替宁',
+        biomarkerCas: '486-56-6',
+      },
+    ]
+    const options = mapFilterSearchOptions(
+      paths,
+      {
+        allCategory: '全部目标物质类别',
+        allSubcategory: '全部小类',
+        allBiomarker: 'ALL',
+        allYear: '全部年份',
+      },
+      {
+        targetClass: '目标类别',
+        category: '物质类别',
+        subcategory: '物质子类',
+        biomarker: '生物标记物',
+      },
+    )
+
+    expect(options.map((option) => option.levelLabel)).toEqual([
+      '目标类别',
+      '物质类别',
+      '物质子类',
+      '生物标记物',
+    ])
+    const biomarkerResults = options.filter((option) => option.levelLabel === '生物标记物')
+    expect(biomarkerResults).toHaveLength(1)
+    expect(biomarkerResults[0]?.description).toContain('尼古丁及代谢物')
+    expect(biomarkerResults[0]?.description).not.toContain('全部小类')
+    expect(biomarkerResults[0]?.selection).toEqual({
+      targetClass: '消费/生活方式类',
+      category: '烟草使用标志物',
+      subcategory: '尼古丁及代谢物',
+      biomarkerKey: 'COTININE',
+      year: '全部年份',
+    })
+    const dropdownOptions = biomarkerFilterOptions(paths, [], '全部生物标记物')
+    expect(dropdownOptions).toHaveLength(2)
+    expect(dropdownOptions[1]?.description).toContain('尼古丁及代谢物')
   })
 })

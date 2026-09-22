@@ -53,9 +53,9 @@ export function countryNameZh(name: string) {
 
 export function formatAnalysisMethodName(name: string) {
   return name
-    .replace(/^LC-HRMS\/QTOF$/i, 'LC–HRMS/QTOF')
-    .replace(/^LC-MS\/MS$/i, 'LC–MS/MS')
-    .replace(/^GC-MS$/i, 'GC–MS')
+    .replace(/^LC-HRMS\/QTOF$/i, 'LC-HRMS/QTOF')
+    .replace(/^LC-MS\/MS$/i, 'LC-MS/MS')
+    .replace(/^GC-MS$/i, 'GC-MS')
     .replace(/^HPLC\/UPLC非质谱$/i, 'HPLC/UPLC 非质谱')
 }
 
@@ -180,7 +180,7 @@ export function filterMethodologyRows(
 
 export function modeUnitLabel(mode: MethodologyMode) {
   if (mode === 'rows') return '数据行'
-  if (mode === 'docMethods') return '文献—方法'
+  if (mode === 'docMethods') return '文献与方法'
   return '文献'
 }
 

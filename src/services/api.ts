@@ -70,7 +70,8 @@ export async function requestApi<T>(endpoint: string, options?: ApiRequestOption
       throw apiErrorFromResponse(response.status, result?.code, result?.message)
     }
 
-    if (!response.ok || result?.code !== 200) {
+    const businessSuccess = result && result.code >= 200 && result.code < 300
+    if (!response.ok || !businessSuccess) {
       throw apiErrorFromResponse(
         response.status,
         result?.code,

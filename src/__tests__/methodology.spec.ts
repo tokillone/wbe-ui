@@ -112,8 +112,8 @@ describe('methodology statistics contract', () => {
     expect(PRESCRIPTION_COLORS).toEqual({ '处方药': '#3568B8', '非处方药': '#48A29A' })
     expect(countryNameZh('China')).toBe('中国')
     expect(countryNameZh('Unknown')).toBe('Unknown')
-    expect(formatAnalysisMethodName('LC-MS/MS')).toBe('LC–MS/MS')
-    expect(formatAnalysisMethodName('LC-HRMS/QTOF')).toBe('LC–HRMS/QTOF')
+    expect(formatAnalysisMethodName('LC-MS/MS')).toBe('LC-MS/MS')
+    expect(formatAnalysisMethodName('LC-HRMS/QTOF')).toBe('LC-HRMS/QTOF')
   })
 
   it('sorts sampling audit rows by document coverage and normalizes report status', () => {

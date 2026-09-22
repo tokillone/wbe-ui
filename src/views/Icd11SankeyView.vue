@@ -5,7 +5,9 @@ import { init, use, type ECharts } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
+import OperationGuide, { type OperationGuideStep } from '../components/OperationGuide.vue'
 import PlatformHeader from '../components/PlatformHeader.vue'
+import PrescriptionRatio from '../components/sankey/PrescriptionRatio.vue'
 import SankeyMobileDrawer from '../components/sankey/SankeyMobileDrawer.vue'
 import SankeyNodeSearch from '../components/sankey/SankeyNodeSearch.vue'
 import SankeySelect, { type SankeySelectOption } from '../components/sankey/SankeySelect.vue'
@@ -14,19 +16,24 @@ import { ApiTimeoutError } from '../services/api'
 import { getUserErrorMessage } from '../services/errors'
 import { fetchIcd11SankeyCategories, fetchIcd11SankeyGraph } from '../services/icd11Sankey'
 import type {
+  DrugPrescriptionStatus,
   Icd11SankeyGraph,
   Icd11SankeyLink,
   Icd11SankeyNode,
   Icd11SankeyPath,
-  Icd11SankeyTopItem,
 } from '../types/icd11Sankey'
 import {
   displayModeLimit,
-  pathsForLevel1Scope,
+  mergeSankeyHighlightPathIds,
+  sankeyScopeCandidates,
+  selectSankeyDisplayPaths,
+  overviewPieSections,
+  promoteConnectedSankeyNodes,
+  summarizeDrugPrescriptions,
   relationPieSectionsForNode,
   resolveUpstreamPathIds,
   sankeyHoverTargetKey,
-  sortSankeyPaths,
+  collapseRelationShares,
   summarizeSankeyOverview,
   upstreamContext as summarizeUpstreamContext,
   upstreamLayerText,
@@ -43,6 +50,16 @@ import {
 } from '../utils/icd11SankeyColors'
 import { icd11SankeyGraphIndex } from '../utils/icd11SankeyGraphIndex'
 import {
+  connectRoutingLinkToBridge,
+  layoutRoutingBridgeLanes,
+  orderSankeyRoutingNodes,
+  raiseSankeyNodeLabelLayer,
+  routingHorizontalBridgeBounds,
+  sankeyLayoutMotionProgress,
+  sankeyRouteNodeName,
+  splitLevel2OnlyLinks,
+} from '../utils/icd11SankeyRouting'
+import {
   ensureSearchTargetVisible,
   pathsForSearchNode,
   representativeSearchPath,
@@ -53,7 +70,29 @@ import {
 
 type DetailState =
   | { kind: 'category' }
-  | { kind: 'paths'; title: string; status: string; paths: Icd11SankeyPath[]; limit: number }
+  | {
+      kind: 'paths'
+      title: string
+      paths: Icd11SankeyPath[]
+      limit: number
+      edge?: {
+        source: string
+        target: string
+        sourceLabel: string
+        targetLabel: string
+        value: number
+        sourceShare: number
+        targetShare: number
+        associatedNodeCount: number
+        sourceKind: Icd11SankeyNode['kind']
+        targetKind: Icd11SankeyNode['kind']
+        drug?: {
+          id: string
+          name: string
+          prescriptionStatus: DrugPrescriptionStatus
+        }
+      }
+    }
   | {
       kind: 'node'
       title: string
@@ -65,12 +104,21 @@ type DetailState =
     }
 
 type ChartNode = Icd11SankeyNode & {
-  cursor?: 'pointer'
+  cursor?: 'pointer' | 'default'
+  localY?: number | null
+  focused?: boolean
+  routing?: boolean
+  routePathIds?: string[]
+  routeSource?: string
+  tooltip?: {
+    show: boolean
+  }
   itemStyle?: {
     color?: string
     opacity?: number
     borderColor?: string
     borderWidth?: number
+    borderType?: 'solid' | 'dashed' | 'dotted'
     shadowBlur?: number
     shadowColor?: string
   }
@@ -80,6 +128,7 @@ type ChartNode = Icd11SankeyNode & {
       opacity?: number
       borderColor?: string
       borderWidth?: number
+      borderType?: 'solid' | 'dashed' | 'dotted'
     }
     label?: {
       color?: string
@@ -100,6 +149,7 @@ type ChartNode = Icd11SankeyNode & {
   label?: {
     show: boolean
     position: 'left' | 'right'
+    offset: [number, number]
     formatter: string
     color: string
     width: number
@@ -109,10 +159,20 @@ type ChartNode = Icd11SankeyNode & {
     fontWeight: number
     textBorderColor: string
     textBorderWidth: number
+    verticalAlign: 'middle'
+    backgroundColor: string
+    borderColor: string
+    borderWidth: number
+    borderRadius: number
+    padding: [number, number]
   }
 }
 
 type ChartLink = Icd11SankeyLink & {
+  focused?: boolean
+  semanticLinkId?: string
+  semanticSource?: string
+  semanticTarget?: string
   lineStyle?: {
     color: string
     opacity: number
@@ -135,6 +195,45 @@ type ChartLink = Icd11SankeyLink & {
 type ChartGraph = Omit<Icd11SankeyGraph, 'nodes' | 'links'> & {
   nodes: ChartNode[]
   links: ChartLink[]
+}
+
+interface SankeyHighlightStyleOptions {
+  priorityPathIds?: Iterable<string>
+  preserveLinkOrder?: boolean
+}
+
+type ShapeSnapshot = Record<string, unknown>
+type SankeyGeometrySnapshot = {
+  nodes: Map<string, ShapeSnapshot>
+  links: Map<string, ShapeSnapshot>
+}
+
+type SankeyGraphicElement = {
+  shape?: ShapeSnapshot
+  silent?: boolean
+  invisible?: boolean
+  z2?: number
+  getTextContent?: () => SankeyGraphicElement | undefined
+  markRedraw?: () => void
+  attr?: (value: { shape?: ShapeSnapshot; invisible?: boolean }) => void
+  stopAnimation?: () => void
+  animateTo?: (
+    value: { shape: ShapeSnapshot },
+    config: { duration: number; easing: string },
+  ) => void
+}
+
+type SankeyInternalData = {
+  count?: () => number
+  indexOfName?: (name: string) => number
+  getRawDataItem?: (index: number) => ChartNode | ChartLink | undefined
+  getItemLayout?: (index: number) => { y?: number; dy?: number } | undefined
+  getItemGraphicEl?: (index: number) => SankeyGraphicElement | undefined
+}
+
+type SankeyInternalSeries = {
+  layoutInfo?: { height?: number }
+  getData?: (dataType?: 'edge') => SankeyInternalData | undefined
 }
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'empty' | 'timeout' | 'error'
@@ -180,10 +279,23 @@ const KIND_LABELS: Record<Icd11SankeyNode['kind'], string> = {
   drug: '药物',
   biomarker: '生物标记物',
 }
+const EDGE_KIND_LABELS: Record<Icd11SankeyNode['kind'], string> = {
+  level1: 'Level1 分类',
+  level2: 'Level2 分类',
+  level3: 'Level3 分类',
+  drug: '药物',
+  biomarker: '生物标记物',
+}
+const PRESCRIPTION_STATUS_LABELS: Record<DrugPrescriptionStatus, string> = {
+  prescription: '处方药',
+  nonprescription: '非处方药',
+  conflict: '属性记录不一致',
+  unknown: '处方属性未知',
+}
 const DISPLAY_MODE_OPTIONS: (SankeySelectOption & { value: Icd11SankeyDisplayMode })[] = [
   { value: 'smart', label: '智能精简', description: '桌面最多 50 条，手机最多 20 条' },
-  { value: 'top20', label: 'Top 20', description: '固定显示权重最高的 20 条' },
-  { value: 'top50', label: 'Top 50', description: '固定显示权重最高的 50 条' },
+  { value: 'top20', label: 'Top 20', description: '最多 20 条，含关联时保留关联分支' },
+  { value: 'top50', label: 'Top 50', description: '最多 50 条，含关联时保留关联分支' },
   { value: 'top100', label: 'Top 100', description: '适合大屏浏览', advanced: true },
   {
     value: 'all',
@@ -217,12 +329,66 @@ const HOVER_RESTORE_DELAY = 110
 const SANKEY_NODE_COLOR = '#4B78A8'
 const SANKEY_NODE_HOVER_COLOR = '#356A9C'
 const SANKEY_NODE_LOCKED_COLOR = '#245F8E'
-const MAX_RELATION_PIE_ITEMS = 8
+const MAX_RELATION_PIE_ITEMS = 7
 const TOP_RELATION_PIE_ITEMS = 7
 const MAX_FILTER_CACHE_ENTRIES = 24
 const MAX_HIGHLIGHT_CACHE_ENTRIES = 12
 const MAX_CHART_HEIGHT = 4_200
 const MAX_CHART_DEVICE_PIXEL_RATIO = 2
+const SANKEY_LAYOUT_ANIMATION_MS = 940
+const SANKEY_ACTIVE_LABEL_LANE_HEIGHT = 52
+const SANKEY_NODE_WIDTH = 22
+const SANKEY_LINK_CURVENESS = 0.52
+const SANKEY_OPERATION_GUIDE_STORAGE_KEY = 'wbe:icd11-sankey-operation-guide:v2'
+const SANKEY_OPERATION_GUIDE_DELAY_MS = 600
+const SANKEY_OPERATION_GUIDE_STEPS: OperationGuideStep[] = [
+  {
+    title: '快速定位五层节点',
+    description: '输入疾病分类、药物或生物标记物名称，从搜索结果中直接定位对应节点。',
+    targetSelectors: ['.search-field'],
+    placement: 'bottom',
+    scrollIntoView: true,
+    scrollBlock: 'center',
+  },
+  {
+    title: '限定要展示的路径',
+    description: '选择 Level1、关联范围、显示模式和最小权重，控制桑基图中的候选路径。',
+    targetSelectors: ['.level-field', '.scope-field', '.display-field', '.weight-reset-group'],
+    placement: 'bottom',
+    scrollIntoView: true,
+    scrollBlock: 'center',
+  },
+  {
+    title: '阅读并锁定关系',
+    description: '悬停查看关系摘要，单击节点或流带锁定路径；移动端可横向滑动查看下游层级。',
+    targetSelectors: ['.chart-panel'],
+    placement: 'right',
+    scrollIntoView: true,
+  },
+  {
+    title: '查看统计与路径详情',
+    description: '右侧查看当前范围或全局构成，药物图下查看处方比例；移动端点击“查看概览”。',
+    targetSelectors: ['.side-panel', '.mobile-overview-button'],
+    placement: 'left',
+    scrollIntoView: true,
+  },
+  {
+    title: '理解图例与统计口径',
+    description: '点击统计区右上角的图表说明，在浮窗中查看颜色、关联路径与比例的统计方式。',
+    targetSelectors: ['#reading-guide'],
+    placement: 'bottom',
+    scrollIntoView: true,
+    scrollBlock: 'center',
+  },
+  {
+    title: '管理并导出当前视图',
+    description: '可重置筛选、清除已锁定路径，并将当前桑基图导出为 PNG 图片。',
+    targetSelectors: ['.toolbar-actions'],
+    placement: 'left',
+    scrollIntoView: true,
+    scrollBlock: 'center',
+  },
+]
 
 use([SankeyChart, PieChart, TooltipComponent, CanvasRenderer])
 
@@ -230,6 +396,9 @@ const chartEl = ref<HTMLElement | null>(null)
 const chartShellEl = ref<HTMLElement | null>(null)
 const chartScrollEl = ref<HTMLElement | null>(null)
 const modalPieChartEl = ref<HTMLElement | null>(null)
+const pieDialogEl = ref<HTMLElement | null>(null)
+let piePreviousFocus: HTMLElement | null = null
+let pieSavedBodyOverflow: string | null = null
 const currentCategory = ref('')
 const categories = ref<string[]>([])
 const graph = ref<Icd11SankeyGraph | null>(null)
@@ -250,12 +419,18 @@ const upstreamContextVisible = ref(false)
 const hoverContextPathIds = ref<string[]>([])
 const hoverContextTitle = ref('')
 const lockLabel = ref('')
-const lockText = ref('当前未锁定路径')
-const lockedEdge = ref<Icd11SankeyLink | null>(null)
+const lockText = ref('当前范围')
+const lockedEdge = ref<ChartLink | null>(null)
 const lockedPathId = ref('')
 const currentFocus = ref('')
+const promoteRelatedNodes = ref(true)
 const detail = ref<DetailState>({ kind: 'category' })
 const pieModalOpen = ref(false)
+const readingGuideOpen = ref(false)
+const readingGuideButton = ref<HTMLButtonElement | null>(null)
+const readingGuidePanel = ref<HTMLElement | null>(null)
+const readingGuidePopoverStyle = ref<Record<string, string>>({})
+const sankeyHeaderHidden = ref(false)
 const activePieId = ref('')
 const overviewScope = ref<'current' | 'global'>('current')
 const isMobileViewport = ref(
@@ -266,6 +441,12 @@ const activeMobileStage = ref(0)
 const showMobileSwipeHint = ref(false)
 const selectedSearchNodeId = ref('')
 const forcedSearchPathId = ref('')
+const sankeyGuideOpen = ref(false)
+const sankeyGuideStep = ref(0)
+const sankeyGuideSeen = ref(readSankeyOperationGuideSeen())
+const sankeyGuideSuppressedForVisit = ref(false)
+const sankeyGuideShownThisVisit = ref(false)
+const sankeyGuideButton = ref<HTMLButtonElement | null>(null)
 
 let chart: ECharts | null = null
 let pieCharts = new Map<string, ECharts>()
@@ -280,6 +461,14 @@ let swipeHintTimer: number | null = null
 let searchDrawerTimer: number | null = null
 let searchCommitInProgress = false
 let searchLevel1ChangeInProgress = false
+let sankeyGuideTimer: number | undefined
+let sankeyGuideScrollSnapshot: { left: number; top: number } | null = null
+let viewportFollowFrame: number | null = null
+let routingGeometryFrame: number | null = null
+let layoutAnimationFrame: number | null = null
+let animateNextLayout = false
+let activeNodeLocalY = new Map<string, number>()
+let activeNodeLabelOffsetY = new Map<string, number>()
 const displaySummaryCache = new WeakMap<Icd11SankeyGraph, Map<string, DisplayPathSummary>>()
 const filteredGraphCache = new WeakMap<Icd11SankeyGraph, Map<string, Icd11SankeyGraph>>()
 const chartGraphCache = new WeakMap<Icd11SankeyGraph, ChartGraph>()
@@ -301,9 +490,7 @@ const statsSummaryItems = computed(() => {
   ]
 })
 const isCompactDetail = computed(
-  () =>
-    detail.value.kind === 'node' ||
-    (detail.value.kind === 'paths' && detail.value.paths.length > 1),
+  () => detail.value.kind === 'node' || detail.value.kind === 'paths',
 )
 const detailPathSum = computed(() => {
   if (detail.value.kind === 'category') return 0
@@ -313,39 +500,68 @@ const shownDetailPaths = computed(() => {
   if (detail.value.kind === 'category') return []
   return detail.value.paths.slice(0, detail.value.limit)
 })
-const selectedLevel1Paths = computed(() =>
-  graph.value?.paths.filter((path) => path.level1 === selectedLevel1.value) ?? [],
+const currentScopePaths = computed(() =>
+  graph.value
+    ? sankeyScopeCandidates(
+        graph.value.paths,
+        selectedLevel1.value,
+        level1Scope.value,
+        minWeight.value,
+      )
+    : [],
 )
-const currentLevel1Stats = computed(() =>
-  selectedLevel1Paths.value.length ? summarizeSankeyOverview(selectedLevel1Paths.value) : null,
+const overviewPaths = computed(() =>
+  overviewScope.value === 'current' ? currentScopePaths.value : (graph.value?.paths ?? []),
 )
-const globalOverviewStats = computed(() => {
-  if (!graph.value) return null
-  return {
-    ...graph.value.stats,
-    topLevel2: summarizeSankeyOverview(graph.value.paths).topLevel2,
-  }
-})
 const categoryStats = computed(() =>
-  overviewScope.value === 'current' ? currentLevel1Stats.value : globalOverviewStats.value,
+  graph.value ? summarizeSankeyOverview(overviewPaths.value) : null,
 )
-const overviewTitle = computed(() =>
+const overviewTitle = computed(() => (overviewScope.value === 'current' ? '当前范围' : '全局概览'))
+const overviewScopeLabel = computed(() =>
   overviewScope.value === 'current'
-    ? `${selectedLevel1.value || '当前分类'}概览`
-    : '全部目标类别概览',
+    ? `${selectedLevel1.value || '未选择分类'} · ${level1Scope.value === 'linked' ? '含关联' : '仅当前'}${minWeight.value > 0 ? ` · 权重 ≥${minWeight.value}` : ''}`
+    : '全部分类与路径',
 )
-const overviewFirstRanking = computed(() =>
-  overviewScope.value === 'current'
-    ? {
-        title: 'Top ICD11_Level2',
-        items: currentLevel1Stats.value?.topLevel2 ?? [],
-      }
-    : {
-        title: 'Top ICD11_Level1',
-        items: globalOverviewStats.value?.topLevel1 ?? [],
-      },
+const pieScopePaths = computed(() =>
+  detail.value.kind === 'category' ? overviewPaths.value : detail.value.paths,
 )
+const prescriptionSummary = computed(() =>
+  summarizeDrugPrescriptions(pieScopePaths.value, graph.value),
+)
+const singlePrescriptionLabel = computed(() => {
+  if (!prescriptionSummary.value.available || prescriptionSummary.value.total !== 1) return ''
+  const entry = Object.entries(prescriptionSummary.value.counts).find(([, count]) => count === 1)
+  return entry ? PRESCRIPTION_STATUS_LABELS[entry[0] as DrugPrescriptionStatus] : ''
+})
+const detailContextLabel = computed(() => {
+  if (detail.value.kind === 'node') return '节点详情'
+  if (detail.value.kind === 'paths' && detail.value.edge) return '流带详情'
+  if (detail.value.kind === 'paths') return '路径详情'
+  return '关系统计'
+})
 const hasRenderableGraph = computed(() => Boolean(graph.value?.paths.length))
+const hasVisibleLevel2Route = computed(() =>
+  Boolean(
+    (activeBaseGraph.value ?? graph.value)?.paths.some((path) => path.mappingLevel === 'Level2'),
+  ),
+)
+const sankeyChartAriaLabel = computed(() =>
+  hasVisibleLevel2Route.value
+    ? 'ICD11 疾病、药物与生物标记物关系桑基图。缺少 Level3 的路径由 Level2 直接关联药物。'
+    : 'ICD11 疾病、药物与生物标记物关系桑基图。',
+)
+const canAutoOpenSankeyGuide = computed(
+  () =>
+    window.location.hash !== '#reading-guide' &&
+    loadState.value === 'ready' &&
+    hasRenderableGraph.value &&
+    !isLoading.value &&
+    !pieModalOpen.value &&
+    !mobileDrawerOpen.value &&
+    !sankeyGuideSeen.value &&
+    !sankeyGuideSuppressedForVisit.value &&
+    !sankeyGuideShownThisVisit.value,
+)
 const selectedCategoryLabel = computed(
   () => graph.value?.category || currentCategory.value || 'ICD11 桑基图',
 )
@@ -383,20 +599,27 @@ const displaySummaryText = computed(() => {
   const summary = displaySummary.value
   if (!summary) return ''
   const baseText =
-    summary.candidatePathCount === summary.totalPathCount
-      ? `展示 ${summary.shownPathCount}/${summary.totalPathCount} 条路径`
-      : `展示 ${summary.shownPathCount}/${summary.candidatePathCount} 条候选路径，总计 ${summary.totalPathCount} 条`
+    summary.shownPathCount === summary.candidatePathCount
+      ? `${summary.shownPathCount} 条路径`
+      : `${summary.shownPathCount} / ${summary.candidatePathCount} 条路径，覆盖 ${formatPercent(summary.weightCoverage)}`
   const linkedText =
-    summary.linkedLevel1Count > 0 ? ` · 关联 ${summary.linkedLevel1Count} 个其他 Level1` : ''
-  const searchText = summary.injectedSearchPath ? ' · 含 1 条搜索定位路径' : ''
-  const scopeText = level1Scope.value === 'linked' ? '含关联' : '仅当前'
-  return `${baseText} · 权重覆盖 ${formatPercent(summary.weightCoverage)}${linkedText}${searchText} · ${scopeText} · ${summary.modeLabel}`
+    summary.linkedLevel1Count > 0
+      ? `，含 ${summary.linkedLevel1Count} 个关联分类`
+      : level1Scope.value === 'linked'
+        ? '，暂无关联分类'
+        : ''
+  const searchText = summary.injectedSearchPath ? '，含搜索定位结果' : ''
+  return `${baseText}${linkedText}${searchText}`
 })
 const relationPieSections = computed<RelationPieSection[]>(() => {
-  if (detail.value.kind !== 'node') return []
-  return relationPieSectionsForNode(detail.value.nodeKind, detail.value.paths).map((section) =>
-    normalizeRelationPieSection(section),
-  )
+  if (detail.value.kind === 'paths' && detail.value.edge) return []
+  let sections =
+    detail.value.kind === 'category'
+      ? overviewPieSections(overviewPaths.value, overviewScope.value)
+      : detail.value.kind === 'node'
+        ? relationPieSectionsForNode(detail.value.nodeKind, detail.value.paths)
+        : []
+  return sections.map((section) => normalizeRelationPieSection(section))
 })
 const activePieSection = computed(
   () => relationPieSections.value.find((section) => section.id === activePieId.value) ?? null,
@@ -467,20 +690,26 @@ const upstreamContextRows = computed(() => {
 
 watch(selectedLevel1, (value, previous) => {
   if (!graph.value || value === previous) return
-  if (!searchLevel1ChangeInProgress) clearSearchSelection()
+  if (searchLevel1ChangeInProgress) return
+  clearSearchSelection()
   overviewScope.value = 'current'
   clearLockedState()
   detail.value = { kind: 'category' }
   mobileDrawerOpen.value = false
   chartScrollLeft.value = 0
   activeMobileStage.value = 0
-  chartScrollEl.value?.scrollTo({ left: 0 })
+  chartScrollEl.value?.scrollTo({
+    left: 0,
+    behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+  })
+  animateNextLayout = true
   render()
 })
 
 watch(searchQuery, () => {
   if (!graph.value) return
-  if (!searchCommitInProgress) clearSearchSelection()
+  if (searchCommitInProgress) return
+  clearSearchSelection()
   clearLockedState()
   detail.value = { kind: 'category' }
   mobileDrawerOpen.value = false
@@ -508,14 +737,38 @@ watch(relationPieSections, async (sections) => {
 })
 
 watch(pieModalOpen, async (isOpen) => {
+  if (isOpen) {
+    pieSavedBodyOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+  } else if (pieSavedBodyOverflow !== null) {
+    document.body.style.overflow = pieSavedBodyOverflow
+    pieSavedBodyOverflow = null
+  }
   await nextTick()
   if (isOpen) {
     renderModalRelationPieChart()
+    pieDialogEl.value?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true })
   } else {
     disposeModalRelationPieChart()
     restoreLockedHighlight()
+    if (piePreviousFocus?.isConnected) piePreviousFocus.focus({ preventScroll: true })
+    piePreviousFocus = null
   }
 })
+
+watch(
+  canAutoOpenSankeyGuide,
+  (eligible) => {
+    clearSankeyGuideTimer()
+    if (!eligible) return
+    sankeyGuideTimer = window.setTimeout(() => {
+      sankeyGuideTimer = undefined
+      if (!canAutoOpenSankeyGuide.value) return
+      void openSankeyOperationGuide('auto')
+    }, SANKEY_OPERATION_GUIDE_DELAY_MS)
+  },
+  { immediate: true },
+)
 
 onMounted(async () => {
   window.scrollTo({ top: 0, left: 0 })
@@ -525,16 +778,23 @@ onMounted(async () => {
   window.addEventListener('resize', handleResize)
   window.addEventListener('scroll', handleWindowScroll, { passive: true })
   window.addEventListener('keydown', handleKeydown)
+  window.addEventListener('hashchange', openReadingGuideFromHash)
   handleWindowScroll()
   await loadCategories()
+  await openReadingGuideFromHash()
 })
 
 onBeforeUnmount(() => {
+  clearSankeyGuideTimer()
+  if (viewportFollowFrame !== null) window.cancelAnimationFrame(viewportFollowFrame)
+  if (routingGeometryFrame !== null) window.cancelAnimationFrame(routingGeometryFrame)
+  if (layoutAnimationFrame !== null) window.cancelAnimationFrame(layoutAnimationFrame)
   categoryController?.abort()
   graphController?.abort()
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('scroll', handleWindowScroll)
   window.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('hashchange', openReadingGuideFromHash)
   clearHoverTimers()
   if (swipeHintTimer !== null) window.clearTimeout(swipeHintTimer)
   if (searchDrawerTimer !== null) window.clearTimeout(searchDrawerTimer)
@@ -542,7 +802,127 @@ onBeforeUnmount(() => {
   chart = null
   disposeRelationPieCharts()
   disposeModalRelationPieChart()
+  if (pieSavedBodyOverflow !== null) document.body.style.overflow = pieSavedBodyOverflow
 })
+
+async function openReadingGuideFromHash() {
+  if (window.location.hash !== '#reading-guide') return
+  readingGuideOpen.value = true
+  if (isMobileViewport.value) mobileDrawerOpen.value = true
+  await nextTick()
+  readingGuideButton.value?.scrollIntoView({ block: 'nearest' })
+  readingGuideButton.value?.focus({ preventScroll: true })
+  updateReadingGuidePosition()
+}
+
+function closeReadingGuide(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || !readingGuideOpen.value) return
+  event.preventDefault()
+  event.stopPropagation()
+  readingGuideOpen.value = false
+  readingGuideButton.value?.focus({ preventScroll: true })
+}
+
+function updateReadingGuidePosition() {
+  const trigger = readingGuideButton.value
+  if (!trigger) return
+  const viewportPadding = 12
+  const gap = 8
+  const triggerRect = trigger.getBoundingClientRect()
+  const width = Math.min(340, window.innerWidth - viewportPadding * 2)
+  const maxHeight = Math.min(420, Math.max(220, window.innerHeight - viewportPadding * 2))
+  const measuredHeight = Math.min(readingGuidePanel.value?.offsetHeight ?? 380, maxHeight)
+  const left = Math.max(
+    viewportPadding,
+    Math.min(triggerRect.right - width, window.innerWidth - width - viewportPadding),
+  )
+  const below = triggerRect.bottom + gap
+  const top =
+    below + measuredHeight <= window.innerHeight - viewportPadding
+      ? below
+      : Math.max(viewportPadding, triggerRect.top - measuredHeight - gap)
+  readingGuidePopoverStyle.value = {
+    left: `${Math.round(left)}px`,
+    top: `${Math.round(top)}px`,
+    width: `${Math.round(width)}px`,
+    maxHeight: `${Math.round(maxHeight)}px`,
+  }
+}
+
+async function toggleReadingGuide() {
+  readingGuideOpen.value = !readingGuideOpen.value
+  if (!readingGuideOpen.value) return
+  await nextTick()
+  updateReadingGuidePosition()
+}
+
+function dismissReadingGuide() {
+  readingGuideOpen.value = false
+}
+
+function readSankeyOperationGuideSeen() {
+  if (typeof window === 'undefined') return false
+  try {
+    return Boolean(window.localStorage.getItem(SANKEY_OPERATION_GUIDE_STORAGE_KEY))
+  } catch {
+    return false
+  }
+}
+
+function markSankeyOperationGuideSeen() {
+  sankeyGuideSeen.value = true
+  try {
+    window.localStorage.setItem(SANKEY_OPERATION_GUIDE_STORAGE_KEY, 'shown')
+  } catch {
+    // The in-memory flag still prevents repeated automatic display during this visit.
+  }
+}
+
+function clearSankeyGuideTimer() {
+  if (sankeyGuideTimer == null) return
+  window.clearTimeout(sankeyGuideTimer)
+  sankeyGuideTimer = undefined
+}
+
+function handleSankeyWorkspaceInteraction() {
+  if (sankeyGuideOpen.value || sankeyGuideShownThisVisit.value) return
+  sankeyGuideSuppressedForVisit.value = true
+  clearSankeyGuideTimer()
+}
+
+async function openSankeyOperationGuide(source: 'auto' | 'manual' = 'manual') {
+  if (sankeyGuideOpen.value || !hasRenderableGraph.value || loadState.value !== 'ready') return
+  clearSankeyGuideTimer()
+  if (source === 'auto') {
+    sankeyGuideShownThisVisit.value = true
+    markSankeyOperationGuideSeen()
+  }
+  sankeyGuideScrollSnapshot = { left: window.scrollX, top: window.scrollY }
+  pieModalOpen.value = false
+  mobileDrawerOpen.value = false
+  sankeyGuideStep.value = 0
+  await nextTick()
+  sankeyGuideOpen.value = true
+}
+
+function closeSankeyOperationGuide() {
+  sankeyGuideOpen.value = false
+  const snapshot = sankeyGuideScrollSnapshot
+  sankeyGuideScrollSnapshot = null
+  if (!snapshot) return
+  void nextTick(() => window.scrollTo({ left: snapshot.left, top: snapshot.top, behavior: 'auto' }))
+}
+
+function previousSankeyGuideStep() {
+  sankeyGuideStep.value = Math.max(0, sankeyGuideStep.value - 1)
+}
+
+function nextSankeyGuideStep() {
+  sankeyGuideStep.value = Math.min(
+    SANKEY_OPERATION_GUIDE_STEPS.length - 1,
+    sankeyGuideStep.value + 1,
+  )
+}
 
 async function loadCategories() {
   categoryController?.abort()
@@ -647,16 +1027,34 @@ function render(focusName: string | null = null) {
   const categoryGraph = graph.value
   const baseGraph = currentActiveGraph(categoryGraph)
   activeBaseGraph.value = baseGraph
-  renderedGraph.value = baseGraph
-  setChartHeight(baseGraph)
+  const previousGeometry = animateNextLayout ? captureSankeyGeometry() : null
+  cancelSankeyLayoutAnimation()
+  activeNodeLabelOffsetY = new Map<string, number>()
+  activeNodeLocalY =
+    focusName && promoteRelatedNodes.value
+      ? promotedNodeLocalY(baseGraph, focusName)
+      : new Map<string, number>()
+  const layoutGraph =
+    focusName && promoteRelatedNodes.value
+      ? {
+          ...baseGraph,
+          nodes: promoteConnectedSankeyNodes(baseGraph.nodes, baseGraph.paths, focusName),
+        }
+      : baseGraph
+  renderedGraph.value = layoutGraph
+  setChartHeight(baseGraph, 'immediate')
 
-  let chartGraph = asChartGraph(baseGraph)
-  const seeds = searchSeeds(baseGraph, searchQuery.value)
+  let chartGraph = asChartGraph(layoutGraph)
+  const seeds = searchSeeds(layoutGraph, searchQuery.value)
   if (focusName) {
-    chartGraph = styledForNode(baseGraph, focusName)
+    chartGraph = styledForNode(layoutGraph, focusName)
   } else if (seeds && seeds.size > 0) {
-    chartGraph = styledForSearch(baseGraph, seeds)
+    chartGraph = styledForSearch(layoutGraph, seeds)
   }
+  chartGraph = withActiveNodePositions(chartGraph)
+
+  const animateLayout = animateNextLayout && !prefersReducedMotion()
+  animateNextLayout = false
 
   chart.setOption(
     {
@@ -691,13 +1089,13 @@ function render(focusName: string | null = null) {
           right: SERIES_RIGHT,
           top: SERIES_TOP,
           bottom: SERIES_BOTTOM,
-          nodeWidth: 22,
+          nodeWidth: SANKEY_NODE_WIDTH,
           nodeGap: nodeGap(baseGraph),
           nodeAlign: 'justify',
           layoutIterations: 0,
           draggable: false,
           emphasis: {
-            focus: 'trajectory',
+            focus: 'none',
             blurScope: 'series',
             itemStyle: {
               opacity: 1,
@@ -725,23 +1123,430 @@ function render(focusName: string | null = null) {
           label: {
             color: '#22384B',
             fontSize: sankeyLabelFontSize(baseGraph),
-            fontFamily: 'Inter, PingFang SC, Microsoft YaHei, Helvetica Neue, Arial, sans-serif',
+            fontFamily: 'Microsoft YaHei, 微软雅黑, Arial, sans-serif',
           },
           lineStyle: {
             color: 'source',
             opacity: 0.3,
-            curveness: 0.52,
+            curveness: SANKEY_LINK_CURVENESS,
           },
         },
       ],
     },
-    true,
+    false,
   )
+  if (focusName && promoteRelatedNodes.value) {
+    packActiveLinkEndpoints(new Set(pathIdsForNode(layoutGraph, focusName)))
+  }
+  applyRoutingBridgeGeometry()
+  raiseSankeyLabels()
+  if (animateLayout && previousGeometry) animateSankeyGeometry(previousGeometry)
 
   if (!focusName && !lockedEdge.value && !lockedPathId.value) {
     detail.value = { kind: 'category' }
     lockLabel.value = ''
     lockText.value = statusText()
+  }
+}
+
+function sankeyInternalSeries() {
+  const internalChart = chart as unknown as {
+    getModel?: () => { getSeriesByIndex?: (index: number) => SankeyInternalSeries | undefined }
+  }
+  const model = internalChart.getModel?.()
+  return model?.getSeriesByIndex?.(0)
+}
+
+function cloneShape(shape: ShapeSnapshot | undefined): ShapeSnapshot | null {
+  if (!shape) return null
+  return Object.fromEntries(Object.entries(shape).map(([key, value]) => [key, value]))
+}
+
+function captureDataGeometry(data: SankeyInternalData | undefined, key: 'name' | 'linkId') {
+  const snapshots = new Map<string, ShapeSnapshot>()
+  const count = data?.count?.() ?? 0
+  for (let index = 0; index < count; index++) {
+    const id = sankeyRawItemKey(data?.getRawDataItem?.(index), key)
+    const shape = cloneShape(data?.getItemGraphicEl?.(index)?.shape)
+    if (id && shape) snapshots.set(id, shape)
+  }
+  return snapshots
+}
+
+function sankeyRawItemKey(item: ChartNode | ChartLink | undefined, key: 'name' | 'linkId') {
+  return key === 'name'
+    ? (item as ChartNode | undefined)?.name
+    : (item as ChartLink | undefined)?.linkId
+}
+
+function captureSankeyGeometry(): SankeyGeometrySnapshot | null {
+  const series = sankeyInternalSeries()
+  if (!series) return null
+  return {
+    nodes: captureDataGeometry(series.getData?.(), 'name'),
+    links: captureDataGeometry(series.getData?.('edge'), 'linkId'),
+  }
+}
+
+function collectDataGeometryAnimation(
+  data: SankeyInternalData | undefined,
+  previous: Map<string, ShapeSnapshot>,
+  key: 'name' | 'linkId',
+) {
+  const entries: Array<{
+    element: SankeyGraphicElement
+    from: ShapeSnapshot
+    to: ShapeSnapshot
+  }> = []
+  const count = data?.count?.() ?? 0
+  for (let index = 0; index < count; index++) {
+    const id = sankeyRawItemKey(data?.getRawDataItem?.(index), key)
+    const element = data?.getItemGraphicEl?.(index)
+    const from = id ? previous.get(id) : null
+    const to = cloneShape(element?.shape)
+    if (!element || !from || !to) continue
+    element.stopAnimation?.()
+    element.attr?.({ shape: from })
+    entries.push({ element, from, to })
+  }
+  return entries
+}
+
+function interpolateShape(from: ShapeSnapshot, to: ShapeSnapshot, progress: number) {
+  const shape = { ...to }
+  for (const [key, target] of Object.entries(to)) {
+    const start = from[key]
+    if (typeof start === 'number' && typeof target === 'number') {
+      shape[key] = start + (target - start) * progress
+    }
+  }
+  return shape
+}
+
+function cancelSankeyLayoutAnimation() {
+  if (layoutAnimationFrame === null) return
+  window.cancelAnimationFrame(layoutAnimationFrame)
+  layoutAnimationFrame = null
+}
+
+function animateSankeyGeometry(previous: SankeyGeometrySnapshot) {
+  const series = sankeyInternalSeries()
+  if (!series) return
+  const entries = [
+    ...collectDataGeometryAnimation(series.getData?.(), previous.nodes, 'name'),
+    ...collectDataGeometryAnimation(series.getData?.('edge'), previous.links, 'linkId'),
+  ]
+  if (!entries.length) return
+
+  const startedAt = performance.now()
+  const step = (timestamp: number) => {
+    const elapsed = Math.max(0, timestamp - startedAt)
+    const rawProgress = Math.min(1, elapsed / SANKEY_LAYOUT_ANIMATION_MS)
+    const progress = sankeyLayoutMotionProgress(rawProgress)
+    for (const entry of entries) {
+      entry.element.attr?.({ shape: interpolateShape(entry.from, entry.to, progress) })
+    }
+    if (rawProgress < 1) {
+      layoutAnimationFrame = window.requestAnimationFrame(step)
+    } else {
+      layoutAnimationFrame = null
+    }
+  }
+  layoutAnimationFrame = window.requestAnimationFrame(step)
+}
+
+function numericShapeValue(shape: ShapeSnapshot | undefined, key: string) {
+  const value = shape?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function applyRoutingBridgeGeometry() {
+  const series = sankeyInternalSeries()
+  const nodeData = series?.getData?.()
+  const edgeData = series?.getData?.('edge')
+  if (!nodeData || !edgeData) return
+
+  const bridges = new Map<string, ReturnType<typeof routingHorizontalBridgeBounds>>()
+  for (let index = 0; index < (nodeData.count?.() ?? 0); index++) {
+    const node = nodeData.getRawDataItem?.(index) as ChartNode | undefined
+    const element = nodeData.getItemGraphicEl?.(index)
+    const shape = cloneShape(element?.shape)
+    if (!node?.routing || !element || !shape) continue
+    const width = numericShapeValue(shape, 'width') || SANKEY_NODE_WIDTH
+    const height = numericShapeValue(shape, 'height')
+    const bounds = routingHorizontalBridgeBounds(
+      numericShapeValue(shape, 'x'),
+      numericShapeValue(shape, 'y'),
+      width,
+      height,
+    )
+    bridges.set(node.name, bounds)
+    element.silent = true
+    element.z2 = 12
+    element.attr?.({
+      invisible: true,
+      shape: {
+        ...shape,
+        x: bounds.joinX - 0.5,
+        y: bounds.centerY - 0.5,
+        width: 1,
+        height: 1,
+      },
+    })
+  }
+
+  if (!bridges.size) return
+  const routingEdges: Array<{
+    link: ChartLink
+    element: SankeyGraphicElement
+    shape: ShapeSnapshot
+  }> = []
+  for (let index = 0; index < (edgeData.count?.() ?? 0); index++) {
+    const link = edgeData.getRawDataItem?.(index) as ChartLink | undefined
+    const element = edgeData.getItemGraphicEl?.(index)
+    const shape = cloneShape(element?.shape)
+    if (!link || !element || !shape) continue
+    if (bridges.has(link.source) || bridges.has(link.target)) {
+      routingEdges.push({ link, element, shape })
+    }
+  }
+
+  for (const [routeName, bridge] of bridges) {
+    const incomingById = new Map(
+      routingEdges
+        .filter(({ link }) => link.target === routeName)
+        .map((edge) => [routingSemanticLinkKey(edge.link), edge]),
+    )
+    const outgoingById = new Map(
+      routingEdges
+        .filter(({ link }) => link.source === routeName)
+        .map((edge) => [routingSemanticLinkKey(edge.link), edge]),
+    )
+    const pairedIds = [...incomingById.keys()].filter((id) => outgoingById.has(id))
+    const lanes = layoutRoutingBridgeLanes(
+      pairedIds.map((id) => {
+        const incoming = incomingById.get(id)!
+        const outgoing = outgoingById.get(id)!
+        return {
+          id,
+          incomingY: numericShapeValue(incoming.shape, 'y2'),
+          outgoingY: numericShapeValue(outgoing.shape, 'y1'),
+          incomingExtent: numericShapeValue(incoming.shape, 'extent'),
+          outgoingExtent: numericShapeValue(outgoing.shape, 'extent'),
+        }
+      }),
+      bridge.centerY,
+    )
+    for (const lane of lanes) {
+      const incoming = incomingById.get(lane.id)
+      const outgoing = outgoingById.get(lane.id)
+      if (!incoming || !outgoing) continue
+      const point = { x: bridge.joinX, y: lane.y, extent: lane.extent }
+      incoming.element.attr?.({
+        shape: connectRoutingLinkToBridge(incoming.shape, 'target', point, SANKEY_LINK_CURVENESS),
+      })
+      outgoing.element.attr?.({
+        shape: connectRoutingLinkToBridge(outgoing.shape, 'source', point, SANKEY_LINK_CURVENESS),
+      })
+    }
+  }
+}
+
+function routingSemanticLinkKey(link: ChartLink) {
+  return link.semanticLinkId ?? link.linkId.replace(/@@route:(?:in|out)$/, '')
+}
+
+function raiseSankeyLabels() {
+  const nodeData = sankeyInternalSeries()?.getData?.()
+  if (!nodeData) return
+  for (let index = 0; index < (nodeData.count?.() ?? 0); index++) {
+    const node = nodeData.getRawDataItem?.(index) as ChartNode | undefined
+    const element = nodeData.getItemGraphicEl?.(index)
+    if (!node || !element) continue
+    raiseSankeyNodeLabelLayer(element, node.routing)
+  }
+}
+
+function scheduleRoutingBridgeGeometry() {
+  if (routingGeometryFrame !== null) window.cancelAnimationFrame(routingGeometryFrame)
+  routingGeometryFrame = window.requestAnimationFrame(() => {
+    routingGeometryFrame = null
+    applyRoutingBridgeGeometry()
+    raiseSankeyLabels()
+  })
+}
+
+function packActiveLinkEndpoints(activePathIds: Set<string>) {
+  if (!activePathIds.size) return
+  const series = sankeyInternalSeries()
+  const nodeData = series?.getData?.()
+  const edgeData = series?.getData?.('edge')
+  if (!nodeData || !edgeData) return
+
+  const nodeTop = new Map<string, number>()
+  for (let index = 0; index < (nodeData.count?.() ?? 0); index++) {
+    const node = nodeData.getRawDataItem?.(index) as ChartNode | undefined
+    const shape = nodeData.getItemGraphicEl?.(index)?.shape
+    if (node?.name && shape) nodeTop.set(node.name, numericShapeValue(shape, 'y'))
+  }
+
+  const edges = Array.from({ length: edgeData.count?.() ?? 0 }, (_, index) => {
+    const link = edgeData.getRawDataItem?.(index) as ChartLink | undefined
+    const element = edgeData.getItemGraphicEl?.(index)
+    const shape = cloneShape(element?.shape)
+    if (!link || !element || !shape) return null
+    return {
+      id: link.linkId,
+      link,
+      element,
+      shape,
+      active: link.pathIds.some((pathId) => activePathIds.has(pathId)),
+      extent: Math.max(0, numericShapeValue(shape, 'extent')),
+    }
+  }).filter((edge): edge is NonNullable<typeof edge> => Boolean(edge))
+
+  const nextShapes = new Map(edges.map((edge) => [edge.id, { ...edge.shape }]))
+  const packSide = (
+    nodeKey: 'source' | 'target',
+    endpointKey: 'y1' | 'y2',
+    controlKey: 'cpy1' | 'cpy2',
+  ) => {
+    const byNode = new Map<string, typeof edges>()
+    for (const edge of edges) {
+      const name = edge.link[nodeKey]
+      const entries = byNode.get(name) ?? []
+      entries.push(edge)
+      byNode.set(name, entries)
+    }
+    for (const [name, entries] of byNode) {
+      let cursor = nodeTop.get(name)
+      if (cursor === undefined) continue
+      entries.sort(
+        (a, b) =>
+          Number(b.active) - Number(a.active) ||
+          numericShapeValue(a.shape, endpointKey) - numericShapeValue(b.shape, endpointKey) ||
+          a.id.localeCompare(b.id),
+      )
+      for (const edge of entries) {
+        const shape = nextShapes.get(edge.id)
+        if (!shape) continue
+        shape[endpointKey] = cursor
+        shape[controlKey] = cursor
+        cursor += edge.extent
+      }
+    }
+  }
+
+  packSide('source', 'y1', 'cpy1')
+  packSide('target', 'y2', 'cpy2')
+  for (const edge of edges) {
+    const shape = nextShapes.get(edge.id)
+    if (shape) edge.element.attr?.({ shape })
+  }
+}
+
+function promotedNodeLocalY(baseGraph: Icd11SankeyGraph, focusName: string) {
+  const series = sankeyInternalSeries()
+  const data = series?.getData?.()
+  const height = Number(series?.layoutInfo?.height || 0)
+  if (!data || height <= 0) return new Map<string, number>()
+
+  const metrics = new Map<string, { y: number; height: number; node?: ChartNode }>()
+  const count = data.count?.() ?? 0
+  for (let index = 0; index < count; index++) {
+    const rawNode = data.getRawDataItem?.(index) as ChartNode | undefined
+    const name = rawNode?.name
+    const layout = data.getItemLayout?.(index)
+    if (!name || typeof layout?.y !== 'number') continue
+    metrics.set(name, { y: layout.y, height: Number(layout.dy || 0), node: rawNode })
+  }
+
+  const focusPaths = baseGraph.paths.filter((path) => path.nodeIds.includes(focusName))
+  const focusPathIds = new Set(focusPaths.map((path) => path.pathId))
+  const connected = new Set(focusPaths.flatMap((path) => path.nodeIds))
+  const focusWeightByNode = new Map<string, number>()
+  for (const path of focusPaths) {
+    for (const nodeName of path.nodeIds) {
+      focusWeightByNode.set(
+        nodeName,
+        (focusWeightByNode.get(nodeName) ?? 0) + Number(path.weight || 0),
+      )
+    }
+  }
+  const routingNodes = [...metrics.values()]
+    .map((metric) => metric.node)
+    .filter((node): node is ChartNode => Boolean(node?.routing))
+  for (const node of routingNodes) {
+    const routeWeight = (node.routePathIds ?? [])
+      .filter((pathId) => focusPathIds.has(pathId))
+      .reduce(
+        (sum, pathId) =>
+          sum + Number(baseGraph.paths.find((path) => path.pathId === pathId)?.weight || 0),
+        0,
+      )
+    if (routeWeight <= 0) continue
+    connected.add(node.name)
+    focusWeightByNode.set(node.name, routeWeight)
+  }
+  const positions = new Map<string, number>()
+  const minimumLabelStep = Math.max(24, sankeyLabelFontSize(baseGraph) + 10)
+  for (const depth of [0, 1, 2, 3, 4]) {
+    const column = [...baseGraph.nodes, ...routingNodes]
+      .filter((node) => node.depth === depth && metrics.has(node.name))
+      .sort((a, b) => {
+        const aRank = a.name === focusName ? 0 : connected.has(a.name) ? 1 : 2
+        const bRank = b.name === focusName ? 0 : connected.has(b.name) ? 1 : 2
+        if (aRank !== bRank) return aRank - bRank
+        if (aRank === 1) {
+          const focusWeightDiff =
+            (focusWeightByNode.get(b.name) ?? 0) - (focusWeightByNode.get(a.name) ?? 0)
+          if (focusWeightDiff) return focusWeightDiff
+        }
+        return (metrics.get(a.name)?.y ?? 0) - (metrics.get(b.name)?.y ?? 0)
+      })
+    let cursor = 0
+    for (const node of column) {
+      positions.set(node.name, Math.max(0, Math.min(1, cursor / height)))
+      cursor += (metrics.get(node.name)?.height ?? 0) + nodeGap(baseGraph)
+    }
+
+    let nextLabelCenter = minimumLabelStep / 2
+    for (const node of column.filter(
+      (item) => connected.has(item.name) && !(item as ChartNode).routing,
+    )) {
+      const metric = metrics.get(node.name)
+      const localY = positions.get(node.name)
+      if (!metric || localY === undefined) continue
+      const nodeTop = localY * height
+      const nodeCenter = nodeTop + metric.height / 2
+      const preferredLabelCenter =
+        metric.height > SANKEY_ACTIVE_LABEL_LANE_HEIGHT
+          ? nodeTop + SANKEY_ACTIVE_LABEL_LANE_HEIGHT / 2
+          : nodeCenter
+      const labelCenter = Math.min(
+        height - minimumLabelStep / 2,
+        Math.max(preferredLabelCenter, nextLabelCenter),
+      )
+      activeNodeLabelOffsetY.set(node.name, labelCenter - nodeCenter)
+      nextLabelCenter = labelCenter + minimumLabelStep
+    }
+  }
+  return positions
+}
+
+function withActiveNodePositions(baseGraph: ChartGraph): ChartGraph {
+  return {
+    ...baseGraph,
+    nodes: baseGraph.nodes.map((node) => ({
+      ...node,
+      localY: activeNodeLocalY.get(node.name) ?? null,
+      label: node.label
+        ? {
+            ...node.label,
+            offset: [0, activeNodeLabelOffsetY.get(node.name) ?? 0],
+          }
+        : node.label,
+    })),
   }
 }
 
@@ -915,35 +1720,53 @@ function buildGraphFromPaths(
 function asChartGraph(baseGraph: Icd11SankeyGraph): ChartGraph {
   const cached = chartGraphCache.get(baseGraph)
   if (cached) return cached
-  const transformed = {
+  const transformed = routeLevel2OnlyChartLinks({
     ...baseGraph,
     nodes: baseGraph.nodes.map((node) => chartNode(node, true, false)),
-    links: baseGraph.links.map((link) => chartLink(link, true, false)),
-  }
+    links: expandChartLinks(baseGraph).map((link) => chartLink(link, true, false)),
+  })
   chartGraphCache.set(baseGraph, transformed)
   return transformed
 }
 
-function styledForPathIds(baseGraph: Icd11SankeyGraph, pathIds: Iterable<string>): ChartGraph {
+function styledForPathIds(
+  baseGraph: Icd11SankeyGraph,
+  pathIds: Iterable<string>,
+  options: SankeyHighlightStyleOptions = {},
+): ChartGraph {
   const activePathIds = new Set(pathIds)
-  const cacheKey = [...activePathIds].sort().join('\u001f')
+  const priorityPathIds = new Set(options.priorityPathIds ?? activePathIds)
+  const activeCacheKey = [...activePathIds].sort().join('\u001f')
+  const priorityCacheKey = [...priorityPathIds].sort().join('\u001f')
+  const cacheKey = `${options.preserveLinkOrder ? 'stable' : 'priority'}\u001e${activeCacheKey}\u001e${priorityCacheKey}`
   const cached = highlightGraphCache.get(baseGraph)?.get(cacheKey)
   if (cached) return cached
   const activeNodes = new Set<string>()
   for (const path of selectedPaths(baseGraph, activePathIds)) {
     for (const nodeName of path.nodeIds) activeNodes.add(nodeName)
   }
-  const transformed = {
-    ...baseGraph,
-    nodes: baseGraph.nodes.map((node) => {
-      const highlighted = activeNodes.has(node.name)
-      return chartNode(node, highlighted, highlighted)
-    }),
-    links: baseGraph.links.map((link) => {
-      const highlighted = link.pathIds.some((pathId) => activePathIds.has(pathId))
-      return chartLink(link, highlighted, highlighted)
-    }),
+  const expandedLinks = expandChartLinks(baseGraph).map((link) => {
+    const highlighted = link.pathIds.some((pathId) => activePathIds.has(pathId))
+    return chartLink(link, highlighted, highlighted)
+  })
+  if (!options.preserveLinkOrder) {
+    expandedLinks.sort((a, b) => {
+      const aPriority = a.pathIds.some((pathId) => priorityPathIds.has(pathId))
+      const bPriority = b.pathIds.some((pathId) => priorityPathIds.has(pathId))
+      return Number(bPriority) - Number(aPriority) || a.linkId.localeCompare(b.linkId)
+    })
   }
+  const transformed = routeLevel2OnlyChartLinks(
+    {
+      ...baseGraph,
+      nodes: baseGraph.nodes.map((node) => {
+        const highlighted = activeNodes.has(node.name)
+        return chartNode(node, highlighted, highlighted)
+      }),
+      links: expandedLinks,
+    },
+    { preserveNodeOrder: options.preserveLinkOrder },
+  )
   setBoundedWeakCacheEntry(
     highlightGraphCache,
     baseGraph,
@@ -952,6 +1775,121 @@ function styledForPathIds(baseGraph: Icd11SankeyGraph, pathIds: Iterable<string>
     MAX_HIGHLIGHT_CACHE_ENTRIES,
   )
   return transformed
+}
+
+function expandChartLinks(baseGraph: Icd11SankeyGraph): ChartLink[] {
+  const weightByPathId = new Map(
+    baseGraph.paths.map((path) => [path.pathId, Number(path.weight || 0)]),
+  )
+  return baseGraph.links.flatMap((link) => {
+    const pathIds = [...new Set(link.pathIds)]
+    if (!pathIds.length) return [link]
+    return pathIds.map((pathId) => ({
+      ...link,
+      linkId: `${link.linkId}@@path:${pathId}`,
+      value: weightByPathId.get(pathId) ?? Number(link.value || 0) / pathIds.length,
+      pathIds: [pathId],
+      semanticLinkId: `${link.linkId}@@path:${pathId}`,
+      semanticSource: link.source,
+      semanticTarget: link.target,
+    }))
+  })
+}
+
+function routeLevel2OnlyChartLinks(
+  baseGraph: ChartGraph,
+  options: { preserveNodeOrder?: boolean } = {},
+): ChartGraph {
+  const routed = splitLevel2OnlyLinks(baseGraph.links)
+  if (!routed.groups.length) return baseGraph
+
+  const routingNodes = routed.groups.map(({ source, links }) => chartRoutingNode(source, links))
+
+  const sourceNodes = [...baseGraph.nodes, ...routingNodes]
+  const nodes = orderSankeyRoutingNodes(sourceNodes, options.preserveNodeOrder)
+
+  return {
+    ...baseGraph,
+    nodes,
+    links: routed.links,
+  }
+}
+
+function chartRoutingNode(source: string, links: ChartLink[]): ChartNode {
+  const first = links[0]
+  const pathIds = [...new Set(links.flatMap((link) => link.pathIds))]
+  const focused = links.some((link) => link.focused)
+  const node = chartNode(
+    {
+      name: sankeyRouteNodeName(source),
+      displayName: '',
+      kind: 'level3',
+      depth: 2,
+      value: links.reduce((sum, link) => sum + Number(link.value || 0), 0),
+      searchText: '',
+      level1: first?.level1 ?? '',
+      color: first?.color ?? SANKEY_LEVEL2_FALLBACK_COLOR,
+    },
+    false,
+    false,
+  )
+  return {
+    ...node,
+    cursor: 'default',
+    focused,
+    routing: true,
+    routePathIds: pathIds,
+    routeSource: source,
+    tooltip: { show: false },
+    itemStyle: {
+      color: 'transparent',
+      opacity: 0,
+      borderColor: 'transparent',
+      borderWidth: 0,
+      borderType: 'solid',
+    },
+    emphasis: {
+      itemStyle: {
+        color: 'transparent',
+        opacity: 0,
+        borderColor: 'transparent',
+        borderWidth: 0,
+        borderType: 'solid',
+      },
+      label: {
+        color: 'transparent',
+        textBorderColor: 'transparent',
+        textBorderWidth: 0,
+      },
+    },
+    blur: {
+      itemStyle: { opacity: 0.32 },
+      label: {
+        color: 'transparent',
+        textBorderColor: 'transparent',
+        textBorderWidth: 0,
+      },
+    },
+    label: node.label
+      ? {
+          ...node.label,
+          show: false,
+          formatter: '',
+        }
+      : node.label,
+  }
+}
+
+function withColorAlpha(color: string | undefined, alpha: number) {
+  const value = color || SANKEY_LEVEL2_FALLBACK_COLOR
+  const short = /^#([\da-f])([\da-f])([\da-f])$/i.exec(value)
+  const full = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(value)
+  const channels = short
+    ? short.slice(1).map((channel) => Number.parseInt(`${channel}${channel}`, 16))
+    : full?.slice(1).map((channel) => Number.parseInt(channel, 16))
+  return channels
+    ? `rgba(${channels[0]}, ${channels[1]}, ${channels[2]}, ${alpha})`
+    : SANKEY_LEVEL2_FALLBACK_COLOR
 }
 
 function styledForNode(baseGraph: Icd11SankeyGraph, nodeName: string): ChartGraph {
@@ -974,6 +1912,7 @@ function chartNode(node: Icd11SankeyNode, active: boolean, highlighted: boolean)
   return {
     ...node,
     cursor: 'pointer',
+    focused: highlighted,
     itemStyle: {
       color: highlighted ? SANKEY_NODE_LOCKED_COLOR : SANKEY_NODE_COLOR,
       opacity: active ? (isRelatedContext && !highlighted ? 0.7 : 1) : 0.2,
@@ -983,12 +1922,12 @@ function chartNode(node: Icd11SankeyNode, active: boolean, highlighted: boolean)
     emphasis: {
       itemStyle: {
         color: highlighted ? SANKEY_NODE_LOCKED_COLOR : SANKEY_NODE_HOVER_COLOR,
-        opacity: active ? 1 : 0.58,
+        opacity: active ? 1 : 0.26,
         borderColor: 'rgba(255,255,255,0.96)',
         borderWidth: 1,
       },
       label: {
-        color: active ? '#173247' : 'rgba(34, 56, 75, 0.56)',
+        color: highlighted ? '#0F4968' : active ? '#173247' : 'rgba(34, 56, 75, 0.56)',
         textBorderColor: 'transparent',
         textBorderWidth: 0,
       },
@@ -1006,9 +1945,10 @@ function chartNode(node: Icd11SankeyNode, active: boolean, highlighted: boolean)
     label: {
       show: true,
       position,
+      offset: [0, 0],
       formatter: label.text,
       color: highlighted
-        ? '#12344A'
+        ? '#123F5B'
         : active
           ? isRelatedContext
             ? 'rgba(34, 56, 75, 0.72)'
@@ -1018,9 +1958,15 @@ function chartNode(node: Icd11SankeyNode, active: boolean, highlighted: boolean)
       lineHeight: label.lineHeight,
       overflow: 'truncate',
       align: position === 'right' ? 'left' : 'right',
-      fontWeight: highlighted ? 700 : active ? 600 : 500,
+      fontWeight: highlighted ? 650 : active ? 600 : 500,
       textBorderColor: 'transparent',
       textBorderWidth: 0,
+      verticalAlign: 'middle',
+      backgroundColor: 'transparent',
+      borderColor: 'transparent',
+      borderWidth: 0,
+      borderRadius: 0,
+      padding: [0, 0],
     },
   }
 }
@@ -1038,6 +1984,7 @@ function chartLink(link: Icd11SankeyLink, active: boolean, highlighted: boolean)
       : 0.34
   return {
     ...link,
+    focused: highlighted,
     lineStyle: {
       color,
       opacity: highlighted ? 0.78 : active ? activeOpacity : 0.08,
@@ -1045,7 +1992,7 @@ function chartLink(link: Icd11SankeyLink, active: boolean, highlighted: boolean)
     },
     emphasis: {
       lineStyle: {
-        opacity: active ? 0.62 : 0.42,
+        opacity: highlighted ? 0.82 : active ? 0.62 : 0.1,
       },
     },
     blur: {
@@ -1086,9 +2033,12 @@ function sankeyLabelFontSize(baseGraph: Icd11SankeyGraph) {
 async function handleChartClick(params: unknown) {
   const event = params as { dataType?: string; data?: ChartNode | ChartLink }
   if (!activeBaseGraph.value || !event.data) return
-  clearHoverPreview()
+  chart?.dispatchAction({ type: 'hideTip' })
+  chart?.dispatchAction({ type: 'downplay', seriesIndex: 0 })
+  clearHoverPreviewState()
   if (event.dataType === 'node') {
     const node = event.data as ChartNode
+    if (node.routing) return
     if (node.kind === 'level1' && node.displayName !== selectedLevel1.value) {
       selectedLevel1.value = node.displayName
       await nextTick()
@@ -1099,20 +2049,22 @@ async function handleChartClick(params: unknown) {
     currentFocus.value = activeNode.name
     lockedEdge.value = null
     lockedPathId.value = ''
+    animateNextLayout = true
     render(currentFocus.value)
-    const paths = selectedPaths(baseGraph, pathIdsForNode(baseGraph, activeNode.name))
-    lockLabel.value = '当前锁定节点'
+    const paths = currentScopePaths.value.filter((path) => path.nodeIds.includes(activeNode.name))
+    lockLabel.value = '节点'
     lockText.value = activeNode.displayName
     detail.value = {
       kind: 'node',
       title: activeNode.displayName,
       level: KIND_LABELS[activeNode.kind],
       nodeKind: activeNode.kind,
-      nodeWeight: activeNode.value,
+      nodeWeight: sumPathWeight(paths),
       paths,
       limit: 20,
     }
     openDetailPanel()
+    if (promoteRelatedNodes.value) await locateSearchNode(activeNode)
     return
   }
   if (event.dataType === 'edge') {
@@ -1153,27 +2105,92 @@ function previewTargetFromEvent(params: unknown) {
   return null
 }
 
+function edgeRelationshipTitle(
+  sourceKind: Icd11SankeyNode['kind'],
+  targetKind: Icd11SankeyNode['kind'],
+) {
+  if (sourceKind === 'level1' && targetKind === 'level2') return '疾病分类关系'
+  if (sourceKind === 'level2' && targetKind === 'level3') return '疾病分层关系'
+  if (targetKind === 'drug') return '疾病与药物关系'
+  if (sourceKind === 'drug' && targetKind === 'biomarker') return '药物与生物标记物关系'
+  return '节点间关系'
+}
+
+function drugForEdge(
+  baseGraph: Icd11SankeyGraph,
+  source: Icd11SankeyNode | undefined,
+  target: Icd11SankeyNode | undefined,
+) {
+  const drugNode = source?.kind === 'drug' ? source : target?.kind === 'drug' ? target : undefined
+  if (!drugNode) return undefined
+  return {
+    id: drugNode.name,
+    name: drugNode.displayName,
+    prescriptionStatus: baseGraph.drugPrescriptions?.[drugNode.name] ?? 'unknown',
+  }
+}
+
 function lockEdge(edge: Icd11SankeyLink) {
   const baseGraph = activeBaseGraph.value
   if (!baseGraph || !renderedGraph.value) return
-  if (lockedEdge.value?.linkId === edge.linkId) {
+  const chartEdge = edge as ChartLink
+  const semanticLinkId = chartEdge.semanticLinkId ?? chartEdge.linkId
+  const lockedSemanticLinkId = lockedEdge.value?.semanticLinkId ?? lockedEdge.value?.linkId
+  if (lockedSemanticLinkId === semanticLinkId) {
     clearLockedState()
     render()
     return
   }
-  lockedEdge.value = edge
+  lockedEdge.value = chartEdge
   lockedPathId.value = ''
   currentFocus.value = ''
   updateSeriesGraph(styledForPathIds(renderedGraph.value, edge.pathIds))
-  lockLabel.value = '当前锁定流带'
+  lockLabel.value = '流带'
   lockText.value = `${edge.sourceLabel} → ${edge.targetLabel}`
+  const paths = selectedPaths(baseGraph, edge.pathIds)
+  const semanticSource = chartEdge.semanticSource ?? chartEdge.source
+  const semanticTarget = chartEdge.semanticTarget ?? chartEdge.target
+  const sourceTotal = baseGraph.links
+    .filter((link) => link.source === semanticSource)
+    .reduce((sum, link) => sum + Number(link.value || 0), 0)
+  const targetTotal = baseGraph.links
+    .filter((link) => link.target === semanticTarget)
+    .reduce((sum, link) => sum + Number(link.value || 0), 0)
+  const nodeIndex = icd11SankeyGraphIndex(baseGraph).nodeById
+  const sourceNode = nodeIndex.get(semanticSource)
+  const targetNode = nodeIndex.get(semanticTarget)
+  const sourceKind = sourceNode?.kind ?? 'level1'
+  const targetKind = targetNode?.kind ?? 'level2'
+  const associatedNodeCount = new Set(paths.flatMap((path) => path.nodeIds)).size - 2
   detail.value = {
     kind: 'paths',
-    title: edge.edgeType,
-    status: '已锁定，点击同一流带或重置清除',
-    paths: selectedPaths(baseGraph, edge.pathIds),
+    title: edgeRelationshipTitle(sourceKind, targetKind),
+    paths,
     limit: 30,
+    edge: {
+      source: semanticSource,
+      target: semanticTarget,
+      sourceLabel: edge.sourceLabel,
+      targetLabel: edge.targetLabel,
+      value: Number(edge.value || 0),
+      sourceShare: sourceTotal > 0 ? Number(edge.value || 0) / sourceTotal : 0,
+      targetShare: targetTotal > 0 ? Number(edge.value || 0) / targetTotal : 0,
+      associatedNodeCount: Math.max(0, associatedNodeCount),
+      sourceKind,
+      targetKind,
+      drug: drugForEdge(baseGraph, sourceNode, targetNode),
+    },
   }
+}
+
+async function toggleRelatedNodePromotion() {
+  promoteRelatedNodes.value = !promoteRelatedNodes.value
+  if (!currentFocus.value) return
+  animateNextLayout = true
+  render(currentFocus.value)
+  if (!promoteRelatedNodes.value || !activeBaseGraph.value) return
+  const activeNode = activeBaseGraph.value.nodes.find((node) => node.name === currentFocus.value)
+  if (activeNode) await locateSearchNode(activeNode)
 }
 
 function lockSinglePath(pathId: string) {
@@ -1186,31 +2203,41 @@ function lockSinglePath(pathId: string) {
   lockedPathId.value = pathId
   currentFocus.value = ''
   updateSeriesGraph(styledForPathIds(renderedGraph.value, [pathId]))
-  lockLabel.value = '当前锁定聚合路径'
+  lockLabel.value = '路径'
   lockText.value = pathText(path)
   detail.value = {
     kind: 'paths',
     title: '聚合五层路径',
-    status: '已锁定，点击重置清除',
     paths: [path],
     limit: 1,
   }
 }
 
 function updateSeriesGraph(nextGraph: ChartGraph) {
+  const positionedGraph = withActiveNodePositions(nextGraph)
   chart?.setOption({
     animation: false,
     series: [
       {
-        data: nextGraph.nodes,
-        links: nextGraph.links,
+        data: positionedGraph.nodes,
+        links: positionedGraph.links,
       },
     ],
   })
+  if (currentFocus.value && promoteRelatedNodes.value && renderedGraph.value) {
+    packActiveLinkEndpoints(new Set(pathIdsForNode(renderedGraph.value, currentFocus.value)))
+  }
+  applyRoutingBridgeGeometry()
+  raiseSankeyLabels()
 }
 
 function schedulePreviewHighlight(key: string, pathIds: string[], contextTitle = '') {
+  if (layoutAnimationFrame !== null) return
   if (!renderedGraph.value || !pathIds.length) return
+  const hoverPathIds = [...new Set(pathIds)]
+  const persistentPathIds = persistentContextPathIds.value
+  const previewPathIds = mergeSankeyHighlightPathIds(persistentPathIds, hoverPathIds)
+  if (!previewPathIds.length) return
   if (key === activePreviewKey && !hoverPreviewTimer) return
   clearTimer('restore')
   clearTimer('preview')
@@ -1218,13 +2245,22 @@ function schedulePreviewHighlight(key: string, pathIds: string[], contextTitle =
     hoverPreviewTimer = null
     if (!renderedGraph.value || key === activePreviewKey) return
     activePreviewKey = key
-    hoverContextPathIds.value = [...pathIds]
+    hoverContextPathIds.value = hoverPathIds
     hoverContextTitle.value = contextTitle
-    updateSeriesGraph(styledForPathIds(renderedGraph.value, pathIds))
+    updateSeriesGraph(
+      styledForPathIds(
+        renderedGraph.value,
+        previewPathIds,
+        persistentPathIds.length
+          ? { priorityPathIds: persistentPathIds }
+          : { preserveLinkOrder: true },
+      ),
+    )
   }, HOVER_INTENT_DELAY)
 }
 
 function scheduleRestoreHighlight() {
+  if (layoutAnimationFrame !== null) return
   clearTimer('preview')
   clearTimer('restore')
   hoverRestoreTimer = window.setTimeout(() => {
@@ -1234,11 +2270,15 @@ function scheduleRestoreHighlight() {
 }
 
 function clearHoverPreview() {
+  clearHoverPreviewState()
+  restoreLockedHighlight()
+}
+
+function clearHoverPreviewState() {
   clearHoverTimers()
   activePreviewKey = ''
   hoverContextPathIds.value = []
   hoverContextTitle.value = ''
-  restoreLockedHighlight()
 }
 
 function clearHoverTimers() {
@@ -1261,13 +2301,7 @@ function normalizeRelationPieSection(section: BaseRelationPieSection): RelationP
   const hiddenItemCount =
     sourceItemCount > MAX_RELATION_PIE_ITEMS ? sourceItemCount - TOP_RELATION_PIE_ITEMS : 0
   const totalWeight = section.items.reduce((sum, item) => sum + Number(item.value || 0), 0)
-  const sourceItems: RelationPieSourceItem[] =
-    sourceItemCount > MAX_RELATION_PIE_ITEMS
-      ? [
-          ...section.items.slice(0, TOP_RELATION_PIE_ITEMS),
-          collapsedOtherRelationItem(section.items.slice(TOP_RELATION_PIE_ITEMS), totalWeight),
-        ]
-      : section.items
+  const sourceItems = collapseRelationShares(section.items, TOP_RELATION_PIE_ITEMS)
 
   return {
     ...section,
@@ -1276,22 +2310,6 @@ function normalizeRelationPieSection(section: BaseRelationPieSection): RelationP
     sourceItemCount,
     hiddenItemCount,
     isCollapsed: hiddenItemCount > 0,
-  }
-}
-
-function collapsedOtherRelationItem(
-  items: RelationShareItem[],
-  totalWeight: number,
-): RelationPieSourceItem {
-  const value = items.reduce((sum, item) => sum + Number(item.value || 0), 0)
-  const pathIds = items.flatMap((item) => item.pathIds)
-  return {
-    name: `其他 ${items.length} 项`,
-    value,
-    share: totalWeight > 0 ? value / totalWeight : 0,
-    pathIds,
-    isOther: true,
-    hiddenItemCount: items.length,
   }
 }
 
@@ -1316,44 +2334,14 @@ function relationItemColor(item: RelationPieSourceItem, index: number) {
 function isRelationPieChartable(
   section: RelationPieSection | null | undefined,
 ): section is RelationPieSection {
-  return Boolean(section && section.items.length >= 2)
+  return Boolean(section && section.items.length > 1)
 }
 
-function singleRelationItem(section: RelationPieSection): RelationPieDatum {
-  return (
-    section.items[0] ?? {
-      name: '',
-      value: 0,
-      share: 0,
-      pathIds: [],
-      sectionId: section.id,
-      itemStyle: { color: relationPieColor(0, true) },
-    }
-  )
-}
-
-function relationShareBarStyle(item: RelationPieDatum): Record<string, string> {
-  const share = Math.max(4, Math.min(100, Number(item.share || 0) * 100))
-  return {
-    '--relation-share': `${share}%`,
-    '--relation-color': item.itemStyle.color,
-  }
-}
-
-function relationPieChartShellStyle(
-  section: RelationPieSection,
-  large: boolean,
-): Record<string, string> {
-  const itemCount = Math.max(2, section.items.length)
-  const rowHeight = large ? 18 : 15
-  const rowGap = large ? 5 : 3
-  const legendPadding = large ? 14 : 10
-  const legendHeight = itemCount * rowHeight + (itemCount - 1) * rowGap + legendPadding
-  const minimumHeight = large ? 430 : 300
-  const chartClearance = large ? 260 : 250
-  return {
-    '--relation-pie-shell-height': `${Math.max(minimumHeight, chartClearance + legendHeight)}px`,
-  }
+function relationPieStartAngle(section: RelationPieSection) {
+  const dominantShare = Math.max(0, ...section.items.map((item) => Number(item.share || 0)))
+  if (dominantShare <= 0.5) return 90
+  const remainingAngle = (1 - dominantShare) * 360
+  return Math.round(90 - remainingAngle / 2)
 }
 
 function handleRelationItemMouseOver(section: RelationPieSection, item: RelationPieDatum) {
@@ -1437,8 +2425,6 @@ function renderPieChartInstance(
     return null
   }
   const nextChart = instance ?? init(element, null, { renderer: 'canvas' })
-  const compactLayout = element.clientWidth < 360
-  const compactLargeLayout = large && element.clientWidth < 520
   bindRelationPieEvents(nextChart)
   nextChart.setOption(
     {
@@ -1458,7 +2444,7 @@ function renderPieChartInstance(
         padding: [12, 13],
         textStyle: {
           color: '#173247',
-          fontFamily: 'Arial, Noto Sans CJK SC, Source Han Sans CN, Microsoft YaHei, sans-serif',
+          fontFamily: 'Microsoft YaHei, 微软雅黑, Arial, sans-serif',
         },
         extraCssText: ['box-shadow: 0 4px 12px rgba(13, 34, 50, 0.12);', 'line-height: 1.35;'].join(
           '',
@@ -1472,21 +2458,10 @@ function renderPieChartInstance(
       series: [
         {
           type: 'pie',
-          radius: large
-            ? compactLargeLayout
-              ? ['37%', '55%']
-              : ['46%', '72%']
-            : compactLayout
-              ? ['36%', '53%']
-              : ['39%', '64%'],
-          center: large
-            ? compactLargeLayout
-              ? ['50%', '40%']
-              : ['40%', '46%']
-            : compactLayout
-              ? ['50%', '34%']
-              : ['50%', '35%'],
-          minAngle: 6,
+          radius: large ? ['43%', '64%'] : ['39%', '59%'],
+          center: ['50%', large ? '53%' : '54%'],
+          startAngle: relationPieStartAngle(section),
+          minAngle: 0,
           avoidLabelOverlap: true,
           selectedOffset: large ? 8 : 5,
           itemStyle: {
@@ -1499,32 +2474,44 @@ function renderPieChartInstance(
             show: true,
             position: 'outside',
             alignTo: 'labelLine',
-            bleedMargin: 4,
+            edgeDistance: large ? 18 : 7,
+            bleedMargin: 6,
             distanceToLabelLine: 3,
-            color: '#4C5967',
-            fontFamily:
-              "Inter, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif",
-            fontSize: large && !compactLargeLayout ? 12 : 11,
+            color: '#314b5f',
+            fontSize: large ? 12 : 10,
             fontWeight: 650,
-            lineHeight: large && !compactLargeLayout ? 18 : 16,
-            textBorderColor: 'transparent',
-            textBorderWidth: 0,
+            lineHeight: large ? 17 : 15,
             formatter(params: { data?: RelationPieDatum }) {
               const data = params.data
               if (!data) return ''
-              return `${formatNumber(data.value)} · ${formatPercent(data.share)}`
+              return `{weight|${formatNumber(data.value)}} {share|${formatPercent(data.share)}}`
+            },
+            rich: {
+              weight: {
+                color: '#173247',
+                fontSize: large ? 12 : 10,
+                fontWeight: 700,
+              },
+              share: {
+                color: '#5f7381',
+                fontSize: large ? 11 : 10,
+                fontWeight: 600,
+              },
             },
           },
           labelLine: {
             show: true,
-            length: large && !compactLargeLayout ? 12 : 4,
-            length2: large && !compactLargeLayout ? 8 : 4,
-            smooth: false,
+            length: large ? 10 : 7,
+            length2: large ? 8 : 6,
+            smooth: 0.16,
             lineStyle: {
-              color: '#8A96A3',
+              color: '#a8b6c0',
               width: 1,
-              opacity: 0.82,
             },
+          },
+          labelLayout: {
+            hideOverlap: false,
+            moveOverlap: 'shiftY',
           },
           emphasis: {
             focus: 'self',
@@ -1577,6 +2564,7 @@ function disposeModalRelationPieChart() {
 function openPieModal(sectionId: string) {
   const section = relationPieSections.value.find((item) => item.id === sectionId)
   if (!isRelationPieChartable(section)) return
+  piePreviousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
   activePieId.value = sectionId
   pieModalOpen.value = true
 }
@@ -1587,7 +2575,29 @@ function closePieModal() {
 }
 
 function handleKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape' && pieModalOpen.value) closePieModal()
+  if (readingGuideOpen.value && event.key === 'Escape') {
+    closeReadingGuide(event)
+    return
+  }
+  if (!pieModalOpen.value) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closePieModal()
+    return
+  }
+  if (event.key !== 'Tab') return
+  const elements = [
+    ...(pieDialogEl.value?.querySelectorAll<HTMLElement>('button, [tabindex="0"]') ?? []),
+  ]
+  const first = elements[0]
+  const last = elements[elements.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last?.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first?.focus()
+  }
 }
 
 function handleRelationPieMouseOver(params: unknown) {
@@ -1634,6 +2644,7 @@ function resetView() {
 function clearLock() {
   clearLockedState()
   detail.value = { kind: 'category' }
+  animateNextLayout = true
   render()
 }
 
@@ -1655,6 +2666,7 @@ function resetInteractionState() {
 function clearSelectionFromBlank() {
   clearLockedState()
   detail.value = { kind: 'category' }
+  animateNextLayout = true
   render()
 }
 
@@ -1715,15 +2727,19 @@ async function selectSearchResult(result: SankeyNodeSearchResult) {
     paths,
     limit: 20,
   }
+  animateNextLayout = true
   render(node.name)
   await locateSearchNode(node)
 
   if (isMobileViewport.value) {
-    searchDrawerTimer = window.setTimeout(() => {
-      mobileDrawerOpen.value = true
-      searchDrawerTimer = null
-      applyChartLayout()
-    }, prefersReducedMotion() ? 0 : 200)
+    searchDrawerTimer = window.setTimeout(
+      () => {
+        mobileDrawerOpen.value = true
+        searchDrawerTimer = null
+        applyChartLayout()
+      },
+      prefersReducedMotion() ? 0 : 200,
+    )
   } else {
     openDetailPanel()
   }
@@ -1731,37 +2747,62 @@ async function selectSearchResult(result: SankeyNodeSearchResult) {
 
 async function locateSearchNode(node: Icd11SankeyNode) {
   if (isMobileViewport.value) scrollToMobileStage(node.depth)
-  await nextTick()
-  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
 
-  let nodeCenter: number | null = null
+  let nodeAnchor: number | null = null
   try {
-    const layoutChart = chart as unknown as {
-      getModel?: () => {
-        getSeriesByIndex?: (index: number) => {
-          getData?: () => {
-            indexOfName?: (name: string) => number
-            getItemLayout?: (index: number) => { y?: number; dy?: number } | undefined
-          }
-        }
-      }
-    }
-    const data = layoutChart?.getModel?.().getSeriesByIndex?.(0)?.getData?.()
+    const series = sankeyInternalSeries()
+    const data = series?.getData?.()
     const dataIndex = data?.indexOfName?.(node.name) ?? -1
     const layout = dataIndex >= 0 ? data?.getItemLayout?.(dataIndex) : undefined
-    if (typeof layout?.y === 'number') nodeCenter = layout.y + Number(layout.dy || 0) / 2
+    if (typeof layout?.y === 'number') {
+      const promotedLocalY = activeNodeLocalY.get(node.name)
+      const targetNodeY =
+        promotedLocalY === undefined
+          ? layout.y
+          : promotedLocalY * Number(series?.layoutInfo?.height || 0)
+      const nodeCenter = SERIES_TOP + targetNodeY + Number(layout.dy || 0) / 2
+      nodeAnchor = nodeCenter + (activeNodeLabelOffsetY.get(node.name) ?? 0)
+    }
   } catch {
-    nodeCenter = null
+    nodeAnchor = null
   }
 
   const targetElement = chartEl.value ?? chartShellEl.value
   if (!targetElement) return
   const elementTop = window.scrollY + targetElement.getBoundingClientRect().top
   const targetTop =
-    nodeCenter === null
+    nodeAnchor === null
       ? elementTop - 130
-      : elementTop + nodeCenter - Math.min(window.innerHeight * 0.38, 320)
-  window.scrollTo({ top: Math.max(0, targetTop), behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
+      : elementTop + nodeAnchor - Math.min(window.innerHeight * 0.28, 220)
+  animateViewportFollow(Math.max(0, targetTop))
+}
+
+function animateViewportFollow(targetTop: number) {
+  if (viewportFollowFrame !== null) {
+    window.cancelAnimationFrame(viewportFollowFrame)
+    viewportFollowFrame = null
+  }
+  if (prefersReducedMotion()) {
+    window.scrollTo({ top: targetTop, behavior: 'auto' })
+    return
+  }
+  const startTop = window.scrollY
+  const distance = targetTop - startTop
+  if (Math.abs(distance) < 2) return
+  const startedAt = performance.now()
+  const step = (timestamp: number) => {
+    const progress = Math.min(1, (timestamp - startedAt) / SANKEY_LAYOUT_ANIMATION_MS)
+    window.scrollTo({
+      top: startTop + distance * sankeyLayoutMotionProgress(progress),
+      behavior: 'auto',
+    })
+    if (progress < 1) {
+      viewportFollowFrame = window.requestAnimationFrame(step)
+    } else {
+      viewportFollowFrame = null
+    }
+  }
+  viewportFollowFrame = window.requestAnimationFrame(step)
 }
 
 function prefersReducedMotion() {
@@ -1771,10 +2812,10 @@ function prefersReducedMotion() {
 function statusText() {
   if (selectedSearchNodeId.value && graph.value) {
     const node = icd11SankeyGraphIndex(graph.value).nodeById.get(selectedSearchNodeId.value)
-    if (node) return `已定位搜索结果：${node.displayName}`
+    if (node) return `搜索结果：${node.displayName}`
   }
-  if (searchQuery.value.trim()) return `当前搜索高亮：${searchQuery.value.trim()}`
-  return '当前未锁定路径'
+  if (searchQuery.value.trim()) return `搜索：${searchQuery.value.trim()}`
+  return selectedLevel1.value || '当前范围'
 }
 
 function displayPaths(baseGraph: Icd11SankeyGraph) {
@@ -1785,23 +2826,21 @@ function summarizeDisplayPaths(baseGraph: Icd11SankeyGraph): DisplayPathSummary 
   const cacheKey = displayTransformKey()
   const cached = displaySummaryCache.get(baseGraph)?.get(cacheKey)
   if (cached) return cached
-  const contextualPaths = pathsForLevel1Scope(
+  const filteredPaths = sankeyScopeCandidates(
     baseGraph.paths,
     selectedLevel1.value,
     level1Scope.value,
-  )
-  const filteredPaths = sortSankeyPaths(
-    contextualPaths.filter((path) => {
-      const weightMatched = minWeight.value <= 0 || path.weight >= minWeight.value
-      return weightMatched
-    }),
-  ).sort(
-    (a, b) => Number(b.level1 === selectedLevel1.value) - Number(a.level1 === selectedLevel1.value),
+    minWeight.value,
   )
   const limit = displayModeLimit(displayMode.value, filteredPaths.length, smartPathLimit.value)
-  const limitedPaths = limit ? filteredPaths.slice(0, limit) : filteredPaths
+  const limitedPaths = selectSankeyDisplayPaths(
+    filteredPaths,
+    selectedLevel1.value,
+    level1Scope.value,
+    limit,
+  )
   const forcedPath = forcedSearchPathId.value
-    ? icd11SankeyGraphIndex(baseGraph).pathById.get(forcedSearchPathId.value) ?? null
+    ? (icd11SankeyGraphIndex(baseGraph).pathById.get(forcedSearchPathId.value) ?? null)
     : null
   const injected = ensureSearchTargetVisible(
     limitedPaths,
@@ -1916,7 +2955,10 @@ function searchSeeds(baseGraph: Icd11SankeyGraph, keyword: string) {
   return seeds
 }
 
-function setChartHeight(baseGraph: Icd11SankeyGraph) {
+function setChartHeight(
+  baseGraph: Icd11SankeyGraph,
+  resizeMode: 'defer' | 'immediate' | 'none' = 'defer',
+) {
   const availableViewportHeight = Math.max(720, window.innerHeight - HEADER_HEIGHT)
   const maxNodes = Math.max(1, baseGraph.stats.maxNodes)
   const pathCount = baseGraph.paths.length
@@ -1926,9 +2968,19 @@ function setChartHeight(baseGraph: Icd11SankeyGraph) {
   const extraSpace = dense ? 320 : medium ? 260 : 160
   const maxHeight = dense ? MAX_CHART_HEIGHT : medium ? 3000 : 1200
   const contentHeight = maxNodes * perNode + extraSpace
-  chartHeight.value = Math.max(availableViewportHeight, Math.min(maxHeight, contentHeight))
+  const nextHeight = Math.max(availableViewportHeight, Math.min(maxHeight, contentHeight))
+  const changed = nextHeight !== chartHeight.value
+  chartHeight.value = nextHeight
+  if (chartShellEl.value) chartShellEl.value.style.height = `${nextHeight}px`
+  if (!changed || resizeMode === 'none') return
+  if (resizeMode === 'immediate') {
+    chart?.resize()
+    updateUpstreamContextVisibility()
+    return
+  }
   void nextTick(() => {
     chart?.resize()
+    scheduleRoutingBridgeGeometry()
     updateUpstreamContextVisibility()
   })
 }
@@ -1956,6 +3008,7 @@ function handleResize() {
   }
   applyChartLayout()
   updateUpstreamContextVisibility()
+  if (readingGuideOpen.value) updateReadingGuidePosition()
 }
 
 function handleChartScroll(event: Event) {
@@ -1970,7 +3023,6 @@ function handleChartScroll(event: Event) {
 
 function openDetailPanel() {
   if (isMobileViewport.value) mobileDrawerOpen.value = true
-  window.setTimeout(applyChartLayout, 0)
 }
 
 function openMobileOverview() {
@@ -2025,7 +3077,7 @@ function dismissMobileSwipeHint() {
 }
 
 function applyChartLayout() {
-  if (graph.value) setChartHeight(activeBaseGraph.value ?? graph.value)
+  if (graph.value) setChartHeight(activeBaseGraph.value ?? graph.value, 'none')
   chart?.resize()
   for (const chartInstance of pieCharts.values()) chartInstance.resize()
   modalPieChart?.resize()
@@ -2043,10 +3095,12 @@ function applyChartLayout() {
       },
     ],
   })
+  scheduleRoutingBridgeGeometry()
 }
 
 function handleWindowScroll() {
   updateUpstreamContextVisibility()
+  if (readingGuideOpen.value) updateReadingGuidePosition()
 }
 
 function updateUpstreamContextVisibility() {
@@ -2070,18 +3124,20 @@ function pathText(path: Icd11SankeyPath) {
 }
 
 function pathSteps(path: Icd11SankeyPath) {
-  const steps = [
+  const steps: Array<{ label: string; value: string; note?: string }> = [
     { label: 'Level1', value: path.level1 },
     { label: 'Level2', value: path.level2 },
   ]
   if (path.level3) steps.push({ label: 'Level3', value: path.level3 })
-  steps.push({ label: '药物', value: path.drug })
+  const drugNodeId = path.nodeIds[path.mappingLevel === 'Level3' ? 3 : 2]
+  const prescriptionStatus = drugNodeId ? graph.value?.drugPrescriptions?.[drugNodeId] : undefined
+  steps.push({
+    label: '药物',
+    value: path.drug,
+    note: prescriptionStatus ? PRESCRIPTION_STATUS_LABELS[prescriptionStatus] : '',
+  })
   steps.push({ label: '生物标记物', value: path.biomarker })
   return steps
-}
-
-function topList(items: Icd11SankeyTopItem[] | undefined) {
-  return items ?? []
 }
 
 function formatNumber(value: number | string | null | undefined) {
@@ -2148,8 +3204,18 @@ function exportPng() {
 </script>
 
 <template>
-  <main class="sankey-shell">
-    <PlatformHeader active="sankey" />
+  <main
+    class="sankey-shell"
+    :style="{ '--sankey-stage-top': sankeyHeaderHidden ? '0px' : '70px' }"
+    :inert="pieModalOpen || undefined"
+    @pointerdown.capture="handleSankeyWorkspaceInteraction"
+    @keydown.capture="handleSankeyWorkspaceInteraction"
+  >
+    <PlatformHeader
+      active="sankey"
+      auto-hide-on-scroll
+      @visibility-change="sankeyHeaderHidden = $event"
+    />
 
     <form id="main-content" class="sankey-controls" tabindex="-1" @submit.prevent>
       <div class="control-field search-field">
@@ -2218,7 +3284,7 @@ function exportPng() {
             class="control-help"
             tabindex="0"
             role="img"
-            aria-label="显示模式说明：全量显示所有候选路径，智能精简和 Top 模式按照权重减少路径数量。"
+            aria-label="显示模式说明：全量显示所有候选路径；智能精简和 Top 模式按权重选择路径，含关联时预留约五分之一给关联分支。"
             data-tooltip="控制路径数量：全量显示所有候选路径；智能精简和 Top 模式按照权重减少路径数量。"
             >?</span
           >
@@ -2275,9 +3341,22 @@ function exportPng() {
           查看概览
         </button>
         <button
-          class="control-button clear-lock-button"
+          ref="sankeyGuideButton"
+          class="control-button operation-guide-button"
           type="button"
           :disabled="isLoading || !hasRenderableGraph"
+          aria-label="操作指引"
+          title="操作指引"
+          @click.stop="openSankeyOperationGuide('manual')"
+        >
+          <span aria-hidden="true">?</span>
+        </button>
+        <button
+          class="control-button clear-lock-button"
+          type="button"
+          :disabled="
+            isLoading || !hasRenderableGraph || !(lockedEdge || lockedPathId || currentFocus)
+          "
           @click="clearLock"
         >
           清除锁定
@@ -2300,9 +3379,20 @@ function exportPng() {
           :class="{ 'has-lock': Boolean(lockedEdge || lockedPathId || currentFocus) }"
           aria-live="polite"
         >
-          <strong>{{ lockLabel || '状态' }}</strong>
+          <strong>{{ lockLabel || '范围' }}</strong>
           <span>{{ lockText }}</span>
           <span v-if="displaySummaryText" class="filter-summary">{{ displaySummaryText }}</span>
+          <button
+            type="button"
+            class="layout-motion-toggle"
+            :class="{ active: promoteRelatedNodes }"
+            :aria-pressed="promoteRelatedNodes"
+            title="控制点击节点后，其关联节点是否动画置顶"
+            @click="toggleRelatedNodePromotion"
+          >
+            <i aria-hidden="true"></i>
+            <span>关联节点置顶</span>
+          </button>
         </div>
         <SankeyStageNavigator
           :stages="MOBILE_STAGE_TITLES"
@@ -2345,6 +3435,9 @@ function exportPng() {
             </div>
           </div>
         </div>
+        <p v-if="hasVisibleLevel2Route" id="sankey-level2-route-note" class="visually-hidden">
+          未设置 Level3 的路径通过窄通道直接连接 Level2 与药物，不补造 Level3 节点。
+        </p>
         <div
           v-show="hasRenderableGraph"
           ref="chartScrollEl"
@@ -2357,7 +3450,13 @@ function exportPng() {
             :style="{ height: `${chartHeight}px` }"
           >
             <div class="level1-column-rail" aria-hidden="true"></div>
-            <div ref="chartEl" class="sankey-chart"></div>
+            <div
+              ref="chartEl"
+              class="sankey-chart"
+              role="img"
+              :aria-label="sankeyChartAriaLabel"
+              :aria-describedby="hasVisibleLevel2Route ? 'sankey-level2-route-note' : undefined"
+            ></div>
           </div>
         </div>
         <button
@@ -2374,44 +3473,32 @@ function exportPng() {
       <SankeyMobileDrawer
         :mobile="isMobileViewport"
         :open="mobileDrawerOpen"
+        :suspended="pieModalOpen"
         :title="mobileDrawerTitle"
         @close="closeMobileDrawer"
       >
         <aside
-        class="side-panel"
-        :class="{
-          'compact-detail': isCompactDetail,
-          'has-selection': Boolean(lockedEdge || lockedPathId || currentFocus),
-        }"
-        aria-label="ICD11 桑基图说明区"
-      >
-        <section
-          v-if="upstreamContextVisible"
-          class="upstream-context is-visible"
-          aria-label="当前上游层级上下文"
-          aria-live="polite"
+          class="side-panel"
+          :class="{
+            'compact-detail': isCompactDetail,
+            'has-selection': Boolean(lockedEdge || lockedPathId || currentFocus),
+          }"
+          aria-label="ICD11 桑基图统计区"
         >
-          <header>
-            <span>上游上下文</span>
-            <strong :title="upstreamContextTitle">{{ upstreamContextTitle }}</strong>
-          </header>
-          <dl>
-            <template v-for="row in upstreamContextRows" :key="row.label">
-              <dt>{{ row.label }}</dt>
-              <dd :title="row.value">{{ row.value }}</dd>
-            </template>
-          </dl>
-        </section>
-        <template v-if="detail.kind === 'category' && categoryStats">
-          <header class="overview-header">
-            <div class="overview-scope-switch" role="group" aria-label="概览范围">
+          <div class="overview-toolbar">
+            <div
+              v-if="detail.kind === 'category'"
+              class="overview-scope-switch"
+              role="group"
+              aria-label="概览范围"
+            >
               <button
                 type="button"
                 :class="{ 'is-active': overviewScope === 'current' }"
                 :aria-pressed="overviewScope === 'current'"
                 @click="overviewScope = 'current'"
               >
-                当前分类
+                当前范围
               </button>
               <button
                 type="button"
@@ -2422,146 +3509,169 @@ function exportPng() {
                 全局概览
               </button>
             </div>
-            <h2>{{ overviewTitle }}</h2>
-            <div v-if="statsSummaryItems.length" class="stats-summary" aria-label="当前类别统计">
-              <span v-for="item in statsSummaryItems" :key="item.label">
-                <b>{{ item.label }}</b>
-                <strong>{{ item.value }}</strong>
-              </span>
-            </div>
-          </header>
-          <section class="detail-block legend-block">
-            <h3>图例说明</h3>
-            <dl class="legend-list">
-              <div>
-                <dt>颜色与带宽</dt>
-                <dd>
-                  节点统一为蓝色；流带按 Level2 动态着色，优先区分当前
-                  Level1。带宽代表涉及文献数权重。
-                </dd>
-              </div>
-              <div>
-                <dt>Level1 轨道</dt>
-                <dd>浅色纵向轨道仅用于层级定位，不代表权重。</dd>
-              </div>
-              <div>
-                <dt>关联展开</dt>
-                <dd>同时显示与当前 Level1 共享下游节点的其他 Level1 路径。</dd>
-              </div>
-              <div>
-                <dt>完整路径</dt>
-                <dd>Level1 → Level2 → Level3 → 药物 → 生物标记物。</dd>
-              </div>
-              <div>
-                <dt>跨层路径</dt>
-                <dd>正式终止于 Level2 的映射直接连接药物，透明度较低且不补造 Level3。</dd>
-              </div>
-              <div>
-                <dt>聚合规则</dt>
-                <dd>相同有效层级关系合并，权重为涉及文献数之和。</dd>
-              </div>
+            <span v-else class="overview-context-title">{{ detailContextLabel }}</span>
+            <button
+              id="reading-guide"
+              ref="readingGuideButton"
+              type="button"
+              class="reading-guide-toggle"
+              :aria-expanded="readingGuideOpen"
+              aria-controls="reading-guide-content"
+              @click.stop="toggleReadingGuide"
+            >
+              图表说明 <span aria-hidden="true">{{ readingGuideOpen ? '−' : '?' }}</span>
+            </button>
+          </div>
+          <section
+            v-if="upstreamContextVisible"
+            class="upstream-context is-visible"
+            aria-label="当前上游层级上下文"
+            aria-live="polite"
+          >
+            <header>
+              <span>上游上下文</span>
+              <strong :title="upstreamContextTitle">{{ upstreamContextTitle }}</strong>
+            </header>
+            <dl>
+              <template v-for="row in upstreamContextRows" :key="row.label">
+                <dt>{{ row.label }}</dt>
+                <dd :title="row.value">{{ row.value }}</dd>
+              </template>
             </dl>
           </section>
-          <section class="detail-block ranking-block">
-            <h3>{{ overviewFirstRanking.title }}</h3>
-            <ul class="top-list">
-              <li v-for="(item, index) in topList(overviewFirstRanking.items)" :key="item.name">
-                <span class="top-rank">{{ index + 1 }}</span>
-                <b>{{ item.name }}</b>
-                <span>{{ formatNumber(item.value) }} · {{ formatPercent(item.share) }}</span>
-              </li>
-            </ul>
-          </section>
-          <section class="detail-block ranking-block">
-            <h3>Top ICD11_Level3</h3>
-            <p class="path-note">
-              仅统计真实 Level3 路径，权重 {{ formatNumber(categoryStats.level3Weight) }}。
-            </p>
-            <ul class="top-list">
-              <li v-for="(item, index) in topList(categoryStats.topLevel3)" :key="item.name">
-                <span class="top-rank">{{ index + 1 }}</span>
-                <b>{{ item.name }}</b>
-                <span>{{ formatNumber(item.value) }} · {{ formatPercent(item.share) }}</span>
-              </li>
-            </ul>
-          </section>
-          <section class="detail-block ranking-block">
-            <h3>Top 药物</h3>
-            <ul class="top-list">
-              <li v-for="(item, index) in topList(categoryStats.topDrug)" :key="item.name">
-                <span class="top-rank">{{ index + 1 }}</span>
-                <b>{{ item.name }}</b>
-                <span>{{ formatNumber(item.value) }} · {{ formatPercent(item.share) }}</span>
-              </li>
-            </ul>
-          </section>
-          <section class="detail-block ranking-block">
-            <h3>Top 生物标记物</h3>
-            <ul class="top-list">
-              <li v-for="(item, index) in topList(categoryStats.topBiomarker)" :key="item.name">
-                <span class="top-rank">{{ index + 1 }}</span>
-                <b>{{ item.name }}</b>
-                <span>{{ formatNumber(item.value) }} · {{ formatPercent(item.share) }}</span>
-              </li>
-            </ul>
-          </section>
-        </template>
+          <template v-if="detail.kind === 'category' && categoryStats">
+            <header class="overview-header">
+              <h2>{{ overviewTitle }}</h2>
+              <p class="overview-scope-note">{{ overviewScopeLabel }} · 显示条数裁剪前统计</p>
+              <div v-if="statsSummaryItems.length" class="stats-summary" aria-label="当前类别统计">
+                <span v-for="item in statsSummaryItems" :key="item.label">
+                  <b>{{ item.label }}</b>
+                  <strong>{{ item.value }}</strong>
+                </span>
+              </div>
+            </header>
+          </template>
 
-        <template v-else-if="detail.kind === 'paths'">
-          <section class="detail-block" :class="{ 'single-path-block': detail.paths.length === 1 }">
-            <h3>{{ detail.title }}</h3>
-            <dl class="detail-kv">
-              <div>
-                <dt>高亮状态</dt>
-                <dd>{{ detail.status }}</dd>
+          <template v-else-if="detail.kind === 'paths'">
+            <section v-if="detail.edge" class="edge-detail-block" aria-label="流带详情">
+              <header class="edge-detail-heading">
+                <h2>{{ detail.title }}</h2>
+              </header>
+              <div class="edge-route" aria-label="流带起点和终点">
+                <div>
+                  <small>{{ EDGE_KIND_LABELS[detail.edge.sourceKind] }}</small>
+                  <strong>{{ detail.edge.sourceLabel }}</strong>
+                  <em
+                    v-if="detail.edge.drug?.id === detail.edge.source"
+                    :class="`is-${detail.edge.drug.prescriptionStatus}`"
+                    >{{ PRESCRIPTION_STATUS_LABELS[detail.edge.drug.prescriptionStatus] }}</em
+                  >
+                </div>
+                <span aria-hidden="true">→</span>
+                <div>
+                  <small>{{ EDGE_KIND_LABELS[detail.edge.targetKind] }}</small>
+                  <strong>{{ detail.edge.targetLabel }}</strong>
+                  <em
+                    v-if="detail.edge.drug?.id === detail.edge.target"
+                    :class="`is-${detail.edge.drug.prescriptionStatus}`"
+                    >{{ PRESCRIPTION_STATUS_LABELS[detail.edge.drug.prescriptionStatus] }}</em
+                  >
+                </div>
               </div>
-              <div>
-                <dt>聚合路径数</dt>
-                <dd>{{ formatNumber(detail.paths.length) }}</dd>
-              </div>
-              <div>
-                <dt>合计权重</dt>
-                <dd>{{ formatNumber(detailPathSum) }} <span>涉及文献数</span></dd>
-              </div>
-            </dl>
-          </section>
-          <section v-if="detail.paths.length === 1" class="detail-block">
-            <h3>
-              {{ shownDetailPaths[0]?.mappingLevel === 'Level2' ? '聚合跨层路径' : '聚合五层路径' }}
-            </h3>
-            <article v-for="path in shownDetailPaths" :key="path.pathId" class="single-path-card">
-              <ol class="single-path-steps">
-                <li v-for="step in pathSteps(path)" :key="`${path.pathId}-${step.label}`">
-                  <span>{{ step.label }}</span>
-                  <strong>{{ step.value }}</strong>
-                </li>
-              </ol>
-              <footer>
-                <span>权重（涉及文献数）{{ formatNumber(path.weight) }}</span>
-                <strong>占比 {{ formatPercent(path.share) }}</strong>
-              </footer>
-            </article>
-          </section>
-        </template>
+              <dl class="edge-metrics">
+                <div>
+                  <dt>占{{ EDGE_KIND_LABELS[detail.edge.sourceKind] }}流出</dt>
+                  <dd>{{ formatPercent(detail.edge.sourceShare) }}</dd>
+                </div>
+                <div>
+                  <dt>占{{ EDGE_KIND_LABELS[detail.edge.targetKind] }}流入</dt>
+                  <dd>{{ formatPercent(detail.edge.targetShare) }}</dd>
+                </div>
+                <div>
+                  <dt>涉及文献</dt>
+                  <dd>{{ formatNumber(detail.edge.value) }}</dd>
+                </div>
+                <div>
+                  <dt>聚合路径</dt>
+                  <dd>{{ formatNumber(detail.paths.length) }}</dd>
+                </div>
+              </dl>
+              <p v-if="detail.paths.length === 1" class="edge-path-context">
+                <span>路径上下文</span>
+                <strong>{{ pathText(shownDetailPaths[0]!) }}</strong>
+              </p>
+              <p v-else-if="detail.edge.associatedNodeCount" class="edge-path-context">
+                <span>关联范围</span>
+                <strong>{{ detail.edge.associatedNodeCount }} 个上下游节点</strong>
+              </p>
+            </section>
+            <template v-else>
+              <section
+                class="detail-block"
+                :class="{ 'single-path-block': detail.paths.length === 1 }"
+              >
+                <h3>{{ detail.title }}</h3>
+                <dl class="detail-kv">
+                  <div>
+                    <dt>聚合路径</dt>
+                    <dd>{{ formatNumber(detail.paths.length) }}</dd>
+                  </div>
+                  <div>
+                    <dt>涉及文献</dt>
+                    <dd>{{ formatNumber(detailPathSum) }}</dd>
+                  </div>
+                </dl>
+              </section>
+              <section v-if="detail.paths.length === 1" class="detail-block">
+                <h3>
+                  {{ shownDetailPaths[0]?.mappingLevel === 'Level2' ? '跨层路径' : '完整路径' }}
+                </h3>
+                <article
+                  v-for="path in shownDetailPaths"
+                  :key="path.pathId"
+                  class="single-path-card"
+                >
+                  <ol class="single-path-steps">
+                    <li v-for="step in pathSteps(path)" :key="`${path.pathId}-${step.label}`">
+                      <span>{{ step.label }}</span>
+                      <span class="single-path-step-value">
+                        <strong>{{ step.value }}</strong>
+                        <em v-if="step.note">{{ step.note }}</em>
+                      </span>
+                    </li>
+                  </ol>
+                  <footer>
+                    <span>{{ formatNumber(path.weight) }} 篇文献</span>
+                    <strong>占全部路径 {{ formatPercent(path.share) }}</strong>
+                  </footer>
+                </article>
+              </section>
+            </template>
+            <PrescriptionRatio
+              v-if="prescriptionSummary.total > 1"
+              :summary="prescriptionSummary"
+            />
+          </template>
 
-        <template v-else-if="detail.kind === 'node'">
-          <section class="detail-block node-summary-block">
-            <h3>{{ detail.title }}</h3>
-            <dl class="detail-kv">
-              <div>
-                <dt>层级</dt>
-                <dd>{{ detail.level }}</dd>
-              </div>
-              <div>
-                <dt>节点权重</dt>
-                <dd>{{ formatNumber(detail.nodeWeight) }}</dd>
-              </div>
-              <div>
-                <dt>聚合路径</dt>
-                <dd>{{ formatNumber(detail.paths.length) }}</dd>
-              </div>
-            </dl>
-          </section>
+          <template v-else-if="detail.kind === 'node'">
+            <section class="detail-block node-summary-block">
+              <h3>{{ detail.title }}</h3>
+              <dl class="detail-kv">
+                <div>
+                  <dt>层级</dt>
+                  <dd>{{ detail.level }}</dd>
+                </div>
+                <div>
+                  <dt>节点权重</dt>
+                  <dd>{{ formatNumber(detail.nodeWeight) }}</dd>
+                </div>
+                <div>
+                  <dt>聚合路径</dt>
+                  <dd>{{ formatNumber(detail.paths.length) }}</dd>
+                </div>
+              </dl>
+            </section>
+          </template>
           <section
             v-for="section in relationPieSections"
             :key="section.id"
@@ -2577,55 +3687,68 @@ function exportPng() {
                 放大查看
               </button>
             </div>
-            <p>{{ section.description }}</p>
+            <p class="pie-scope-note">
+              {{ formatNumber(section.totalWeight) }} 权重，
+              {{ section.id.endsWith('-level3') ? '有效 Level3 路径' : '完整统计范围' }}
+            </p>
             <div v-if="!section.items.length" class="relation-empty-card">
               <strong>暂无可聚合关系</strong>
               <span>当前节点没有可用于该维度统计的关联路径。</span>
             </div>
-            <div
-              v-else-if="section.items.length === 1"
-              class="single-relation-card"
-              :style="relationShareBarStyle(singleRelationItem(section))"
-              @mouseenter="handleRelationItemMouseOver(section, singleRelationItem(section))"
-              @mouseleave="scheduleRestoreHighlight"
-            >
-              <i aria-hidden="true"></i>
-              <div class="single-relation-main">
-                <span>唯一{{ section.centerLabel }}</span>
-                <strong>{{ singleRelationItem(section).name }}</strong>
-                <em>
-                  {{ formatNumber(singleRelationItem(section).value) }} 权重 ·
-                  {{ formatPercent(singleRelationItem(section).share) }}
-                </em>
+            <div v-else-if="section.items.length === 1" class="relation-single-shell">
+              <div
+                class="relation-single-summary"
+                :aria-label="`${section.items[0]?.name}，权重 ${formatNumber(section.items[0]?.value ?? 0)}，占比 ${formatPercent(section.items[0]?.share ?? 0)}`"
+                tabindex="0"
+                @mouseenter="handleRelationItemMouseOver(section, section.items[0]!)"
+                @mouseleave="scheduleRestoreHighlight"
+                @focus="handleRelationItemMouseOver(section, section.items[0]!)"
+                @blur="scheduleRestoreHighlight"
+              >
+                <i
+                  :style="{ backgroundColor: section.items[0]?.itemStyle.color }"
+                  aria-hidden="true"
+                ></i>
+                <span class="relation-legend-name">
+                  {{ section.items[0]?.name }}
+                  <small
+                    v-if="section.id.endsWith('-drug') && singlePrescriptionLabel"
+                    class="inline-prescription-label"
+                    >{{ singlePrescriptionLabel }}</small
+                  >
+                </span>
+                <strong>{{ formatNumber(section.items[0]?.value ?? 0) }} 权重</strong>
+                <em>{{ formatPercent(section.items[0]?.share ?? 0) }}</em>
               </div>
-              <dl>
-                <div>
-                  <dt>路径</dt>
-                  <dd>{{ formatNumber(singleRelationItem(section).pathIds.length) }}</dd>
-                </div>
-                <div>
-                  <dt>占比</dt>
-                  <dd>{{ formatPercent(singleRelationItem(section).share) }}</dd>
-                </div>
-              </dl>
+              <PrescriptionRatio
+                v-if="
+                  section.id.endsWith('-drug') &&
+                  detail.kind !== 'paths' &&
+                  prescriptionSummary.total > 1
+                "
+                :summary="prescriptionSummary"
+              />
             </div>
             <template v-else>
-              <div
-                class="drug-share-chart-shell"
-                :style="relationPieChartShellStyle(section, false)"
-              >
-                <div
-                  :ref="(element) => setPieChartRef(section.id, element)"
-                  class="drug-share-chart"
-                  :aria-label="section.ariaLabel"
-                ></div>
-                <div class="drug-share-center" aria-hidden="true">
-                  <strong>{{ section.sourceItemCount }}</strong>
-                  <span>{{ section.centerLabel }}</span>
-                  <em v-if="section.isCollapsed">Top {{ TOP_RELATION_PIE_ITEMS }} + 其他</em>
-                  <em v-else>{{ formatNumber(section.totalWeight) }} 权重</em>
+              <div class="drug-share-chart-shell">
+                <div class="relation-pie-plot">
+                  <div
+                    :ref="(element) => setPieChartRef(section.id, element)"
+                    class="drug-share-chart"
+                    :aria-label="`${section.ariaLabel}。扇区标注权重和占比。`"
+                  ></div>
+                  <div class="drug-share-center" aria-hidden="true">
+                    <strong>{{ section.sourceItemCount }}</strong>
+                    <span>{{ section.centerLabel }}</span>
+                    <em v-if="section.isCollapsed">Top {{ TOP_RELATION_PIE_ITEMS }} + 其他</em>
+                    <em v-else>{{ formatNumber(section.totalWeight) }} 权重</em>
+                  </div>
                 </div>
-                <ul class="relation-pie-legend" aria-label="颜色图例">
+                <PrescriptionRatio
+                  v-if="section.id.endsWith('-drug') && detail.kind !== 'paths'"
+                  :summary="prescriptionSummary"
+                />
+                <ul class="relation-pie-legend" aria-label="颜色图例，仅列名称">
                   <li
                     v-for="item in section.items"
                     :key="item.name"
@@ -2638,93 +3761,195 @@ function exportPng() {
                     @blur="scheduleRestoreHighlight"
                   >
                     <i :style="{ backgroundColor: item.itemStyle.color }" aria-hidden="true"></i>
-                    <span>{{ item.name }}</span>
-                    <span class="visually-hidden">
-                      权重 {{ formatNumber(item.value) }}，占比 {{ formatPercent(item.share) }}
-                    </span>
+                    <span class="relation-legend-name">{{ item.name }}</span>
                   </li>
                 </ul>
               </div>
             </template>
           </section>
-        </template>
         </aside>
       </SankeyMobileDrawer>
     </section>
-
-    <div
-      v-if="pieModalOpen && activePieSection"
-      class="pie-modal-backdrop"
-      role="presentation"
-      @click.self="closePieModal"
-    >
-      <section
-        class="pie-modal"
-        role="dialog"
-        aria-modal="true"
-        :aria-label="`${activePieSection.title}放大查看`"
+    <Teleport to="body">
+      <div
+        v-if="pieModalOpen && activePieSection"
+        class="pie-modal-backdrop"
+        role="presentation"
+        @click.self="closePieModal"
       >
-        <header>
-          <div>
-            <h2>{{ activePieSection.title }}</h2>
-            <p>{{ detail.kind === 'node' ? detail.title : selectedCategoryLabel }}</p>
-          </div>
-          <button type="button" aria-label="关闭放大查看" @click="closePieModal">关闭</button>
-        </header>
-        <div class="pie-modal-body">
-          <div
-            class="pie-modal-chart-shell"
-            :style="relationPieChartShellStyle(activePieSection, true)"
-          >
-            <div
-              ref="modalPieChartEl"
-              class="pie-modal-chart"
-              :aria-label="`${activePieSection.ariaLabel}放大图`"
-            ></div>
-            <div class="pie-modal-center" aria-hidden="true">
-              <strong>{{ activePieSection.sourceItemCount }}</strong>
-              <span>{{ activePieSection.centerLabel }}</span>
-              <em v-if="activePieSection.isCollapsed">Top {{ TOP_RELATION_PIE_ITEMS }} + 其他</em>
-              <em v-else>{{ formatNumber(activePieSection.totalWeight) }} 权重</em>
+        <section
+          ref="pieDialogEl"
+          class="pie-modal"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="`${activePieSection.title}放大查看`"
+        >
+          <header>
+            <div>
+              <h2>{{ activePieSection.title }}</h2>
+              <p>{{ detail.kind === 'node' ? detail.title : overviewScopeLabel }}</p>
             </div>
-            <ul class="relation-pie-legend pie-modal-legend" aria-label="颜色图例">
-              <li
-                v-for="item in activePieSection.items"
-                :key="item.name"
-                :class="{ 'other-relation-item': item.isOther }"
-                :title="item.name"
-                tabindex="0"
-                @mouseenter="handleRelationItemMouseOver(activePieSection, item)"
-                @mouseleave="scheduleRestoreHighlight"
-                @focus="handleRelationItemMouseOver(activePieSection, item)"
-                @blur="scheduleRestoreHighlight"
-              >
-                <i :style="{ backgroundColor: item.itemStyle.color }" aria-hidden="true"></i>
-                <span>{{ item.name }}</span>
-                <span class="visually-hidden">
-                  权重 {{ formatNumber(item.value) }}，占比 {{ formatPercent(item.share) }}
-                </span>
-              </li>
-            </ul>
+            <button type="button" aria-label="关闭放大查看" @click="closePieModal">关闭</button>
+          </header>
+          <div class="pie-modal-body">
+            <div class="pie-modal-chart-shell">
+              <div class="relation-pie-plot">
+                <div
+                  ref="modalPieChartEl"
+                  class="pie-modal-chart"
+                  :aria-label="`${activePieSection.ariaLabel}放大图。扇区标注权重和占比。`"
+                ></div>
+                <div class="pie-modal-center" aria-hidden="true">
+                  <strong>{{ activePieSection.sourceItemCount }}</strong>
+                  <span>{{ activePieSection.centerLabel }}</span>
+                  <em v-if="activePieSection.isCollapsed"
+                    >Top {{ TOP_RELATION_PIE_ITEMS }} + 其他</em
+                  >
+                  <em v-else>{{ formatNumber(activePieSection.totalWeight) }} 权重</em>
+                </div>
+              </div>
+              <PrescriptionRatio
+                v-if="activePieSection.id.endsWith('-drug')"
+                :summary="prescriptionSummary"
+              />
+              <ul class="relation-pie-legend pie-modal-legend" aria-label="颜色图例，仅列名称">
+                <li
+                  v-for="item in activePieSection.items"
+                  :key="item.name"
+                  :class="{ 'other-relation-item': item.isOther }"
+                  :title="item.name"
+                  tabindex="0"
+                  @mouseenter="handleRelationItemMouseOver(activePieSection, item)"
+                  @mouseleave="scheduleRestoreHighlight"
+                  @focus="handleRelationItemMouseOver(activePieSection, item)"
+                  @blur="scheduleRestoreHighlight"
+                >
+                  <i :style="{ backgroundColor: item.itemStyle.color }" aria-hidden="true"></i>
+                  <span class="relation-legend-name">{{ item.name }}</span>
+                </li>
+              </ul>
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      </div>
+    </Teleport>
+    <Teleport to="body">
+      <div
+        v-if="readingGuideOpen"
+        class="reading-guide-layer"
+        aria-hidden="false"
+        @click="dismissReadingGuide"
+      >
+        <section
+          id="reading-guide-content"
+          ref="readingGuidePanel"
+          class="reading-guide-popover"
+          :style="readingGuidePopoverStyle"
+          role="dialog"
+          aria-modal="false"
+          aria-label="图表说明"
+        >
+          <header><strong>图表说明</strong><span>点击任意位置关闭</span></header>
+          <dl>
+            <div>
+              <dt>层级与颜色</dt>
+              <dd>
+                沿疾病分类 → 药物 → 生物标记物阅读。节点为蓝色，流带按 Level2
+                着色；浅色轨道只辅助定位。
+              </dd>
+            </div>
+            <div>
+              <dt>权重与映射</dt>
+              <dd>
+                带宽表示涉及文献数权重，相同有效关系合并。缺少 Level3
+                的路径通过窄通道直接连接药物，不补造 Level3。
+              </dd>
+            </div>
+            <div>
+              <dt>当前范围与全局</dt>
+              <dd>
+                当前范围跟随分类、关联范围与最小权重，使用显示条数裁剪前的路径；全局使用全部路径。搜索用于高亮和定位。
+              </dd>
+            </div>
+            <div>
+              <dt>Top 7 与其他</dt>
+              <dd>按路径权重汇总，前七项单列，其余合并为“其他”。Level3 只统计真实 Level3 路径。</dd>
+            </div>
+            <div>
+              <dt>处方属性比例</dt>
+              <dd>
+                按完整范围去重药物数计算，包含“其他”。同名药物同时有处方和非处方记录计为冲突，没有明确记录计为未知。
+              </dd>
+            </div>
+            <div>
+              <dt>关联与操作</dt>
+              <dd>
+                含关联沿共享下游节点展开其他分类，有限条数为关联预留约五分之一。悬停预览、单击锁定；环图可放大，手机可横向滑动桑基图。
+              </dd>
+            </div>
+          </dl>
+        </section>
+      </div>
+    </Teleport>
+    <div class="sankey-operation-guide-host" aria-live="polite">
+      <OperationGuide
+        :open="sankeyGuideOpen"
+        :step="sankeyGuideStep"
+        :steps="SANKEY_OPERATION_GUIDE_STEPS"
+        :return-focus-to="sankeyGuideButton"
+        @previous="previousSankeyGuideStep"
+        @next="nextSankeyGuideStep"
+        @skip="closeSankeyOperationGuide"
+        @finish="closeSankeyOperationGuide"
+      />
     </div>
   </main>
 </template>
 
 <style scoped>
+.sankey-operation-guide-host {
+  position: fixed;
+  z-index: 70;
+  top: var(--platform-header-height, 68px);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.sankey-operation-guide-host :deep(.operation-guide) {
+  pointer-events: auto;
+}
+
+.sankey-controls .toolbar-actions .operation-guide-button {
+  min-width: 38px;
+  width: 38px;
+  padding: 0;
+  border-color: var(--sankey-line-strong);
+  color: #3e566b;
+  background: #ffffff;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.sankey-controls .toolbar-actions .operation-guide-button:hover,
+.sankey-controls .toolbar-actions .operation-guide-button:focus-visible {
+  border-color: #5f84b3;
+  color: #24558d;
+  background: #eef4ff;
+}
+
+@media (max-width: 760px) {
+  .sankey-operation-guide-host {
+    top: 56px;
+  }
+}
+
 .sankey-shell {
   min-height: 100vh;
   background: #fcfcfa;
   color: #20242a;
-  font-family:
-    Microsoft YaHei,
-    Noto Sans CJK SC,
-    Source Han Sans CN,
-    SimHei,
-    Arial,
-    sans-serif;
+  font-family: var(--platform-font-family, 'Microsoft YaHei', '微软雅黑', Arial, sans-serif);
 }
 
 .sankey-header {
@@ -3354,13 +4579,7 @@ function exportPng() {
   grid-template-rows: auto minmax(0, 1fr);
   color: #173247;
   background: #f6f8f9;
-  font-family:
-    Microsoft YaHei,
-    Noto Sans CJK SC,
-    Source Han Sans CN,
-    SimHei,
-    Arial,
-    sans-serif;
+  font-family: var(--platform-font-family, 'Microsoft YaHei', '微软雅黑', Arial, sans-serif);
 }
 
 .site-header {
@@ -4882,13 +6101,7 @@ function exportPng() {
   width: min(272px, calc(100vw - 28px));
   padding: 10px 11px 11px;
   color: #173247;
-  font-family:
-    Microsoft YaHei,
-    Noto Sans CJK SC,
-    Source Han Sans CN,
-    SimHei,
-    Arial,
-    sans-serif;
+  font-family: var(--platform-font-family, 'Microsoft YaHei', '微软雅黑', Arial, sans-serif);
 }
 
 :global(.sankey-tip__eyebrow) {
@@ -5560,7 +6773,7 @@ function exportPng() {
   --sankey-teal: #16845b;
   color: var(--sankey-ink);
   background: #eef3f6;
-  font-family: Inter, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--platform-font-family, 'Microsoft YaHei', '微软雅黑', Arial, sans-serif);
 }
 
 .sankey-map-header.site-header {
@@ -6182,7 +7395,7 @@ function exportPng() {
 
 :global(.sankey-tip) {
   color: #27333f;
-  font-family: Inter, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--platform-font-family, 'Microsoft YaHei', '微软雅黑', Arial, sans-serif);
 }
 
 :global(.sankey-tip__eyebrow),
@@ -6703,7 +7916,7 @@ function exportPng() {
   }
 
   .toolbar-actions {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .search-field {
@@ -6761,6 +7974,895 @@ function exportPng() {
 
   .overview-scope-switch button {
     min-height: 34px;
+  }
+}
+
+/* Keep the plot and the readable legend in separate flow rows at every viewport size. */
+.drug-share-chart-shell,
+.pie-modal-chart-shell {
+  display: block;
+  position: relative;
+  height: auto;
+  min-height: 0;
+  padding: 0 12px 12px;
+  overflow: visible;
+}
+.relation-pie-plot {
+  position: relative;
+  width: 100%;
+  height: 240px;
+}
+.pie-modal-chart-shell .relation-pie-plot {
+  height: 300px;
+}
+.drug-share-chart,
+.pie-modal-chart {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.drug-share-center,
+.pie-modal-center {
+  top: 50%;
+  left: 50%;
+  width: 44%;
+  transform: translate(-50%, -50%);
+}
+.relation-pie-legend,
+.pie-modal-legend {
+  position: static;
+  inset: auto;
+  display: grid;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  gap: 0;
+  border: 0;
+  background: transparent;
+  box-sizing: border-box;
+}
+.relation-legend-heading {
+  display: grid;
+  width: 100%;
+  box-sizing: border-box;
+  grid-template-columns: minmax(0, 1fr) 5.5ch 6ch;
+  gap: 10px;
+  padding: 0 0 8px 17px;
+  border-bottom: 1px solid #dce5eb;
+  font-size: 11px;
+  color: #657985;
+}
+.relation-legend-heading > span:not(:first-child) {
+  text-align: right;
+}
+.relation-pie-legend li {
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) 5.5ch 6ch;
+  align-items: start;
+  gap: 10px;
+  min-height: 0;
+  padding: 9px 0;
+  border-bottom: 1px solid #e6edf1;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+}
+.relation-pie-legend li:last-child {
+  border-bottom: 0;
+}
+.relation-pie-legend i {
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+}
+.relation-pie-legend li > span.relation-legend-name {
+  min-width: 0;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.relation-pie-legend li > span.relation-legend-value,
+.relation-pie-legend li > span.relation-legend-percent {
+  overflow: visible;
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: #173247;
+}
+.pie-modal .relation-pie-legend li {
+  font-size: 13px;
+  padding: 10px 0;
+}
+.pie-modal .relation-legend-heading {
+  font-size: 12px;
+}
+@media (max-width: 720px) {
+  .pie-modal-chart-shell .relation-pie-plot {
+    height: 240px;
+  }
+  .relation-pie-legend li,
+  .pie-modal .relation-pie-legend li {
+    gap: 8px;
+    font-size: 12px;
+  }
+  .relation-legend-heading {
+    gap: 8px;
+    padding-left: 15px;
+  }
+}
+
+.pie-modal-backdrop {
+  z-index: 3200;
+  --sankey-ink: #17212b;
+  --sankey-muted: #667382;
+  --sankey-border: #d7dee6;
+  --sankey-line-strong: #aeb9c6;
+  --sankey-blue: #2566d4;
+  font-family: var(--platform-font-family, 'Microsoft YaHei', '微软雅黑', Arial, sans-serif);
+}
+
+.overview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: nowrap;
+  gap: 10px;
+  padding-bottom: 14px;
+}
+.overview-toolbar .overview-scope-switch {
+  width: auto;
+  flex: 0 1 auto;
+  margin: 0;
+}
+.overview-toolbar .overview-scope-switch button {
+  min-width: 0;
+  padding: 7px 9px;
+  font-size: 12px;
+}
+.reading-guide-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  padding: 6px 0 6px 8px;
+  border: 0;
+  background: transparent;
+  color: #456576;
+  font-size: 12px;
+  cursor: pointer;
+  scroll-margin-top: 120px;
+}
+.reading-guide-toggle > span {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border: 1px solid #8094a0;
+  border-radius: 50%;
+  font-size: 11px;
+  line-height: 1;
+}
+.reading-guide-toggle:hover,
+.reading-guide-toggle[aria-expanded='true'] {
+  color: #245f8e;
+}
+.reading-guide-toggle:focus-visible {
+  outline: 2px solid #245f8e;
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+.overview-context-title {
+  font-size: 13px;
+  color: #456576;
+}
+.overview-scope-note,
+.side-panel .pie-scope-note {
+  color: #657985;
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 8px 0 12px;
+}
+
+.stage-axis {
+  top: var(--sankey-stage-top, 70px);
+  transition: top 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.reading-guide-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 3150;
+  background: transparent;
+  touch-action: pan-y;
+}
+
+.reading-guide-popover {
+  position: fixed;
+  box-sizing: border-box;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px 16px;
+  border: 1px solid rgba(118, 143, 157, 0.58);
+  border-radius: 2px;
+  color: #173247;
+  background: rgba(247, 251, 252, 0.9);
+  box-shadow: 0 16px 42px rgba(24, 54, 75, 0.16);
+  backdrop-filter: blur(14px) saturate(1.08);
+  -webkit-backdrop-filter: blur(14px) saturate(1.08);
+  animation: reading-guide-in 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.reading-guide-popover header {
+  position: sticky;
+  top: -14px;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -2px 0 10px;
+  padding: 2px 0 9px;
+  border-bottom: 1px solid rgba(117, 141, 154, 0.3);
+  background: rgba(247, 251, 252, 0.92);
+  backdrop-filter: blur(14px);
+}
+
+.reading-guide-popover header strong {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.reading-guide-popover header span {
+  color: #718490;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.reading-guide-popover dl {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.reading-guide-popover dl > div {
+  padding-top: 10px;
+  border-top: 1px solid rgba(132, 153, 166, 0.2);
+}
+
+.reading-guide-popover dl > div:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.reading-guide-popover dt {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.reading-guide-popover dd {
+  margin: 3px 0 0;
+  color: #627784;
+  font-size: 12px;
+  line-height: 1.58;
+}
+
+@keyframes reading-guide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-axis,
+  .reading-guide-popover {
+    transition: none;
+    animation: none;
+  }
+}
+
+.relation-pie-legend.drug-ranking-list li {
+  grid-template-columns: 18px 7px minmax(0, 1fr) 5.5ch 6ch;
+}
+.relation-pie-legend li > span.relation-rank {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid #d9e0e5;
+  border-radius: 3px;
+  box-sizing: border-box;
+  background: #edf1f4;
+  color: #61717e;
+  font-size: 10px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.relation-legend-heading.drug-ranking-heading {
+  padding-left: 28px;
+}
+.drug-ranking-heading > span:first-child {
+  color: #334d60;
+  font-weight: 600;
+}
+.layout-motion-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid #cfdadd;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #61747c;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    color 180ms ease,
+    background 180ms ease,
+    transform 180ms ease;
+}
+.layout-motion-toggle:hover,
+.layout-motion-toggle:focus-visible {
+  border-color: #2a7d79;
+  color: #17645f;
+  outline: none;
+}
+.layout-motion-toggle:active {
+  transform: scale(0.98);
+}
+.layout-motion-toggle i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #a8b5ba;
+  box-shadow: 0 0 0 3px rgba(168, 181, 186, 0.16);
+  transition:
+    background 180ms ease,
+    box-shadow 180ms ease;
+}
+.layout-motion-toggle.active i {
+  background: #167c72;
+  box-shadow: 0 0 0 3px rgba(22, 124, 114, 0.16);
+}
+.flow-band-summary {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #dbe7e7;
+  border-radius: 4px;
+  background: #f3f8f8;
+}
+.flow-band-route {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 26px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #dbe7e7;
+  color: #516a75;
+  font-size: 11px;
+}
+.flow-band-route i {
+  height: 2px;
+  background: linear-gradient(90deg, #5796a1, #245f8e);
+}
+.flow-band-route strong {
+  color: #173247;
+  text-align: right;
+}
+.flow-band-summary dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+  margin: 11px 0 0;
+}
+.flow-band-summary dl div {
+  min-width: 0;
+}
+.flow-band-summary dt {
+  color: #657985;
+  font-size: 10px;
+}
+.flow-band-summary dd {
+  margin: 3px 0 0;
+  color: #173247;
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 720px) {
+  .layout-motion-toggle span {
+    display: none;
+  }
+  .layout-motion-toggle {
+    width: 26px;
+    justify-content: center;
+    padding: 2px;
+  }
+  .relation-legend-heading.drug-ranking-heading {
+    padding-left: 26px;
+  }
+}
+
+.relation-single-shell {
+  padding: 0 12px 12px;
+}
+
+.relation-single-summary {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto 5.5ch;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid #dce5eb;
+  border-bottom: 1px solid #dce5eb;
+  color: #173247;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.relation-single-summary:focus-visible {
+  outline: 2px solid #245f8e;
+  outline-offset: 3px;
+}
+
+.relation-single-summary > i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.relation-single-summary > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.relation-single-summary > strong,
+.relation-single-summary > em {
+  white-space: nowrap;
+  text-align: right;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.relation-single-summary > strong {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.relation-single-summary > em {
+  color: #526b7a;
+  font-size: 11px;
+}
+
+.relation-single-shell .prescription-ratio {
+  margin-top: 14px;
+}
+
+.relation-pie-plot {
+  height: 260px;
+}
+
+.pie-modal-chart-shell .relation-pie-plot {
+  height: 330px;
+}
+
+.drug-share-center,
+.pie-modal-center {
+  width: 34%;
+}
+
+.relation-pie-legend,
+.pie-modal-legend {
+  gap: 5px;
+  padding-top: 9px;
+  border-top: 1px solid #dce5eb;
+}
+
+.relation-pie-legend li,
+.pie-modal .relation-pie-legend li {
+  grid-template-columns: 8px minmax(0, 1fr);
+  gap: 9px;
+  padding: 5px 0;
+  border-bottom: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.relation-pie-legend i,
+.pie-modal .relation-pie-legend i {
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 2px;
+}
+
+.pie-modal-legend {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 28px;
+}
+
+@media (max-width: 720px) {
+  .relation-single-summary {
+    grid-template-columns: 8px minmax(0, 1fr) auto 5.2ch;
+    gap: 8px;
+  }
+
+  .pie-modal-chart-shell .relation-pie-plot {
+    height: 280px;
+  }
+
+  .pie-modal-legend {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Final academic-density pass: compact controls and contextual flow-band details. */
+.sankey-controls {
+  grid-template-columns:
+    minmax(280px, 1.45fr)
+    minmax(220px, 1.15fr)
+    176px
+    190px
+    minmax(172px, 0.72fr)
+    auto;
+  column-gap: 12px;
+  row-gap: 9px;
+  padding: 10px clamp(18px, 1.6vw, 30px) 11px;
+  box-shadow: 0 3px 10px rgba(21, 52, 72, 0.035);
+}
+
+.sankey-controls :deep(.sankey-node-search input),
+.sankey-controls :deep(.sankey-select-trigger),
+.sankey-controls .scope-segmented,
+.sankey-controls .control-button {
+  min-height: 38px;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.sankey-controls .scope-segmented span {
+  border-radius: 2px;
+}
+
+.sankey-controls .control-button:active,
+.sankey-controls :deep(.sankey-select-trigger:active) {
+  transform: translateY(1px);
+}
+
+.toolbar-actions {
+  gap: 7px;
+  padding-left: 12px;
+  border-left-color: #dce4e9;
+}
+
+.sankey-controls .toolbar-actions .operation-guide-button {
+  border-radius: 4px;
+}
+
+.sankey-main {
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 10px;
+  padding: 10px 14px 18px;
+}
+
+.chart-panel,
+.side-panel {
+  border-radius: 4px;
+  box-shadow: 0 5px 18px rgba(21, 52, 72, 0.045);
+}
+
+.side-panel,
+.side-panel.has-selection {
+  padding: 13px 14px 15px;
+  border-color: var(--sankey-border);
+  box-shadow: 0 5px 18px rgba(21, 52, 72, 0.045);
+}
+
+.overview-toolbar {
+  padding-bottom: 9px;
+}
+
+.overview-context-title {
+  color: #314c5f;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lock-bar,
+.lock-bar.has-lock {
+  min-height: 33px;
+  gap: 4px 8px;
+  padding: 5px 14px;
+  border-left-width: 0;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.lock-bar.has-lock {
+  border-bottom-color: #d7e5e3;
+  background: #f5faf9;
+}
+
+.lock-bar strong,
+.lock-bar.has-lock strong {
+  color: #284759;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.lock-bar > span {
+  font-size: 11px;
+}
+
+.filter-summary::before {
+  margin-right: 8px;
+  color: #9aa7ad;
+  content: '/';
+}
+
+.layout-motion-toggle {
+  min-height: 23px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 10px;
+}
+
+.edge-detail-block {
+  padding: 10px 0 0;
+  border-top: 1px solid #dce5e9;
+}
+
+.edge-detail-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 11px;
+}
+
+.edge-detail-heading h2 {
+  margin: 0;
+  color: #173247;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.edge-route {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0 12px;
+  border-top: 1px solid #e3eaee;
+  border-bottom: 1px solid #e3eaee;
+}
+
+.edge-route > div {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 6px;
+}
+
+.edge-route > div:last-child {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.edge-route small {
+  width: 100%;
+  color: #70838f;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.edge-route strong {
+  min-width: 0;
+  color: #173247;
+  font-size: 12px;
+  font-weight: 720;
+  overflow-wrap: anywhere;
+}
+
+.edge-route > span {
+  color: #78909d;
+  font-size: 16px;
+  text-align: center;
+}
+
+.edge-route em,
+.inline-prescription-label,
+.single-path-step-value em {
+  padding: 1px 5px;
+  border: 1px solid #bdd4df;
+  border-radius: 3px;
+  color: #356579;
+  background: #f4f8fa;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 650;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.edge-route em.is-prescription,
+.inline-prescription-label {
+  border-color: #a9c7df;
+  color: #245f8e;
+  background: #f2f7fb;
+}
+
+.edge-route em.is-nonprescription {
+  border-color: #aed4cd;
+  color: #226f68;
+  background: #f1f8f6;
+}
+
+.edge-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 18px;
+  margin: 0;
+}
+
+.edge-metrics > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 0;
+  border-bottom: 1px solid #e6ecef;
+}
+
+.edge-metrics dt {
+  color: #657985;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.edge-metrics dd {
+  margin: 0;
+  color: #173247;
+  font-size: 13px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.edge-path-context {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 9px;
+  margin: 10px 0 0;
+  color: #697d89;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.edge-path-context strong {
+  color: #3c5668;
+  font-size: 10px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.single-path-step-value {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  text-align: right;
+}
+
+.relation-single-summary .relation-legend-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+
+.relation-pie-plot {
+  height: 248px;
+}
+
+.drug-share-center {
+  top: 54%;
+}
+
+.pie-modal-center {
+  top: 53%;
+}
+
+:global(.sankey-tip--node) {
+  width: min(360px, calc(100vw - 28px));
+}
+
+:global(.sankey-tip__node-main) {
+  grid-template-columns: auto minmax(128px, 1fr) auto;
+  align-items: start;
+}
+
+:global(.sankey-tip__node-main > strong) {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+@media (max-width: 1380px) and (min-width: 1181px) {
+  .sankey-controls {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+  }
+
+  .sankey-controls .search-field {
+    grid-column: span 4;
+  }
+
+  .sankey-controls .level-field {
+    grid-column: span 3;
+  }
+
+  .sankey-controls .scope-field {
+    grid-column: span 2;
+  }
+
+  .sankey-controls .display-field {
+    grid-column: span 3;
+  }
+
+  .weight-reset-group {
+    grid-column: 7 / span 3;
+  }
+
+  .toolbar-actions {
+    grid-column: 10 / span 3;
+  }
+}
+
+@media (max-width: 1180px) and (min-width: 721px) {
+  .sankey-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sankey-main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .side-panel {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .sankey-controls {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 9px;
+    padding: 10px 12px 12px;
+  }
+
+  .sankey-main {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 8px;
+  }
+
+  .edge-metrics {
+    gap: 0 12px;
+  }
+
+  .edge-route strong {
+    font-size: 11px;
   }
 }
 </style>

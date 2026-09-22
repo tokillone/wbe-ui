@@ -1,3 +1,4 @@
+import { CITY_LEVEL_ENTER_ZOOM } from './mapRuntime'
 import {
   ADMIN1_LABEL_MAX_SIZE,
   ADMIN1_LABEL_MIN_SIZE,
@@ -46,10 +47,10 @@ const PRESENTATION_PROFILE_START = {
   adm1_26_80: 4.25,
   adm1_81_160: 4.75,
   adm1_gt160: 5.25,
-  sparse: 6.35,
-  standard: 6.85,
-  dense: 7.3,
-  veryDense: 7.7,
+  sparse: 6.05,
+  standard: 6.55,
+  dense: 7.0,
+  veryDense: 7.4,
   china: 0,
 } as const
 const ADMIN1_LABEL_PROFILES = [
@@ -71,8 +72,8 @@ const ADMIN2_PRESENTATION_LABEL_IDS = ADMIN2_LABEL_PROFILES.map(
 export const PREVIEW_MAP_MIN_ZOOM = 1.1
 export const PREVIEW_MAP_MAX_ZOOM = 8
 export const PREVIEW_COUNTRY_LEVEL_END = 3.85
-export const PREVIEW_ADMIN1_LEVEL_END = 6.6
-export const PREVIEW_CITY_BOUNDARY_FADE_START = 6.35
+export const PREVIEW_ADMIN1_LEVEL_END = CITY_LEVEL_ENTER_ZOOM
+export const PREVIEW_CITY_BOUNDARY_FADE_START = 6.05
 export const PREVIEW_COUNTRY_BOUNDARY_FADE_START = 2.55
 export const PREVIEW_COUNTRY_BOUNDARY_MAJOR_VISIBLE_ZOOM = 3.45
 const PREVIEW_COUNTRY_BOUNDARY_MEDIUM_VISIBLE_ZOOM = 3.85
@@ -171,12 +172,12 @@ export function buildPreviewBasemapLayers(
       type: 'line',
       source: SOURCE_ID,
       'source-layer': 'preview_presentation_admin2_boundaries',
-      minzoom: 6.35,
+      minzoom: 6.05,
       filter: ['!=', ['get', 'country_key'], 'china'],
       layout: { 'line-cap': 'butt', 'line-join': 'round' },
       paint: {
         'line-color': '#adb7bc',
-        'line-width': ['interpolate', ['linear'], ['zoom'], 6.35, 0.35, 7, 0.5, 8, 0.7],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 6.05, 0.35, 7, 0.5, 8, 0.7],
         'line-opacity': 0.56,
       },
     },
@@ -185,7 +186,7 @@ export function buildPreviewBasemapLayers(
       'preview_china_city_boundaries',
       PREVIEW_CITY_BOUNDARY_FADE_START,
       '#a8b2b7',
-      [6.35, 0.35, 6.6, 0.5, 8, 0.7],
+      [6.05, 0.35, 6.3, 0.5, 8, 0.7],
       0.52,
       undefined,
       undefined,
@@ -729,7 +730,7 @@ function globalAdmin2FallbackLabelLayer(locale: PreviewMapLocale): StyleLayer {
     type: 'symbol',
     source: SOURCE_ID,
     'source-layer': 'preview_global_admin2_fallback_labels',
-    minzoom: 6.45,
+    minzoom: 6.15,
     maxzoom: 8.01,
     layout: {
       'text-field':
@@ -737,7 +738,7 @@ function globalAdmin2FallbackLabelLayer(locale: PreviewMapLocale): StyleLayer {
           ? ['coalesce', ['get', 'display_name_en'], ['get', 'display_name'], '']
           : ['coalesce', ['get', 'display_name_zh'], ['get', 'display_name'], ''],
       'text-font': ['Noto Sans Regular'],
-      'text-size': ['interpolate', ['linear'], ['zoom'], ...scaledTextStops([6.45, 8.2, 8, 9.7])],
+      'text-size': ['interpolate', ['linear'], ['zoom'], ...scaledTextStops([6.15, 8.2, 8, 9.7])],
       'text-allow-overlap': false,
       'text-ignore-placement': false,
       'text-padding': 24,
@@ -749,7 +750,7 @@ function globalAdmin2FallbackLabelLayer(locale: PreviewMapLocale): StyleLayer {
       'text-color': '#7a878f',
       'text-halo-color': 'rgba(255,255,255,.98)',
       'text-halo-width': 1.45,
-      'text-opacity': ['interpolate', ['linear'], ['zoom'], 6.45, 0, 6.75, 0.72, 8, 0.72],
+      'text-opacity': ['interpolate', ['linear'], ['zoom'], 6.15, 0, 6.45, 0.72, 8, 0.72],
     },
   }
 }

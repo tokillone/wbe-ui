@@ -30,12 +30,16 @@ const emit = defineEmits<{
 
 @media (max-width: 720px) {
   .sankey-stage-navigator {
+    position: sticky;
+    top: var(--sankey-stage-top, 70px);
+    z-index: 18;
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 0;
     padding: 9px 12px 8px;
     border-bottom: 1px solid #dce4ea;
     background: #fff;
+    transition: top 220ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   button {
     position: relative;
@@ -83,5 +87,9 @@ const emit = defineEmits<{
   button.is-active { color: #245f8e; }
   button.is-active > span { border-color: #245f8e; background: #245f8e; box-shadow: 0 0 0 3px #e8f0f8; }
   button:focus-visible { outline: 2px solid #2566d4; outline-offset: 3px; border-radius: 4px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sankey-stage-navigator { transition: none; }
 }
 </style>

@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const source = readFileSync(resolve(process.cwd(), 'src/views/MapVisualizationView.vue'), 'utf8')
+const assetSource = readFileSync(resolve(process.cwd(), 'src/utils/mapAssets.ts'), 'utf8')
 const headerSource = readFileSync(
   resolve(process.cwd(), 'src/components/map/MapPageHeader.vue'),
   'utf8',
@@ -11,14 +12,14 @@ const headerSource = readFileSync(
 describe('map rendering layer policy', () => {
   it('uses the preview composite as the only visual PMTiles and keeps GeoJSON interaction data', () => {
     expect(source).toContain('const USE_LOCAL_PM_TILES_BASEMAP = true')
-    expect(source).toContain("'/tiles/wbe-preview-composite.pmtiles'")
+    expect(assetSource).toContain("pmtiles: path('/tiles/wbe-preview-composite.pmtiles')")
     expect(source).not.toContain('VITE_REGION_PM_TILES_URL')
     expect(source).not.toContain("'/tiles/wbe-regions.pmtiles'")
     expect(source).toContain('layers: basemapConfig.layers')
     expect(source).toContain('buildPreviewBasemapLayers(layers, locale.value)')
-    expect(source).toContain("countries: '/geo/render/world-countries.geojson'")
-    expect(source).toContain("admin1: '/geo/render/world-admin1.geojson'")
-    expect(source).toContain("chinaCities: '/geo/render/china-cities.geojson'")
+    expect(assetSource).toContain("countries: path('/geo/render/world-countries.geojson')")
+    expect(assetSource).toContain("admin1: path('/geo/render/world-admin1.geojson')")
+    expect(assetSource).toContain("chinaCities: path('/geo/render/china-cities.geojson')")
     expect(source).toContain("const FLAT_BACKGROUND_COLOR = '#d7e0e4'")
     expect(source).toContain("addBaseFillLayer('country-land', 'country-boundaries', 0, 1)")
     expect(source).toContain("if (basemapMode === 'geojson') addBoundaryLineLayers()")
@@ -141,7 +142,13 @@ describe('map rendering layer policy', () => {
     expect(source).not.toContain('@select-result')
     expect(source).not.toContain('isLanguageMenuOpen')
     expect(source).not.toContain('focusSearchResult')
-    expect(source).toContain('void ensureRegionIndex().then(() => {')
+    expect(source).toContain("void ensureRegionIndex('country').then(() => {")
+    const initialMapFlow = source.slice(
+      source.indexOf('async function initMap()'),
+      source.indexOf('function devMapQaInitialCamera()'),
+    )
+    expect(initialMapFlow).not.toContain('region-index.json')
+    expect(source).toContain('async function loadLegacyFullRegionIndex()')
     expect(source).toContain('Map labels and positioning fall back')
   })
 

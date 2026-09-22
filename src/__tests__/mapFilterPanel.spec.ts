@@ -23,6 +23,10 @@ const ui = {
   year: '年份',
   filterOptionSearch: '搜索选项',
   filterOptionEmpty: '没有匹配选项',
+  biomarkerQuickSearch: '分层搜索筛选条件',
+  biomarkerSearchPlaceholder: '输入类别、子类、标记物、CAS 或年份',
+  biomarkerSearchEmpty: '没有匹配的筛选条件',
+  biomarkerSearchApplying: '正在应用筛选条件…',
   resetFilters: '重置',
   applyFilters: '应用',
   applyingFilters: '应用中…',
@@ -49,6 +53,16 @@ function mountPanel(overrides: Record<string, unknown> = {}) {
       dirty: false,
       applying: false,
       filtersReady: true,
+      searchClearSignal: 0,
+      searchOptions: [
+        {
+          value: 'biomarker||health||exposure||tobacco||COTININE',
+          label: '可替宁',
+          meta: '486-56-6',
+          levelLabel: '生物标记物',
+          description: '人体暴露类 › 生物标记物 › 烟草暴露',
+        },
+      ],
       ...overrides,
     },
   })
@@ -87,6 +101,44 @@ describe('MapFilterPanel explicit apply mode', () => {
 
     await wrapper.setProps({ applying: false, filtersReady: false })
     expect(wrapper.get('.filter-apply-button').attributes('disabled')).toBeDefined()
+  })
+
+  it('exposes the quick biomarker search as an immediate-apply event', async () => {
+    const wrapper = mountPanel({
+      searchOptions: [
+        {
+          value: 'category||health||exposure',
+          label: '生物标记物',
+          levelLabel: '物质类别',
+          description: '人体暴露类',
+        },
+      ],
+    })
+
+    const headerSearch = wrapper.get('.filter-head .map-biomarker-search')
+    expect(headerSearch.classes()).toContain('compact')
+    expect(headerSearch.get('label').text()).toBe('分层搜索筛选条件')
+    expect(headerSearch.get('input').attributes('placeholder')).toBe('')
+
+    await wrapper.get('#map-biomarker-quick-search').setValue('生物标记物')
+    await wrapper.get('.map-biomarker-search-option').trigger('click')
+    expect(wrapper.emitted('selectSearchResult')).toEqual([['category||health||exposure']])
+    expect(wrapper.emitted('apply')).toBeUndefined()
+  })
+
+  it('keeps dropdown selection but removes search fields from every staged filter', async () => {
+    const wrapper = mountPanel()
+    for (const id of [
+      '#map-target-class-filter',
+      '#map-category-filter',
+      '#map-subcategory-filter',
+      '#map-biomarker-filter',
+      '#map-year-filter',
+    ]) {
+      await wrapper.get(id).trigger('click')
+      expect(wrapper.find('.map-filter-select-search').exists()).toBe(false)
+      await wrapper.get(id).trigger('click')
+    }
   })
 })
 
@@ -143,6 +195,18 @@ describe('map filter transaction source invariants', () => {
     expect(detailApplySource).toContain('await applyFilters({ force: true })')
     expect(detailApplySource).not.toContain('closeDetail()')
     expect(source).toContain("applyFilters: '应用'")
+  })
+
+  it('applies layered search selections once and clears the query only after a successful map update', () => {
+    const searchApplySource = source.slice(
+      source.indexOf('async function applyFilterSearchResult'),
+      source.indexOf('function readInitialLocale'),
+    )
+    expect(searchApplySource).toContain('Object.assign(selection, nextSelection)')
+    expect(searchApplySource).toContain('await applyFilters({ force: true })')
+    expect(searchApplySource.match(/applyFilters\(/g)).toHaveLength(1)
+    expect(searchApplySource).toContain('if (applied) filterSearchClearSignal.value += 1')
+    expect(source).toContain('@select-search-result="applyFilterSearchResult"')
   })
 
   it('normalizes a category draft without requesting stats and caches heat scales by snapshot level', () => {

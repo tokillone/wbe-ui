@@ -1,34 +1,117 @@
 <script setup lang="ts">
 import { pinyin } from 'pinyin-pro'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 
+import OperationGuide, { type OperationGuideStep } from '../components/OperationGuide.vue'
 import PlatformHeader from '../components/PlatformHeader.vue'
 
+const CORE_MARKER_OPERATION_GUIDE_STORAGE_KEY = 'wbe:core-marker-priority-operation-guide:v1'
+const CORE_MARKER_OPERATION_GUIDE_DELAY_MS = 600
+const CORE_MARKER_OPERATION_GUIDE_STEPS: OperationGuideStep[] = [
+  {
+    title: '使用全库搜索快速定位',
+    description: '可按中文、英文、拼音、ATC 或 CAS 搜索分类层级和候选生物标记物。',
+    targetSelectors: ['.filter-guide-toolbar'],
+    placement: 'bottom',
+    scrollIntoView: true,
+    scrollBlock: 'start',
+  },
+  {
+    title: '查看并修改四级筛选路径',
+    description: '筛选路径会依次记录目标类别、物质类别、物质子类和物质细类，已完成步骤可点击修改。',
+    targetSelectors: ['#guideSteps'],
+    placement: 'bottom',
+    scrollIntoView: true,
+    scrollBlock: 'start',
+  },
+  {
+    title: '通过分组条形逐层下钻',
+    description: '单击任意分组条形进入下一层；完成第四层后会定位到对应标记物排名。',
+    targetSelectors: ['#guidePrompt', '.group-chart-legend'],
+    placement: 'bottom',
+    scrollIntoView: true,
+    scrollBlock: 'center',
+  },
+  {
+    title: '调整排名范围和展示方式',
+    description: '选择排名层级，并在排名图与明细表之间切换，查看当前筛选范围内的全部候选项。',
+    targetSelectors: ['.ranking-head', '.ranking-toolbar'],
+    placement: 'bottom',
+    scrollIntoView: true,
+    scrollBlock: 'center',
+  },
+  {
+    title: '查看得分构成与详细证据',
+    description:
+      '查看五项得分构成，单击候选标记物打开详情；底部“计算规则”可核对评分、排名和分层口径。',
+    targetSelectors: ['.ranking-chart-legend', '#rankingAxisHead'],
+    placement: 'bottom',
+    scrollIntoView: true,
+    scrollBlock: 'center',
+  },
+]
+
 const isPrototypeReady = ref(false)
+const isPrototypeDataReady = ref(false)
 const prototypeError = ref('')
 const reloadKey = ref(0)
 const prototypeFrame = ref<HTMLIFrameElement | null>(null)
+const coreMarkerGuideButton = ref<HTMLButtonElement | null>(null)
+const coreMarkerGuideOpen = ref(false)
+const coreMarkerGuideStep = ref(0)
+const coreMarkerGuideSeen = ref(readCoreMarkerOperationGuideSeen())
+const coreMarkerGuideSuppressedForVisit = ref(false)
+const coreMarkerGuideShownThisVisit = ref(false)
 type PinyinAliases = { full: string; initials: string }
 type PriorityWindow = Window & { __wbePinyin?: (value: string) => PinyinAliases }
 const priorityWindow = window as PriorityWindow
+const route = useRoute()
 const publicBase = import.meta.env.BASE_URL.endsWith('/')
   ? import.meta.env.BASE_URL
   : `${import.meta.env.BASE_URL}/`
-const prototypeUrl = computed(
-  () => `${publicBase}core-marker-priority/index.html?reload=${reloadKey.value}`,
+const prototypeUrl = computed(() => {
+  const params = new URLSearchParams({ reload: String(reloadKey.value) })
+  if (route.query.ui === 'refresh') params.set('ui', 'refresh')
+  if (route.query.ui === 'preserve-v2') {
+    params.set('ui', 'preserve-v2')
+    const requestedVariant = String(route.query.variant ?? 'standard')
+    params.set(
+      'variant',
+      ['standard', 'dense', 'paper'].includes(requestedVariant) ? requestedVariant : 'standard',
+    )
+  }
+  return `${publicBase}core-marker-priority/index.html?${params.toString()}`
+})
+const prototypeTargetDocument = computed(() =>
+  isPrototypeReady.value ? (prototypeFrame.value?.contentDocument ?? null) : null,
 )
+
+let coreMarkerGuideTimer: number | undefined
+let observedPrototypeDocument: Document | null = null
+let prototypeScrollSnapshot: { left: number; top: number } | null = null
+
 function handlePrototypeLoad() {
   isPrototypeReady.value = true
+  isPrototypeDataReady.value = false
+  void nextTick(bindPrototypeInteractionListeners)
 }
 
 function handlePrototypeError() {
+  clearCoreMarkerGuideTimer()
+  closeCoreMarkerOperationGuide()
   isPrototypeReady.value = false
+  isPrototypeDataReady.value = false
   prototypeError.value = '分析页面加载失败，请检查网络后重试。'
 }
 
 function retryPrototype() {
+  clearCoreMarkerGuideTimer()
+  closeCoreMarkerOperationGuide()
+  unbindPrototypeInteractionListeners()
   prototypeError.value = ''
   isPrototypeReady.value = false
+  isPrototypeDataReady.value = false
   reloadKey.value += 1
 }
 
@@ -43,9 +126,124 @@ function handlePrototypeMessage(event: MessageEvent) {
   }
   if (event.data.type === 'core-marker-priority:ready') {
     prototypeError.value = ''
+    isPrototypeDataReady.value = true
+    scheduleCoreMarkerOperationGuide()
   } else if (event.data.type === 'core-marker-priority:error') {
+    clearCoreMarkerGuideTimer()
+    isPrototypeDataReady.value = false
     prototypeError.value = '核心标记物数据加载失败，请稍后重试。'
   }
+}
+
+function readCoreMarkerOperationGuideSeen() {
+  if (typeof window === 'undefined') return false
+  try {
+    return Boolean(window.localStorage.getItem(CORE_MARKER_OPERATION_GUIDE_STORAGE_KEY))
+  } catch {
+    return false
+  }
+}
+
+function markCoreMarkerOperationGuideSeen() {
+  coreMarkerGuideSeen.value = true
+  try {
+    window.localStorage.setItem(CORE_MARKER_OPERATION_GUIDE_STORAGE_KEY, 'shown')
+  } catch {
+    // The in-memory flag still prevents repeated automatic display during this visit.
+  }
+}
+
+function clearCoreMarkerGuideTimer() {
+  if (coreMarkerGuideTimer == null) return
+  window.clearTimeout(coreMarkerGuideTimer)
+  coreMarkerGuideTimer = undefined
+}
+
+function canAutoOpenCoreMarkerGuide() {
+  return (
+    isPrototypeReady.value &&
+    isPrototypeDataReady.value &&
+    Boolean(prototypeTargetDocument.value) &&
+    !coreMarkerGuideSeen.value &&
+    !coreMarkerGuideSuppressedForVisit.value &&
+    !coreMarkerGuideShownThisVisit.value
+  )
+}
+
+function scheduleCoreMarkerOperationGuide() {
+  clearCoreMarkerGuideTimer()
+  if (!canAutoOpenCoreMarkerGuide()) return
+  coreMarkerGuideTimer = window.setTimeout(() => {
+    coreMarkerGuideTimer = undefined
+    if (!canAutoOpenCoreMarkerGuide()) return
+    void openCoreMarkerOperationGuide('auto')
+  }, CORE_MARKER_OPERATION_GUIDE_DELAY_MS)
+}
+
+function handlePrototypeInteraction() {
+  if (coreMarkerGuideOpen.value || coreMarkerGuideShownThisVisit.value) return
+  coreMarkerGuideSuppressedForVisit.value = true
+  clearCoreMarkerGuideTimer()
+}
+
+function unbindPrototypeInteractionListeners() {
+  observedPrototypeDocument?.removeEventListener('pointerdown', handlePrototypeInteraction, true)
+  observedPrototypeDocument?.removeEventListener('keydown', handlePrototypeInteraction, true)
+  observedPrototypeDocument = null
+}
+
+function bindPrototypeInteractionListeners() {
+  const targetDocument = prototypeFrame.value?.contentDocument ?? null
+  if (targetDocument === observedPrototypeDocument) return
+  unbindPrototypeInteractionListeners()
+  observedPrototypeDocument = targetDocument
+  targetDocument?.addEventListener('pointerdown', handlePrototypeInteraction, true)
+  targetDocument?.addEventListener('keydown', handlePrototypeInteraction, true)
+}
+
+async function openCoreMarkerOperationGuide(source: 'auto' | 'manual' = 'manual') {
+  const frame = prototypeFrame.value
+  const targetDocument = frame?.contentDocument
+  if (coreMarkerGuideOpen.value || !frame || !targetDocument || !isPrototypeDataReady.value) {
+    return
+  }
+  clearCoreMarkerGuideTimer()
+  if (source === 'auto') {
+    coreMarkerGuideShownThisVisit.value = true
+    markCoreMarkerOperationGuideSeen()
+  }
+  const frameWindow = frame.contentWindow
+  prototypeScrollSnapshot = {
+    left: frameWindow?.scrollX ?? 0,
+    top: frameWindow?.scrollY ?? 0,
+  }
+  frameWindow?.postMessage({ type: 'core-marker-priority:prepare-guide' }, window.location.origin)
+  coreMarkerGuideStep.value = 0
+  await nextTick()
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+  coreMarkerGuideOpen.value = true
+}
+
+function closeCoreMarkerOperationGuide() {
+  coreMarkerGuideOpen.value = false
+  const snapshot = prototypeScrollSnapshot
+  prototypeScrollSnapshot = null
+  const frameWindow = prototypeFrame.value?.contentWindow
+  if (!snapshot || !frameWindow) return
+  void nextTick(() =>
+    frameWindow.scrollTo({ left: snapshot.left, top: snapshot.top, behavior: 'auto' }),
+  )
+}
+
+function previousCoreMarkerGuideStep() {
+  coreMarkerGuideStep.value = Math.max(0, coreMarkerGuideStep.value - 1)
+}
+
+function nextCoreMarkerGuideStep() {
+  coreMarkerGuideStep.value = Math.min(
+    CORE_MARKER_OPERATION_GUIDE_STEPS.length - 1,
+    coreMarkerGuideStep.value + 1,
+  )
 }
 
 function createPinyinAliases(value: string): PinyinAliases {
@@ -63,6 +261,8 @@ onMounted(() => {
   window.addEventListener('message', handlePrototypeMessage)
 })
 onBeforeUnmount(() => {
+  clearCoreMarkerGuideTimer()
+  unbindPrototypeInteractionListeners()
   delete priorityWindow.__wbePinyin
   window.removeEventListener('message', handlePrototypeMessage)
 })
@@ -78,6 +278,17 @@ onBeforeUnmount(() => {
       aria-label="标记物优先级评估分析工作区"
       tabindex="-1"
     >
+      <button
+        v-if="isPrototypeDataReady"
+        ref="coreMarkerGuideButton"
+        class="priority-operation-guide-button"
+        type="button"
+        aria-label="操作指引"
+        title="操作指引"
+        @click="openCoreMarkerOperationGuide('manual')"
+      >
+        <span aria-hidden="true">?</span>
+      </button>
       <div v-if="!isPrototypeReady && !prototypeError" class="loading-state" role="status">
         <span></span>
         <strong>正在载入优先级分析数据</strong>
@@ -97,6 +308,19 @@ onBeforeUnmount(() => {
         @load="handlePrototypeLoad"
         @error="handlePrototypeError"
       ></iframe>
+
+      <OperationGuide
+        :open="coreMarkerGuideOpen"
+        :step="coreMarkerGuideStep"
+        :steps="CORE_MARKER_OPERATION_GUIDE_STEPS"
+        :target-document="prototypeTargetDocument"
+        :target-frame="prototypeFrame"
+        :return-focus-to="coreMarkerGuideButton"
+        @previous="previousCoreMarkerGuideStep"
+        @next="nextCoreMarkerGuideStep"
+        @skip="closeCoreMarkerOperationGuide"
+        @finish="closeCoreMarkerOperationGuide"
+      />
     </section>
   </main>
 </template>
@@ -117,7 +341,7 @@ onBeforeUnmount(() => {
 :global(body) {
   color: #172b3a;
   background: #eef3f6;
-  font-family: Inter, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--platform-font-family, 'Microsoft YaHei', '微软雅黑', Arial, sans-serif);
 }
 
 .priority-page {
@@ -358,6 +582,36 @@ onBeforeUnmount(() => {
   opacity: 1;
 }
 
+.priority-operation-guide-button {
+  position: absolute;
+  z-index: 4;
+  top: 20px;
+  right: 7px;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #aeb9c6;
+  border-radius: 6px;
+  color: #3e566b;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 5px 16px rgba(21, 52, 72, 0.12);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.priority-operation-guide-button:hover,
+.priority-operation-guide-button:focus-visible {
+  border-color: #5f84b3;
+  color: #24558d;
+  background: #eef4ff;
+  outline: 2px solid rgba(37, 102, 212, 0.14);
+  outline-offset: 2px;
+}
+
 .loading-state {
   position: absolute;
   inset: 0;
@@ -447,6 +701,16 @@ onBeforeUnmount(() => {
   .module-nav .home-link {
     min-height: 36px;
     padding: 0 10px;
+  }
+
+  .priority-operation-guide-button {
+    position: fixed;
+    z-index: 72;
+    top: auto;
+    right: 14px;
+    bottom: max(14px, env(safe-area-inset-bottom));
+    border-radius: 50%;
+    box-shadow: 0 7px 20px rgba(21, 52, 72, 0.18);
   }
 }
 

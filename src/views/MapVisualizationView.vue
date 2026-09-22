@@ -4,9 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { MapFilterSelectOption } from '../components/MapFilterSelect.vue'
 import MapFilterPanel from '../components/map/MapFilterPanel.vue'
-import MapOperationGuide, {
-  type MapOperationGuideStep,
-} from '../components/map/MapOperationGuide.vue'
+import OperationGuide, { type OperationGuideStep } from '../components/OperationGuide.vue'
 import MapPageHeader from '../components/map/MapPageHeader.vue'
 import {
   buildSelectionKey,
@@ -36,6 +34,7 @@ import {
   ALL_BIOMARKER_PATH_KEY,
   biomarkerFilterOptions as buildBiomarkerFilterOptions,
   biomarkerPathKey,
+  mapFilterSearchOptions as buildMapFilterSearchOptions,
   selectionForAllBiomarkers,
   selectionForBiomarkerPath,
   selectionForCategory,
@@ -86,7 +85,14 @@ import {
   polygonBoundariesToLines,
   visibleParentGeoKeys,
 } from '../utils/mapBoundaryGeometry'
-import { probePmtilesRange } from '../utils/pmtiles'
+import {
+  legacyMapAssetUrls,
+  mapAssetFailureRequiresGeoJson,
+  resolveMapAssetUrls,
+  runtimeRegionIndexLevelsForZoom,
+  type MapAssetUrls,
+  type RuntimeRegionIndexLevel,
+} from '../utils/mapAssets'
 import { getUserErrorMessage } from '../services/errors'
 import {
   buildPreviewBasemapLayers,
@@ -172,6 +178,8 @@ type BoundaryHitIndex = {
 type MapLibreModule = typeof import('maplibre-gl') & {
   default?: typeof import('maplibre-gl')
 }
+type PmtilesModule = typeof import('pmtiles')
+type BasemapsModule = typeof import('@protomaps/basemaps')
 type ClusterGeoJSONSource = GeoJSONSource & {
   getClusterExpansionZoom?: (clusterId: number) => Promise<number>
   getClusterLeaves?: (clusterId: number, limit: number, offset: number) => Promise<GeoJsonFeature[]>
@@ -193,7 +201,7 @@ type RegionIndexEntry = {
   center: [number, number]
   label_point?: [number, number]
   area?: number
-  bbox: [number, number, number, number]
+  bbox?: [number, number, number, number]
 }
 type RegionIdentity = {
   level: MapRegionStat['level']
@@ -227,30 +235,14 @@ type BasemapConfig =
     }
 
 const EMPTY_COLLECTION: FeatureCollection = { type: 'FeatureCollection', features: [] }
-const BASEMAP_PM_TILES_URL =
-  import.meta.env.VITE_BASEMAP_PM_TILES_URL || '/tiles/wbe-preview-composite.pmtiles'
-const REGION_INDEX_URL = '/geo/render/region-index.json'
-const SPECIAL_ADMIN_URL = '/geo/render/china-special-admin-envelopes.geojson'
-const SPECIAL_ADMIN_LINE_URL = '/geo/render/china-special-admin-envelopes-lines.geojson'
-const BASEMAP_GLYPHS_URL =
-  import.meta.env.VITE_BASEMAP_GLYPHS_URL || '/tiles/fonts/{fontstack}/{range}.pbf'
-// The composite PMTiles is the sole visual map. Local GeoJSON remains the
-// interaction authority for search, hit testing, selection and aggregation.
+const BASEMAP_PM_TILES_URL_OVERRIDE = import.meta.env.VITE_BASEMAP_PM_TILES_URL || ''
+const BASEMAP_GLYPHS_URL_OVERRIDE = import.meta.env.VITE_BASEMAP_GLYPHS_URL || ''
+const LEGACY_MAP_ASSETS = legacyMapAssetUrls()
+// The composite PMTiles is the normal visual and interaction authority.
+// Full GeoJSON is loaded only when the vector source needs to fall back.
 const USE_LOCAL_PM_TILES_BASEMAP = true
 const REGION_VECTOR_SOURCE_ID = 'protomaps'
 const REGION_VECTOR_SOURCE_LAYER = PREVIEW_REGION_POLYGON_SOURCE_LAYER
-const BOUNDARY_URLS: Record<BoundaryName, string> = {
-  countries: '/geo/render/world-countries.geojson',
-  admin1: '/geo/render/world-admin1.geojson',
-  chinaProvinces: '/geo/render/china-provinces.geojson',
-  chinaCities: '/geo/render/china-cities.geojson',
-}
-const BOUNDARY_LINE_URLS: Record<BoundaryName, string> = {
-  countries: '/geo/render/world-countries-lines.geojson',
-  admin1: '/geo/render/world-admin1-lines.geojson',
-  chinaProvinces: '/geo/render/china-provinces-lines.geojson',
-  chinaCities: '/geo/render/china-cities-lines.geojson',
-}
 const DEFAULT_SELECTION: MapFilterSelection = {
   targetClass: 'ALL',
   category: '全部目标物质类别',
@@ -527,6 +519,10 @@ const UI_TEXT = {
     filterTitle: '筛选条件',
     filterOptionSearch: '搜索选项',
     filterOptionEmpty: '没有匹配选项',
+    biomarkerQuickSearch: '分层搜索筛选条件',
+    biomarkerSearchPlaceholder: '输入类别、子类、标记物、CAS 或年份',
+    biomarkerSearchEmpty: '没有匹配的筛选条件',
+    biomarkerSearchApplying: '正在应用筛选条件…',
     targetClass: '目标类别',
     allTargetClasses: '全部',
     allCategories: '全部',
@@ -665,6 +661,10 @@ const UI_TEXT = {
     filterTitle: 'Filters',
     filterOptionSearch: 'Search options',
     filterOptionEmpty: 'No matching option',
+    biomarkerQuickSearch: 'Search filters by level',
+    biomarkerSearchPlaceholder: 'Class, category, biomarker, CAS, or year',
+    biomarkerSearchEmpty: 'No matching filter option',
+    biomarkerSearchApplying: 'Applying filter…',
     targetClass: 'Target class',
     allTargetClasses: 'All',
     allCategories: 'All',
@@ -788,7 +788,7 @@ const UI_TEXT = {
   },
 } as const
 
-const MAP_OPERATION_GUIDE_STEPS: Record<Locale, MapOperationGuideStep[]> = {
+const MAP_OPERATION_GUIDE_STEPS: Record<Locale, OperationGuideStep[]> = {
   zh: [
     {
       title: '先筛选证据范围',
@@ -982,6 +982,7 @@ const isLayerPanelOpen = ref(false)
 const isMapStyleSwitching = ref(false)
 const mapGuideOpen = ref(false)
 const mapGuideStep = ref(0)
+const mapGuideButton = ref<HTMLButtonElement | null>(null)
 const mapGuideSeen = ref(readMapOperationGuideSeen())
 const mapGuideSuppressedForVisit = ref(false)
 const mapGuideShownThisVisit = ref(false)
@@ -1087,14 +1088,18 @@ let statLookupCache: {
 } | null = null
 const cityAdminKeyCache = new Map<string, string>()
 let cityAdminKeyCacheVersion = -1
-let regionIndexEntries: RegionIndexEntry[] = []
-let regionIndexPromise: Promise<void> | null = null
+let activeMapAssets: MapAssetUrls = LEGACY_MAP_ASSETS
+const loadedRegionIndexLevels = new Set<RuntimeRegionIndexLevel>()
+const regionIndexPromises = new Map<RuntimeRegionIndexLevel, Promise<void>>()
+let legacyFullRegionIndexPromise: Promise<void> | null = null
+let regionIndexIdleHandle: number | null = null
 const regionIndexByKey = new Map<string, RegionIndexEntry>()
 
 const ui = computed(() => UI_TEXT[locale.value])
 const filtersDirty = computed(
   () => !stats.value || !filterSelectionsEqual(selection, appliedSelection.value),
 )
+const filterSearchClearSignal = ref(0)
 const isCompactDetailOpen = computed(() => detailMode.value === 'compact')
 const isFullDetailOpen = computed(() => detailMode.value === 'full')
 const isDetailOpen = computed(() => detailMode.value !== 'none')
@@ -1203,6 +1208,36 @@ const biomarkerFilterOptions = computed<MapFilterSelectOption[]>(() => {
     displayOptionLabel,
   )
 })
+const filterSearchOptions = computed(() => [
+  ...buildMapFilterSearchOptions(
+    filters.value?.biomarkerPaths ?? [],
+    {
+      allCategory: ALL_CATEGORY_LABEL,
+      allSubcategory: ALL_SUBCATEGORY_LABEL,
+      allBiomarker: ALL_BIOMARKER_KEY,
+      allYear: ALL_YEAR_LABEL,
+    },
+    {
+      targetClass: ui.value.targetClass,
+      category: ui.value.category,
+      subcategory: ui.value.subcategory,
+      biomarker: ui.value.biomarker,
+    },
+    displayOptionLabel,
+  ),
+  ...currentYears.value
+    .filter((year) => year !== ALL_YEAR_LABEL)
+    .map((year) => ({
+      value: `year|||${year}`,
+      label: displayOptionLabel(year),
+      levelLabel: ui.value.year,
+      searchText: year,
+      selection: { ...selection, year },
+    })),
+])
+const filterSearchSelectionByValue = computed(
+  () => new Map(filterSearchOptions.value.map((option) => [option.value, option.selection])),
+)
 const yearFilterOptions = computed(() =>
   toFilterSelectOptions(currentYears.value, (value) => displayOptionLabel(value)),
 )
@@ -1770,13 +1805,10 @@ watch(
   { flush: 'post' },
 )
 
-onMounted(async () => {
-  await loadFilters()
-  await nextTick()
-  await initMap()
+onMounted(() => {
   window.addEventListener('resize', handleMapResize)
   window.addEventListener('keydown', handleMapKeydown)
-  if (selection.category) await applyFilters({ force: true })
+  void Promise.allSettled([loadInitialMapData(), initMap()])
 })
 
 onBeforeUnmount(() => {
@@ -1788,6 +1820,17 @@ onBeforeUnmount(() => {
   if (countryStatusTimer != null) {
     window.clearTimeout(countryStatusTimer)
     countryStatusTimer = undefined
+  }
+  if (regionIndexIdleHandle != null) {
+    const idleWindow = window as Window & {
+      cancelIdleCallback?: (handle: number) => void
+    }
+    if (typeof idleWindow.cancelIdleCallback === 'function') {
+      idleWindow.cancelIdleCallback(regionIndexIdleHandle)
+    } else {
+      globalThis.clearTimeout(regionIndexIdleHandle)
+    }
+    regionIndexIdleHandle = null
   }
   if (mapStatusFrame != null) {
     window.cancelAnimationFrame(mapStatusFrame)
@@ -1815,31 +1858,81 @@ onBeforeUnmount(() => {
   pmtilesProtocolReady = false
 })
 
-async function loadFilters() {
-  isLoadingFilters.value = true
-  filterError.value = ''
+async function loadInitialMapData() {
+  const requestId = ++statsRequestId
+  statsController?.abort()
   const controller = new AbortController()
+  statsController = controller
+  isLoadingFilters.value = true
+  isLoadingStats.value = true
+  filterError.value = ''
   try {
-    const result = await fetchMapFilters(controller.signal)
-    filters.value = result
-    const initialSelection = {
+    const [filterResult, defaultStatsResult] = await Promise.allSettled([
+      fetchMapFilters(controller.signal),
+      fetchMapStats(DEFAULT_SELECTION, ['country', 'admin1', 'city'], controller.signal),
+    ])
+    if (requestId !== statsRequestId || controller.signal.aborted) return
+
+    const initialSelection: MapFilterSelection = {
       ...DEFAULT_SELECTION,
-      ...result.defaultSelection,
-      targetClass: result.defaultSelection?.targetClass ?? 'ALL',
+      ...(filterResult.status === 'fulfilled' ? filterResult.value.defaultSelection : undefined),
+      targetClass:
+        filterResult.status === 'fulfilled'
+          ? (filterResult.value.defaultSelection?.targetClass ?? 'ALL')
+          : 'ALL',
       category: ALL_CATEGORY_LABEL,
       subcategory: ALL_SUBCATEGORY_LABEL,
       biomarkerKey: ALL_BIOMARKER_KEY,
     }
+    if (filterResult.status === 'fulfilled') {
+      filters.value = filterResult.value
+    } else {
+      filterError.value = getUserErrorMessage(filterResult.reason, ui.value.filterLoadFailed)
+    }
+
+    programmaticSelectionUpdateInProgress = true
     Object.assign(selection, initialSelection)
+    programmaticSelectionUpdateInProgress = false
+
+    let nextStats: MapStatsResponse | null = null
+    if (filterSelectionsEqual(initialSelection, DEFAULT_SELECTION)) {
+      if (defaultStatsResult.status === 'fulfilled') nextStats = defaultStatsResult.value
+      else if (!filterError.value) {
+        filterError.value = getUserErrorMessage(defaultStatsResult.reason, ui.value.statsLoadFailed)
+      }
+    } else {
+      nextStats = await fetchMapStats(
+        initialSelection,
+        ['country', 'admin1', 'city'],
+        controller.signal,
+      )
+    }
+    if (requestId !== statsRequestId || controller.signal.aborted) return
     appliedSnapshot.value = {
       selection: { ...initialSelection },
-      stats: null,
+      stats: nextStats,
     }
+    invalidateMapDisplayCaches()
+    ensureFallbackBoundaries()
+    ensureStagedBoundariesForCurrentZoom()
+    updateMapData()
+    await nextTick()
+    await waitForMapDataRender()
   } catch (error) {
+    if (requestId !== statsRequestId || isAbortError(error)) return
     filterError.value = getUserErrorMessage(error, ui.value.filterLoadFailed)
   } finally {
-    isLoadingFilters.value = false
+    programmaticSelectionUpdateInProgress = false
+    if (requestId === statsRequestId) {
+      isLoadingFilters.value = false
+      isLoadingStats.value = false
+      if (statsController === controller) statsController = null
+    }
   }
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === 'AbortError'
 }
 
 function filterSelectionsEqual(left: MapFilterSelection, right: MapFilterSelection) {
@@ -1884,9 +1977,13 @@ function withAllBiomarker(items: MapBiomarkerOption[]) {
 async function initMap() {
   if (!mapContainer.value) return
   try {
-    const module = await import('maplibre-gl')
+    const maplibrePromise = import('maplibre-gl')
+    const pmtilesPromise = import('pmtiles')
+    const basemapsPromise = import('@protomaps/basemaps')
+    const [module, mapAssets] = await Promise.all([maplibrePromise, resolveMapAssetUrls()])
+    activeMapAssets = mapAssets
     maplibregl = ((module as MapLibreModule).default ?? module) as MapLibreModule
-    const basemapConfig = await resolveBasemapConfig(maplibregl)
+    const basemapConfig = await resolveBasemapConfig(maplibregl, pmtilesPromise, basemapsPromise)
     basemapMode = basemapConfig.mode
     regionSourceMode = basemapConfig.mode === 'vector' ? 'vector' : 'geojson'
     activeBasemapConfig = basemapConfig
@@ -1916,13 +2013,16 @@ async function initMap() {
       syncActiveMapLevel(mapZoomLevel.value)
       addMapSourcesAndLayers()
       bindLayerEvents()
-      void ensureRegionIndex().then(() => {
+      void ensureRegionIndex('country').then(() => {
         updateLoadedLabelSources()
         updatePointSource()
+        updateMapStatus()
       })
-      void ensureBoundary('countries', true)
+      scheduleAdmin1RegionIndexPrefetch()
+      if (regionSourceMode === 'geojson') void ensureBoundary('countries', true)
       updateMapData()
       updateMapStatus()
+      map?.once('idle', updateMapStatus)
     })
     map.on('zoomend', () => {
       const nextZoom = map?.getZoom() ?? mapZoomLevel.value
@@ -1930,6 +2030,7 @@ async function initMap() {
       const levelChanged = syncActiveMapLevel(nextZoom)
       updateMapStatus()
       ensureStagedBoundariesForCurrentZoom()
+      ensureRegionIndexesForZoom(nextZoom)
       if (levelChanged) {
         handleActiveMapLevelTransition()
         updateLoadedLabelSources()
@@ -1949,6 +2050,7 @@ async function initMap() {
       const nextZoom = map?.getZoom() ?? mapZoomLevel.value
       mapZoomLevel.value = nextZoom
       const levelChanged = syncActiveMapLevel(nextZoom)
+      ensureRegionIndexesForZoom(nextZoom)
       if (levelChanged) {
         handleActiveMapLevelTransition()
         updateLoadedLabelSources()
@@ -2104,22 +2206,25 @@ function configureMapGestureSmoothness() {
   gestureMap.touchZoomRotate?.setZoomThreshold?.(0.18)
 }
 
-async function resolveBasemapConfig(module: MapLibreModule): Promise<BasemapConfig> {
+async function resolveBasemapConfig(
+  module: MapLibreModule,
+  pmtilesPromise: Promise<PmtilesModule>,
+  basemapsPromise: Promise<BasemapsModule>,
+): Promise<BasemapConfig> {
   if (!USE_LOCAL_PM_TILES_BASEMAP) return { mode: 'geojson' }
-  const pmtilesUrl = BASEMAP_PM_TILES_URL.trim()
-  if (!pmtilesUrl || !(await canLoadVectorBasemapAssets(pmtilesUrl))) {
-    return { mode: 'geojson' }
-  }
+  const pmtilesUrl = (BASEMAP_PM_TILES_URL_OVERRIDE || activeMapAssets.pmtiles).trim()
+  const glyphsUrl = (BASEMAP_GLYPHS_URL_OVERRIDE || activeMapAssets.glyphs).trim()
+  if (!pmtilesUrl || !glyphsUrl) return { mode: 'geojson' }
 
   try {
-    await registerPmtilesProtocol(module)
-    const basemaps = await import('@protomaps/basemaps')
+    const [pmtiles, basemaps] = await Promise.all([pmtilesPromise, basemapsPromise])
+    registerPmtilesProtocol(module, pmtiles.Protocol)
 
     return {
       mode: 'vector',
       styleSourceUrl: `pmtiles://${new URL(pmtilesUrl, window.location.origin).toString()}`,
       layers: protomapsLayersForLocale(basemaps),
-      glyphs: BASEMAP_GLYPHS_URL,
+      glyphs: glyphsUrl,
     }
   } catch {
     return { mode: 'geojson' }
@@ -2148,9 +2253,8 @@ async function refreshVectorBasemapLanguage() {
   }
 }
 
-async function registerPmtilesProtocol(module: MapLibreModule) {
+function registerPmtilesProtocol(module: MapLibreModule, Protocol: PmtilesModule['Protocol']) {
   if (pmtilesProtocolReady) return
-  const { Protocol } = await import('pmtiles')
   const protocol = new Protocol()
   ;(module as unknown as { addProtocol?: (scheme: string, loader: unknown) => void }).addProtocol?.(
     'pmtiles',
@@ -2165,51 +2269,6 @@ async function registerPmtilesProtocol(module: MapLibreModule) {
   }
 }
 
-async function canLoadVectorBasemapAssets(pmtilesUrl: string) {
-  if (!(await canLoadPmtilesArchive(pmtilesUrl))) return false
-  const glyphUrls = glyphProbeUrls(BASEMAP_GLYPHS_URL)
-  if (!glyphUrls.length) return false
-  return canLoadAnyStaticAsset(glyphUrls)
-}
-
-async function canLoadPmtilesArchive(url: string) {
-  return (await probePmtilesRange(url)).ok
-}
-
-function glyphProbeUrls(template: string) {
-  const trimmed = template.trim()
-  if (!trimmed) return []
-  const raw = trimmed.replace('{fontstack}', 'Noto Sans Regular').replace('{range}', '0-255')
-  const encoded = trimmed
-    .replace('{fontstack}', encodeURIComponent('Noto Sans Regular'))
-    .replace('{range}', '0-255')
-  return Array.from(new Set([raw, encoded]))
-}
-
-async function canLoadStaticAsset(url: string) {
-  try {
-    const head = await fetch(url, { method: 'HEAD', cache: 'no-store' })
-    if (head.ok) return true
-  } catch {
-    // Fall through to GET for hosts that do not support HEAD reliably.
-  }
-
-  try {
-    const response = await fetch(url, { cache: 'no-store' })
-    await response.body?.cancel()
-    return response.ok
-  } catch {
-    return false
-  }
-}
-
-async function canLoadAnyStaticAsset(urls: string[]) {
-  for (const url of urls) {
-    if (await canLoadStaticAsset(url)) return true
-  }
-  return false
-}
-
 function handleMapRuntimeError(event: unknown) {
   const payload = event as {
     error?: { message?: string }
@@ -2218,12 +2277,15 @@ function handleMapRuntimeError(event: unknown) {
   }
   const sourceId = String(payload.sourceId ?? '')
   const message = String(payload.error?.message ?? '')
-  if (sourceId === REGION_VECTOR_SOURCE_ID || /wbe[-_]regions/i.test(message)) {
+  if (mapAssetFailureRequiresGeoJson(sourceId, message)) {
+    fallbackToGeoJsonBasemap()
+    return
+  }
+  if (/wbe[-_]regions/i.test(message)) {
     fallbackRegionSourceToGeoJson()
     return
   }
   if (basemapMode !== 'vector' || isBasemapFallbackInProgress) return
-  if (/glyph|sprite|font/i.test(message)) return
   if (sourceId && sourceId !== 'protomaps') return
   if (message && /map-points|pndl/i.test(message)) return
   if (!message && !sourceId && !payload.tile) return
@@ -2300,7 +2362,7 @@ function reloadCurrentMapStyle() {
     map.jumpTo(camera)
     applyFlatWorldWrapConstraints()
     syncActiveMapLevel(camera.zoom)
-    void ensureBoundary('countries', true)
+    if (regionSourceMode === 'geojson') void ensureBoundary('countries', true)
     ensureFallbackBoundaries(true)
     updateMapData()
     map.setMaxZoom(currentMapMaxZoom())
@@ -3339,15 +3401,15 @@ async function ensureBoundary(name: BoundaryName, refreshCached = false) {
   pushBoundaryLoading(name)
   try {
     const [response, lineResponse, specialResponse, specialLineResponse] = await Promise.all([
-      fetch(BOUNDARY_URLS[name]),
+      fetch(activeMapAssets.boundaries[name]),
       regionSourceMode === 'geojson'
-        ? fetch(BOUNDARY_LINE_URLS[name]).catch(() => null)
+        ? fetch(activeMapAssets.boundaryLines[name]).catch(() => null)
         : Promise.resolve(null),
       name === 'chinaProvinces'
-        ? fetch(SPECIAL_ADMIN_URL).catch(() => null)
+        ? fetch(activeMapAssets.specialAdmin).catch(() => null)
         : Promise.resolve(null),
       name === 'chinaProvinces' && regionSourceMode === 'geojson'
-        ? fetch(SPECIAL_ADMIN_LINE_URL).catch(() => null)
+        ? fetch(activeMapAssets.specialAdminLines).catch(() => null)
         : Promise.resolve(null),
     ])
     if (!response.ok) throw new Error(`${name} boundary failed`)
@@ -3390,11 +3452,11 @@ async function ensureBoundary(name: BoundaryName, refreshCached = false) {
 
 function ensureStagedBoundariesForCurrentZoom(refreshCached = false) {
   if (!mapReady.value) return
-  void ensureBoundary('countries', refreshCached)
   if (regionSourceMode === 'vector' && basemapMode === 'vector') {
-    void ensureRegionIndex()
+    ensureRegionIndexesForZoom(map?.getZoom() ?? mapZoomLevel.value)
     return
   }
+  void ensureBoundary('countries', refreshCached)
   if (activeMapLevel.value !== 'country') {
     void ensureBoundary('admin1', refreshCached)
     void ensureBoundary('chinaProvinces', refreshCached)
@@ -4886,6 +4948,16 @@ function representativeCoordinates(row: MapRegionStat): [number, number] | null 
   const geometryLabelPoint = feature ? labelPointForGeometry(feature.geometry, true) : null
   const indexedCenter = indexEntry?.center
 
+  // Vector mode deliberately avoids downloading full GeoJSON. The runtime
+  // index carries the exact audited cartographic anchors for that path.
+  if (!feature) {
+    return (
+      indexedLabelPoint ??
+      indexedCenter ??
+      (suppliedPoint?.every(Number.isFinite) ? suppliedPoint : null)
+    )
+  }
+
   // A country aggregate may inherit one reported monitoring coordinate from
   // the API. Keep its bubble at the polygon's cartographic label point so it
   // remains visibly associated with the whole country.
@@ -4913,7 +4985,7 @@ function representativeCoordinates(row: MapRegionStat): [number, number] | null 
     return suppliedPoint
   }
   const boundaryCenter = indexedLabelPoint ?? indexedCenter ?? geometryLabelPoint
-  if (boundaryCenter && pointInGeometry(boundaryCenter, feature?.geometry)) return boundaryCenter
+  if (boundaryCenter && pointInGeometry(boundaryCenter, feature.geometry)) return boundaryCenter
   return suppliedPoint?.every(Number.isFinite) ? suppliedPoint : null
 }
 
@@ -5531,33 +5603,108 @@ function regionIndexEntryFor(level: MapRegionStat['level'], geoKey: string) {
   return regionIndexByKey.get(`${level}|${geoKey}`)
 }
 
-async function ensureRegionIndex() {
-  if (regionIndexEntries.length) return
-  if (regionIndexPromise) return regionIndexPromise
-  regionIndexPromise = (async () => {
+async function ensureRegionIndex(level: RuntimeRegionIndexLevel) {
+  if (loadedRegionIndexLevels.has(level)) return
+  const pending = regionIndexPromises.get(level)
+  if (pending) return pending
+  const request = (async () => {
     try {
-      const response = await fetch(REGION_INDEX_URL, { cache: 'no-cache' })
+      const response = await fetch(activeMapAssets.runtimeRegionIndexes[level])
       if (!response.ok) {
-        console.warn(`Region index request failed with status ${response.status}`)
+        if (!activeMapAssets.manifestBacked) await loadLegacyFullRegionIndex()
+        else
+          console.warn(
+            `Runtime ${level} region index request failed with status ${response.status}`,
+          )
         return
       }
-      const payload = (await response.json()) as { regions?: RegionIndexEntry[] }
-      regionIndexEntries = Array.isArray(payload.regions) ? payload.regions : []
-      regionIndexByKey.clear()
-      regionIndexEntries.forEach((entry) => {
-        if (!entry?.geo_key || !entry?.level) return
-        regionIndexByKey.set(`${entry.level}|${entry.geo_key}`, entry)
-      })
-      labelPointCollectionCache.clear()
-      pointCollectionCache.clear()
+      const payload = (await response.json()) as {
+        schemaVersion?: number
+        level?: RuntimeRegionIndexLevel
+        regions?: RegionIndexEntry[]
+      }
+      if (
+        payload.schemaVersion !== 1 ||
+        payload.level !== level ||
+        !Array.isArray(payload.regions)
+      ) {
+        throw new Error(`Invalid runtime ${level} region index`)
+      }
+      addRegionIndexEntries(payload.regions)
+      loadedRegionIndexLevels.add(level)
+      refreshAfterRegionIndexLoad()
     } catch (error) {
-      console.warn('Region index request failed; using loaded map boundaries instead.', error)
+      console.warn(`Runtime ${level} region index request failed; using map data instead.`, error)
       // Map labels and positioning fall back to the currently loaded boundaries.
     }
   })().finally(() => {
-    regionIndexPromise = null
+    regionIndexPromises.delete(level)
   })
-  return regionIndexPromise
+  regionIndexPromises.set(level, request)
+  return request
+}
+
+async function loadLegacyFullRegionIndex() {
+  if (legacyFullRegionIndexPromise) return legacyFullRegionIndexPromise
+  legacyFullRegionIndexPromise = (async () => {
+    try {
+      const response = await fetch('/geo/render/region-index.json', { cache: 'no-cache' })
+      if (!response.ok) return
+      const payload = (await response.json()) as { regions?: RegionIndexEntry[] }
+      if (!Array.isArray(payload.regions)) return
+      addRegionIndexEntries(payload.regions)
+      ;(['country', 'admin1', 'city'] as RuntimeRegionIndexLevel[]).forEach((item) =>
+        loadedRegionIndexLevels.add(item),
+      )
+      refreshAfterRegionIndexLoad()
+    } catch (error) {
+      console.warn('Legacy region index request failed; using map data instead.', error)
+    }
+  })()
+  return legacyFullRegionIndexPromise
+}
+
+function addRegionIndexEntries(entries: RegionIndexEntry[]) {
+  entries.forEach((entry) => {
+    if (!entry?.geo_key || !entry?.level) return
+    regionIndexByKey.set(`${entry.level}|${entry.geo_key}`, entry)
+  })
+}
+
+function refreshAfterRegionIndexLoad() {
+  labelPointCollectionCache.clear()
+  pointCollectionCache.clear()
+  updateLoadedLabelSources()
+  updatePointSource()
+}
+
+function ensureRegionIndexesForZoom(zoom: number) {
+  runtimeRegionIndexLevelsForZoom(zoom).forEach((level) => void ensureRegionIndex(level))
+}
+
+function scheduleAdmin1RegionIndexPrefetch() {
+  if (regionIndexIdleHandle != null || !allowsDeferredMapAssetFetch()) return
+  const load = () => {
+    regionIndexIdleHandle = null
+    void ensureRegionIndex('admin1')
+  }
+  const idleWindow = window as Window & {
+    requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number
+  }
+  if (typeof idleWindow.requestIdleCallback === 'function') {
+    regionIndexIdleHandle = idleWindow.requestIdleCallback(load, { timeout: 3200 })
+  } else {
+    regionIndexIdleHandle = window.setTimeout(load, 1800)
+  }
+}
+
+function allowsDeferredMapAssetFetch() {
+  const connection = (
+    navigator as Navigator & {
+      connection?: { saveData?: boolean; effectiveType?: string }
+    }
+  ).connection
+  return !connection?.saveData && !['slow-2g', '2g'].includes(connection?.effectiveType ?? '')
 }
 
 function selectedMapCameraPadding() {
@@ -5665,7 +5812,7 @@ function labelSourceId(name: BoundaryName) {
 }
 
 async function applyFilters({ force = false }: { force?: boolean } = {}) {
-  if (!selection.category || (!force && !filtersDirty.value)) return
+  if (!selection.category || (!force && !filtersDirty.value)) return false
   const requestSelection = { ...selection }
   const requestId = ++statsRequestId
   statsController?.abort()
@@ -5679,7 +5826,7 @@ async function applyFilters({ force = false }: { force?: boolean } = {}) {
       ['country', 'admin1', 'city'],
       controller.signal,
     )
-    if (requestId !== statsRequestId || controller.signal.aborted) return
+    if (requestId !== statsRequestId || controller.signal.aborted) return false
     closeDetail()
     appliedSnapshot.value = {
       selection: requestSelection,
@@ -5691,10 +5838,12 @@ async function applyFilters({ force = false }: { force?: boolean } = {}) {
     updateMapData()
     await nextTick()
     await waitForMapDataRender()
+    return true
   } catch (error) {
-    if (requestId !== statsRequestId) return
-    if (error instanceof DOMException && error.name === 'AbortError') return
+    if (requestId !== statsRequestId) return false
+    if (error instanceof DOMException && error.name === 'AbortError') return false
     filterError.value = getUserErrorMessage(error, ui.value.statsLoadFailed)
+    return false
   } finally {
     if (requestId === statsRequestId) {
       isLoadingStats.value = false
@@ -7234,10 +7383,43 @@ function cursorCoordinatePoint() {
 }
 
 function countryAtPoint(point: [number, number]) {
+  if (map && regionSourceMode === 'vector' && map.getLayer('wbe-country-boundary-hit')) {
+    try {
+      const feature = map.queryRenderedFeatures(map.project(point), {
+        layers: ['wbe-country-boundary-hit'],
+      })[0] as unknown as GeoJsonFeature | undefined
+      if (feature) {
+        const vectorName = localizedBoundaryName(feature, 'country').trim()
+        if (vectorName) return vectorName
+      }
+      const sourceFeature = map
+        .querySourceFeatures(REGION_VECTOR_SOURCE_ID, {
+          sourceLayer: REGION_VECTOR_SOURCE_LAYER,
+          filter: ['==', ['get', 'level'], 'country'],
+        })
+        .find((candidate) =>
+          pointInGeometry(point, (candidate as unknown as GeoJsonFeature).geometry),
+        ) as unknown as GeoJsonFeature | undefined
+      if (sourceFeature) {
+        const sourceName = localizedBoundaryName(sourceFeature, 'country').trim()
+        if (sourceName) return sourceName
+      }
+    } catch {
+      // The vector tile may still be loading; fall through to GeoJSON if available.
+    }
+  }
   const feature = getBoundaryHitIndex('countries').find(
     (item) => pointWithinBbox(point, item.bbox) && pointInGeometry(point, item.feature.geometry),
   )?.feature
-  if (!feature) return null
+  if (!feature) {
+    const chinaAnchor = regionIndexEntryFor('country', 'china')?.label_point
+    const isInitialChinaView =
+      chinaAnchor &&
+      Math.abs(point[0] - FLAT_CENTER[0]) < 0.25 &&
+      Math.abs(point[1] - FLAT_CENTER[1]) < 0.25
+    if (isInitialChinaView) return locale.value === 'zh' ? '中国' : 'China'
+    return null
+  }
   const name = localizedBoundaryName(feature, 'country').trim()
   return name || null
 }
@@ -7622,6 +7804,22 @@ async function selectBiomarkerPath(value: string) {
   } finally {
     programmaticSelectionUpdateInProgress = false
   }
+}
+
+async function applyFilterSearchResult(value: string) {
+  const nextSelection = filterSearchSelectionByValue.value.get(value)
+  if (!nextSelection) return
+  filterError.value = ''
+  pinnedBiomarkerOption.value = null
+  programmaticSelectionUpdateInProgress = true
+  try {
+    Object.assign(selection, nextSelection)
+    await nextTick()
+  } finally {
+    programmaticSelectionUpdateInProgress = false
+  }
+  const applied = await applyFilters({ force: true })
+  if (applied) filterSearchClearSignal.value += 1
 }
 
 function readInitialLocale(): Locale {
@@ -8152,6 +8350,7 @@ function escapeHtml(value: string) {
         </div>
 
         <button
+          ref="mapGuideButton"
           class="map-tool-button map-guide-button"
           type="button"
           :aria-label="ui.operationGuide"
@@ -8171,13 +8370,16 @@ function escapeHtml(value: string) {
         :category-options="categoryFilterOptions"
         :subcategory-options="subcategoryFilterOptions"
         :biomarker-options="biomarkerFilterOptions"
+        :search-options="filterSearchOptions"
         :year-options="yearFilterOptions"
         :loading-filters="isLoadingFilters"
         :dirty="filtersDirty"
         :applying="isLoadingStats"
         :filters-ready="Boolean(filters)"
+        :search-clear-signal="filterSearchClearSignal"
         @change="updateFilterSelection"
         @select-biomarker-path="selectBiomarkerPath"
+        @select-search-result="applyFilterSearchResult"
         @apply="applyFilters()"
         @reset="resetFilters"
         @toggle="toggleFilters"
@@ -8681,10 +8883,11 @@ function escapeHtml(value: string) {
         </div>
       </Transition>
 
-      <MapOperationGuide
+      <OperationGuide
         :open="mapGuideOpen"
         :step="mapGuideStep"
         :steps="mapOperationGuideSteps"
+        :return-focus-to="mapGuideButton"
         @previous="previousMapGuideStep"
         @next="nextMapGuideStep"
         @skip="closeMapOperationGuide"

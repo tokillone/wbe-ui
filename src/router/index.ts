@@ -31,7 +31,24 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/methodology-verification',
     name: 'methodology-verification',
-    component: () => import('../views/MethodologyVerificationView.vue'),
+    redirect: { path: '/icd11-sankey', hash: '#reading-guide' },
+  },
+  {
+    path: '/guide',
+    name: 'guide',
+    component: () => import('../views/GuideView.vue'),
+  },
+  {
+    path: '/about',
+    name: 'about',
+    component: () => import('../views/AboutView.vue'),
+  },
+  {
+    path: '/ui-home-academic',
+    redirect: {
+      path: '/',
+      query: { ui: 'academic-home' },
+    },
   },
 ]
 
@@ -47,6 +64,17 @@ if (dataEntryView) {
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes,
+  scrollBehavior(to, _from, savedPosition) {
+    if (savedPosition) return savedPosition
+    if (to.hash) {
+      return {
+        el: to.hash,
+        top: 120,
+        behavior: 'smooth',
+      }
+    }
+    return { top: 0 }
+  },
 })
 
 router.beforeEach(async (to) => {

@@ -285,11 +285,20 @@ onBeforeUnmount(() => {
   appearance: none;
 }
 .sankey-node-search input:hover:not(:disabled) {
-  border-color: #8fa8c0;
+  border-color: #999;
 }
 .sankey-node-search input:focus {
-  border-color: #2566d4;
-  box-shadow: 0 0 0 3px rgba(37, 102, 212, 0.14);
+  border-color: #777;
+  box-shadow: none;
+  outline: none;
+}
+.sankey-node-search input:focus-visible {
+  outline: 1px solid #777;
+  outline-offset: 0;
+}
+.sankey-node-search input::selection {
+  background: #e1e4e5;
+  color: #222;
 }
 .sankey-node-search input:disabled {
   background: #f4f6f8;
@@ -377,11 +386,11 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 .sankey-search-result.is-active {
-  background: #f0f5fa;
+  background: #f3f4f4;
 }
 .sankey-search-result.is-selected {
-  background: #e6eff9;
-  color: #1f5b8b;
+  background: #eceeee;
+  color: #222;
 }
 .sankey-search-result-main {
   min-width: 0;

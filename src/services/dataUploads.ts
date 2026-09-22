@@ -14,120 +14,9 @@ export interface DataUploadBatch {
   syncedRows: number
   duplicateMessage?: string | null
   createdAt?: string | null
-  syncedAt?: string | null
   reviewedBy?: number | null
   reviewedByName?: string | null
-  reviewedAt?: string | null
-  reviewAction?: string | null
-  reviewNote?: string | null
-  syncedBy?: number | null
-  syncedByName?: string | null
-  syncErrorMessage?: string | null
-  sourceReviewedBy?: number | null
-  sourceReviewedByName?: string | null
-  sourceReviewedAt?: string | null
-  sourceReviewNote?: string | null
-  currentPackageId?: number | null
-  currentPackageVersion?: number | null
-  currentPackageFileName?: string | null
-  currentPackageStatus?: string | null
-  currentPackageRows?: number | null
-  approvedPackageId?: number | null
-  reviewChecklistComplete?: boolean
-  currentRevisionNo?: number
   publishedReleaseId?: number | null
-}
-
-export interface DataUploadRow {
-  rowId: number
-  rowStage: 'SUBMISSION' | 'REVIEW_PACKAGE'
-  reviewPackageId?: number | null
-  sheetName: string
-  excelRowNumber: number
-  status: string
-  errors: string[]
-  warnings: string[]
-  syncedMeasurementId?: number | null
-  syncedEntityType?: string | null
-  syncedEntityId?: number | null
-  data: Record<string, string>
-}
-
-export interface DataUploadSheetSummary {
-  sheetName: string
-  totalRows: number
-  validRows: number
-  warningRows: number
-  errorRows: number
-}
-
-export interface DataUploadPreview {
-  batch: DataUploadBatch
-  requiredHeaders: string[]
-  optionalHeaders: string[]
-  headerErrors: string[]
-  batchWarnings: string[]
-  previewRows: DataUploadRow[]
-  sheetSummaries: DataUploadSheetSummary[]
-  previewRowsBySheet: Record<string, DataUploadRow[]>
-  requiredReviewSheets?: string[]
-}
-
-export interface DataUploadReviewPackage {
-  packageId: number
-  uploadId: number
-  versionNo: number
-  fileName: string
-  status: string
-  uploadedBy: number
-  uploadedByName: string
-  totalRows: number
-  validRows: number
-  errorRows: number
-  warningRows: number
-  createdAt?: string | null
-  validationErrors: string[]
-  diffSummary: {
-    riskLevel?: string
-    submissionRows?: number
-    publishRows?: number
-    excludedRows?: number
-    newRecordGroups?: number
-    existingRowsDeleted?: number
-    sheets?: Record<
-      string,
-      {
-        currentRows: number
-        incomingRows: number
-        deltaRows: number
-        decreasePercent: number
-        highRisk: boolean
-      }
-    >
-  }
-  sheetSummaries: DataUploadSheetSummary[]
-}
-
-export interface DataUploadReviewDecision {
-  sourceCoverageConfirmed: boolean
-  traceabilityConfirmed: boolean
-  valuesAndUnitsConfirmed: boolean
-  siteLinkageConfirmed: boolean
-  icd11Confirmed: boolean
-  methodologyConfirmed: boolean
-  coreMarkerConfirmed: boolean
-  productionDiffConfirmed: boolean
-  note?: string
-}
-
-export interface DataUploadRowsPage {
-  uploadId: number
-  page: number
-  size: number
-  total: number
-  rowView: 'submission' | 'reviewPackage'
-  reviewPackageId?: number | null
-  rows: DataUploadRow[]
 }
 
 export interface DataUploadBatchPage {
@@ -138,98 +27,122 @@ export interface DataUploadBatchPage {
   totalPages: number
 }
 
+export interface UploadAccepted {
+  uploadId: number
+  status: string
+  statusUrl: string
+  reusedExistingBatch: boolean
+}
+
+export interface UploadDoiGroup {
+  groupId: number
+  normalizedDoi: string
+  status: string
+  totalRows: number
+  validRows: number
+  errorRows: number
+  duplicateRows: number
+  duplicateOfLiteratureCode?: string | null
+  issueSummary?: string | null
+}
+
+export interface UploadProcessing {
+  uploadId: number
+  internalStatus: string
+  userStatus: '校验中' | '待提交' | '审核中' | '待发布' | '已完成' | '需修正'
+  stage?: string | null
+  message?: string | null
+  processedRows: number
+  totalRows: number
+  readyDoiGroups: number
+  heldDoiGroups: number
+  duplicateDoiGroups: number
+  reservedDoiGroups: number
+  groups: UploadDoiGroup[]
+  availableActions: string[]
+}
+
+export interface UploadReviewRecord {
+  rowId: number
+  groupId: number
+  excelRowNumber: number
+  stableRowId: string
+  normalizedDoi: string
+  status: string
+  raw: Record<string, string>
+  standardized: Record<string, string>
+  errors: string[]
+  warnings: string[]
+  coreEligible: boolean
+  coreExclusionReason?: string | null
+  mapEligible: boolean
+  mapExclusionReason?: string | null
+  sankeyEligible: boolean
+  sankeyExclusionReason?: string | null
+  reviewVersion: number
+}
+
+export interface UploadReviewPage {
+  uploadId: number
+  page: number
+  size: number
+  total: number
+  records: UploadReviewRecord[]
+}
+
+export interface UploadReviewPatch {
+  standardized: Record<string, string>
+  coreEligible: boolean
+  coreExclusionReason?: string
+  mapEligible: boolean
+  mapExclusionReason?: string
+  sankeyEligible: boolean
+  sankeyExclusionReason?: string
+  reason: string
+}
+
+export interface UploadRefreshJob {
+  jobId: number
+  jobType: 'MAP' | 'CORE_PRIORITY'
+  status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+  versionNo: number
+  scoreVersion?: string | null
+  attemptCount: number
+  errorMessage?: string | null
+  startedAt?: string | null
+  finishedAt?: string | null
+}
+
+export interface UploadCanonicalTerm {
+  termId: number
+  dictionaryType: string
+  code: string
+  label: string
+  parentCode?: string | null
+}
+
+export interface UploadDictionaryChange {
+  requestId: number
+  uploadId: number
+  rowId?: number | null
+  dictionaryType: string
+  proposedCode?: string | null
+  proposedLabel: string
+  evidence: string
+  status: 'PENDING' | 'APPROVED' | 'REJECTED'
+  requestedBy: number
+  reviewedBy?: number | null
+  reviewReason?: string | null
+  createdAt?: string | null
+  reviewedAt?: string | null
+}
+
 export interface DataUploadSyncResult {
   batch: DataUploadBatch
   insertedRows: number
   skippedRows: number
   insertedRowsBySheet: Record<string, number>
   warnings: string[]
-}
-
-export function uploadPreview(file: File) {
-  const formData = new FormData()
-  formData.set('file', file)
-  return requestApi<DataUploadPreview>('/data-uploads', {
-    method: 'POST',
-    body: formData,
-  })
-}
-
-export function uploadSubmissionRevision(uploadId: number, file: File) {
-  const formData = new FormData()
-  formData.set('file', file)
-  return requestApi<DataUploadPreview>(`/data-uploads/${uploadId}/submission-revisions`, {
-    method: 'POST',
-    body: formData,
-  })
-}
-
-export function publishUpload(uploadId: number) {
-  return requestApi<DataUploadSyncResult>(`/data-uploads/${uploadId}/publish`, {
-    method: 'POST',
-  })
-}
-
-export function returnUpload(uploadId: number, reason: string) {
-  return requestApi<DataUploadBatch>(`/data-uploads/${uploadId}/return`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ reason }),
-  })
-}
-
-export function syncUpload(uploadId: number) {
-  return requestApi<DataUploadSyncResult>(`/data-uploads/${uploadId}/sync`, {
-    method: 'POST',
-  })
-}
-
-export function approveUpload(uploadId: number, decision: DataUploadReviewDecision) {
-  return requestApi<DataUploadBatch>(`/data-uploads/${uploadId}/approve`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(decision),
-  })
-}
-
-export function acceptSourceReview(uploadId: number, note?: string) {
-  return requestApi<DataUploadBatch>(`/data-uploads/${uploadId}/source-review/accept`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ note }),
-  })
-}
-
-export function uploadReviewPackage(uploadId: number, file: File) {
-  const formData = new FormData()
-  formData.set('file', file)
-  return requestApi<DataUploadReviewPackage>(
-    `/data-uploads/${uploadId}/review-packages`,
-    {
-      method: 'POST',
-      body: formData,
-    },
-  )
-}
-
-export function fetchReviewPackages(uploadId: number) {
-  return requestApi<DataUploadReviewPackage[]>(
-    `/data-uploads/${uploadId}/review-packages`,
-  )
-}
-
-export function rejectUpload(uploadId: number, reason?: string) {
-  return requestApi<DataUploadBatch>(`/data-uploads/${uploadId}/reject`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ reason }),
-  })
 }
 
 export interface FetchUploadsParams {
@@ -242,74 +155,109 @@ export interface FetchUploadsParams {
   sort?: string
 }
 
+export function uploadSubmission(file: File) {
+  const body = new FormData()
+  body.set('file', file)
+  return requestApi<UploadAccepted>('/data-uploads', { method: 'POST', body })
+}
+
+export function uploadCorrection(sourceUploadId: number, file: File) {
+  const body = new FormData()
+  body.set('file', file)
+  return requestApi<UploadAccepted>(`/data-uploads/${sourceUploadId}/corrections`, {
+    method: 'POST', body,
+  })
+}
+
+export function fetchUploadProcessing(uploadId: number) {
+  return requestApi<UploadProcessing>(`/data-uploads/${uploadId}/processing`)
+}
+
+export function submitReadyDoiGroups(uploadId: number) {
+  return requestApi<UploadProcessing>(`/data-uploads/${uploadId}/submit`, { method: 'POST' })
+}
+
+export function fetchReviewRecords(uploadId: number, page = 1, size = 20) {
+  return requestApi<UploadReviewPage>(`/data-uploads/${uploadId}/review-records?page=${page}&size=${size}`)
+}
+
+export function patchReviewRecord(uploadId: number, rowId: number, patch: UploadReviewPatch) {
+  return requestApi<UploadReviewRecord>(`/data-uploads/${uploadId}/review-records/${rowId}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
+  })
+}
+
+export function completeUploadReview(uploadId: number, payload: { adminOverride?: boolean; overrideReason?: string; note?: string }) {
+  return requestApi<UploadProcessing>(`/data-uploads/${uploadId}/review/complete`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  })
+}
+
+export function returnUploadReview(uploadId: number, reason: string) {
+  return requestApi<UploadProcessing>(`/data-uploads/${uploadId}/review/return`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }),
+  })
+}
+
+export function cancelUploadSubmission(uploadId: number, reason: string) {
+  return requestApi<UploadProcessing>(`/data-uploads/${uploadId}/submission/cancel`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }),
+  })
+}
+
+export function publishUpload(uploadId: number) {
+  return requestApi<DataUploadSyncResult>(`/data-uploads/${uploadId}/publish`, { method: 'POST' })
+}
+
+export function fetchRefreshJobs(uploadId: number) {
+  return requestApi<UploadRefreshJob[]>(`/data-uploads/${uploadId}/refresh-jobs`)
+}
+
+export function retryRefreshJob(uploadId: number, jobType: UploadRefreshJob['jobType']) {
+  return requestApi<void>(`/data-uploads/${uploadId}/refresh-jobs/${jobType}/retry`, { method: 'POST' })
+}
+
+export function fetchCanonicalTerms(type: string) {
+  return requestApi<UploadCanonicalTerm[]>(`/data-uploads/dictionary-terms?type=${encodeURIComponent(type)}`)
+}
+
+export function requestDictionaryChange(uploadId: number, payload: {
+  rowId?: number
+  dictionaryType: string
+  proposedCode?: string
+  proposedLabel: string
+  evidence: string
+}) {
+  return requestApi<UploadDictionaryChange>(`/data-uploads/${uploadId}/dictionary-change-requests`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  })
+}
+
+export function fetchDictionaryChanges(status = 'PENDING') {
+  return requestApi<UploadDictionaryChange[]>(`/data-uploads/dictionary-change-requests?status=${encodeURIComponent(status)}`)
+}
+
+export function reviewDictionaryChange(requestId: number, approved: boolean, reason: string) {
+  return requestApi<UploadDictionaryChange>(`/data-uploads/dictionary-change-requests/${requestId}/review`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ approved, reason }),
+  })
+}
+
 export function fetchUploads(params: FetchUploadsParams = {}) {
   const search = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && String(value).trim() !== '') {
-      search.set(key, String(value))
-    }
+    if (value !== undefined && value !== null && String(value).trim()) search.set(key, String(value))
   })
   const query = search.toString()
   return requestApi<DataUploadBatchPage>(`/data-uploads${query ? `?${query}` : ''}`)
-}
-
-export async function downloadUploadTemplate() {
-  const blob = await fetchBlob('/data-uploads/submission-template', '模板下载失败')
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = 'WBE原始数据投稿模板.xlsx'
-  link.click()
-  URL.revokeObjectURL(url)
-}
-
-export async function downloadReviewDraft(uploadId: number) {
-  const blob = await fetchBlob(`/data-uploads/${uploadId}/review-draft`, '五表审核草稿下载失败')
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `WBE五表审核草稿-${uploadId}.xlsx`
-  link.click()
-  URL.revokeObjectURL(url)
-}
-
-export async function downloadReviewPackageTemplate() {
-  const blob = await fetchBlob(
-    '/data-uploads/review-package-template',
-    '完整整理包模板下载失败',
-  )
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = 'WBE完整整理包模板.xlsx'
-  link.click()
-  URL.revokeObjectURL(url)
 }
 
 export function fetchUploadBatch(uploadId: number) {
   return requestApi<DataUploadBatch>(`/data-uploads/${uploadId}`)
 }
 
-export function fetchUploadRows(
-  uploadId: number,
-  page = 1,
-  size = 20,
-  status = 'all',
-  rowView: 'active' | 'submission' | 'reviewPackage' = 'active',
-) {
-  const params = new URLSearchParams({
-    page: String(page),
-    size: String(size),
-    rowView,
-  })
-  if (status !== 'all') {
-    params.set('status', status)
-  }
-  return requestApi<DataUploadRowsPage>(`/data-uploads/${uploadId}/rows?${params}`)
-}
-
-export async function downloadUploadFile(uploadId: number, fileName: string) {
-  const blob = await fetchBlob(`/data-uploads/${uploadId}/file`, '文件下载失败')
+async function download(endpoint: string, fileName: string, fallback: string) {
+  const blob = await fetchBlob(endpoint, fallback)
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
@@ -318,19 +266,14 @@ export async function downloadUploadFile(uploadId: number, fileName: string) {
   URL.revokeObjectURL(url)
 }
 
-export async function downloadReviewPackageFile(
-  uploadId: number,
-  packageId: number,
-  fileName: string,
-) {
-  const blob = await fetchBlob(
-    `/data-uploads/${uploadId}/review-packages/${packageId}/file`,
-    '完整整理包下载失败',
-  )
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = fileName
-  link.click()
-  URL.revokeObjectURL(url)
+export function downloadUploadTemplate() {
+  return download('/data-uploads/submission-template', 'WBE数据投稿模板-SUBMISSION_V2.xlsx', '模板下载失败')
+}
+
+export function downloadUploadIssues(uploadId: number) {
+  return download(`/data-uploads/${uploadId}/issues.xlsx`, `WBE问题组修订-${uploadId}.xlsx`, '问题组下载失败')
+}
+
+export function downloadUploadFile(uploadId: number, fileName: string) {
+  return download(`/data-uploads/${uploadId}/file`, fileName, '文件下载失败')
 }

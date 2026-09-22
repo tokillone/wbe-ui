@@ -12,11 +12,13 @@ import {
   sankeyLevel2ColorKey,
 } from '../utils/icd11SankeyColors'
 import {
+  mergeSankeyHighlightPathIds,
   relationPieSectionsForNode,
   relationShareItems,
   resolveUpstreamPathIds,
   pathsForLevel1Context,
   pathsForLevel1Scope,
+  promoteConnectedSankeyNodes,
   sankeyHoverTargetKey,
   smartSankeyLimit,
   summarizeSankeyOverview,
@@ -33,14 +35,15 @@ describe('icd11Sankey service', () => {
   })
 
   it('fetches categories from the backend endpoint', async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          code: 200,
-          message: 'success',
-          data: { categories: ['A 消化道和代谢系统药物'], defaultCategory: 'ALL' },
-        }),
-      ),
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            code: 200,
+            message: 'success',
+            data: { categories: ['A 消化道和代谢系统药物'], defaultCategory: 'ALL' },
+          }),
+        ),
     )
     vi.stubGlobal('fetch', fetchMock)
 
@@ -54,34 +57,35 @@ describe('icd11Sankey service', () => {
   })
 
   it('passes selected category to the graph endpoint', async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          code: 200,
-          message: 'success',
-          data: {
-            category: 'N 神经系统药物',
-            nodes: [],
-            links: [],
-            paths: [],
-            level1Colors: {},
-            stats: {
-              totalWeight: 0,
-              level1: 0,
-              level2: 0,
-              level3: 0,
-              drug: 0,
-              biomarker: 0,
-              relations: 0,
-              maxNodes: 0,
-              topLevel1: [],
-              topLevel3: [],
-              topDrug: [],
-              topBiomarker: [],
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            code: 200,
+            message: 'success',
+            data: {
+              category: 'N 神经系统药物',
+              nodes: [],
+              links: [],
+              paths: [],
+              level1Colors: {},
+              stats: {
+                totalWeight: 0,
+                level1: 0,
+                level2: 0,
+                level3: 0,
+                drug: 0,
+                biomarker: 0,
+                relations: 0,
+                maxNodes: 0,
+                topLevel1: [],
+                topLevel3: [],
+                topDrug: [],
+                topBiomarker: [],
+              },
             },
-          },
-        }),
-      ),
+          }),
+        ),
     )
     vi.stubGlobal('fetch', fetchMock)
 
@@ -196,6 +200,42 @@ describe('icd11Sankey display helpers', () => {
     )
   })
 
+  it('keeps locked and hovered paths highlighted at the same time', () => {
+    expect(mergeSankeyHighlightPathIds([], ['p2', 'p1', 'p2'])).toEqual(['p2', 'p1'])
+    expect(mergeSankeyHighlightPathIds(['p1', 'p2'], ['p3', 'p2'])).toEqual(['p1', 'p2', 'p3'])
+    expect(mergeSankeyHighlightPathIds(['locked'], ['hover'])).toEqual(['locked', 'hover'])
+  })
+
+  it('orders related nodes by their focused path weight instead of aggregate node size', () => {
+    const nodes = [
+      node('level1', '神经系统疾病', 'level1', 0, 100),
+      node('level2-large', '大聚合节点', 'level2', 1, 90),
+      node('level2-focused', '主要关联节点', 'level2', 1, 20),
+      node('drug::目标药物', '目标药物', 'drug', 3, 12),
+    ]
+    const paths = [
+      {
+        ...path('focused-heavy', '主要关联节点', null, '目标药物', '目标药物', 10),
+        nodeIds: ['level1', 'level2-focused', 'drug::目标药物', 'biomarker::目标药物'],
+      },
+      {
+        ...path('focused-light', '大聚合节点', null, '目标药物', '目标药物', 2),
+        nodeIds: ['level1', 'level2-large', 'drug::目标药物', 'biomarker::目标药物'],
+      },
+      {
+        ...path('unrelated', '大聚合节点', null, '其他药物', '其他药物', 80),
+        nodeIds: ['level1', 'level2-large', 'drug::其他药物', 'biomarker::其他药物'],
+      },
+    ]
+
+    const ordered = promoteConnectedSankeyNodes(nodes, paths, 'drug::目标药物')
+
+    expect(ordered.filter((item) => item.depth === 1).map((item) => item.name)).toEqual([
+      'level2-focused',
+      'level2-large',
+    ])
+  })
+
   it('summarizes truthful upstream levels without inventing Level3 values', () => {
     const level3Path = path('p1', '糖尿病', '2型糖尿病', '二甲双胍', '二甲双胍', 4)
     const level2Path = {
@@ -296,10 +336,11 @@ describe('icd11Sankey display helpers', () => {
       nodeIds: ['level1-c', 'level2-c', 'drug::阿斯匹林', 'biomarker::水杨酸'],
     }
 
-    expect(pathsForLevel1Context([selected, related, unrelated], selected.level1).map((item) => item.pathId)).toEqual([
-      'selected',
-      'related',
-    ])
+    expect(
+      pathsForLevel1Context([selected, related, unrelated], selected.level1).map(
+        (item) => item.pathId,
+      ),
+    ).toEqual(['selected', 'related'])
     expect(
       pathsForLevel1Scope([selected, related, unrelated], selected.level1, 'selected').map(
         (item) => item.pathId,

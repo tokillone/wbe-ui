@@ -7,7 +7,9 @@ import vueDevTools from 'vite-plugin-vue-devtools'
 // https://vite.dev/config/
 export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, process.cwd(), 'WBE_')
-  const devProxyTarget = env.WBE_DEV_PROXY_TARGET
+  // loadEnv reads Vite env files; process.env keeps one-off local QA commands
+  // configurable without writing a machine-specific target into the repository.
+  const devProxyTarget = process.env.WBE_DEV_PROXY_TARGET || env.WBE_DEV_PROXY_TARGET
 
   return {
     plugins: [

@@ -27,6 +27,7 @@ import {
   writePresentationCollection,
 } from './presentation-admin.mjs'
 import { cleanPresentationLabel } from './presentation-names.mjs'
+import { writeRuntimeRegionIndexes } from './runtime-region-indexes.mjs'
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const sourceDir = resolve(
@@ -405,6 +406,7 @@ try {
   const header = JSON.parse(runCapture('pmtiles', ['show', '--header-json', outputArchive]))
   const metadata = JSON.parse(runCapture('pmtiles', ['show', '--metadata', outputArchive]))
   writeFileSync(regionIndexPath, `${JSON.stringify(enrichedRegionIndex, null, 2)}\n`)
+  writeRuntimeRegionIndexes(enrichedRegionIndex, renderDir)
   const inputs = [
     ...new Set([
       ...directArchives,
